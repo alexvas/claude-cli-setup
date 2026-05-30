@@ -1,0 +1,26 @@
+services:
+  claude:
+    build:
+      context: .
+      target: runtime
+      args:
+        NODE_VERSION: ${NODE_VERSION:-22.12.0}
+        YARN_VERSION: ${YARN_VERSION:-4.15.0}
+        SOCKS_PORT: ${SOCKS_PORT:-1080}
+        SOCKS_HOST: ${SOCKS_HOST:-}
+        DEV_UID: ${DEV_UID:-1000}
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+    image: agent-claude:latest
+    user: "${DEV_UID:-1000}:${DEV_UID:-1000}"
+    stdin_open: true
+    tty: true
+    volumes:
+      - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:/home/work/proj1
+    environment:
+      ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+      ANTHROPIC_AUTH_TOKEN: ${DEEPSEEK_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-deepseek-chat}
+      OLLAMA_HOST: http://host.docker.internal:${OLLAMA_PORT:-11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
