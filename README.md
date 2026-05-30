@@ -2,6 +2,11 @@
 
 Агент использует [DeepSeek Anthropic API](https://api-docs.deepseek.com/guides/anthropic_api) и локальную [Ollama](https://ollama.com/) на хосте.
 
+## Требования
+
+- Docker Engine 24+ с [BuildKit](https://docs.docker.com/build/buildkit/) (включён по умолчанию в современных установках)
+- Docker Compose v2 (`docker compose`, не `docker-compose` v1)
+
 ## Состав
 
 | Файл | Назначение |
@@ -13,7 +18,7 @@
 | [docker/compose.proj3.yml](docker/compose.proj3.yml) | Опциональный mount `/home/work/proj3` |
 | [.env.example](.env.example) | Шаблон конфигурации |
 
-Образ собирается под пользователем `dev` (UID 1000). SOCKS нужен только на этапе **`docker compose build`**: в builder-стадии поднимается локальный HTTP bridge (`privoxy`), который форвардит в `SOCKS_HOST:SOCKS_PORT`, и уже его адрес передаётся в `HTTP_PROXY`/`HTTPS_PROXY`.
+Образ собирается под пользователем `dev` (UID/GID из `DEV_UID` / `DEV_GID`, по умолчанию 1000). SOCKS нужен только на этапе **`docker compose build`**: в builder-стадии поднимается локальный HTTP bridge (`privoxy`), который форвардит в `SOCKS_HOST:SOCKS_PORT`, и уже его адрес передаётся в `HTTP_PROXY`/`HTTPS_PROXY`.
 
 В образ входят: Yarn Berry, `vim`, `git`, MCP для filesystem, ripgrep, fetch, git, Cargo, uv/ty, Astro CLI и удалённая документация Astro.
 
@@ -31,9 +36,12 @@ cp .env.example .env
 - `SOCKS_HOST` — IP/хост прокси, **доступный из сборочного контейнера** (обычно LAN-IP машины, не `127.0.0.1`). Обязателен при **rootless Docker** (нет `docker0`). Прокси должен слушать `0.0.0.0:${SOCKS_PORT}`.
 - `PROJECT_PATH_1` — обязательный путь к первому проекту на хосте.
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — при необходимости; подключите фрагменты через `COMPOSE_FILE` (см. ниже).
-- `DEEPSEEK_API_KEY` — ключ DeepSeek.
+- `DEEPSEEK_API_KEY` — **обязательный** ключ DeepSeek (без него `docker compose run` завершится с ошибкой).
 - `OLLAMA_PORT` — порт Ollama на хосте (по умолчанию `11434`).
-- `NODE_VERSION`, `YARN_VERSION` — версии при сборке (по умолчанию `22.12.0` и `4.15.0`).
+- `NODE_VERSION`, `YARN_VERSION`, `ASTRO_VERSION` — версии при сборке (по умолчанию `22.12.0`, `4.15.0`, `6.4.2`).
+- `CLAUDE_TARGET` — цель установщика Claude при сборке: `stable`, `latest` или конкретная версия `X.Y.Z` (по умолчанию `stable`).
+- `DEV_UID`, `DEV_GID` — UID/GID пользователя в контейнере; задайте под вашего пользователя на хосте, чтобы bind-mount не ломал права на файлы.
+- `ANTHROPIC_MODEL` — модель для Claude Code в контейнере (по умолчанию `deepseek-chat`).
 
 3. На хосте должны быть доступны SOCKS (на время сборки) и Ollama (на время работы контейнера). Для Ollama из контейнера часто нужно слушать все интерфейсы, например `OLLAMA_HOST=0.0.0.0 ollama serve`.
 
@@ -47,11 +55,18 @@ cp .env.example .env
 
 В контейнере пути: `/home/work/proj1`, `/home/work/proj2`, `/home/work/proj3`.
 
-Проверка итоговой конфигурации:
+Проверка итоговой конфигурации (секреты подставляются из `.env`; **не публикуйте вывод**, если в нём есть ключи):
 
 ```bash
 docker compose config
 ```
+
+## Безопасность
+
+- Не коммитьте `.env` и не кладите в репозиторий `DEEPSEEK_API_KEY`.
+- `docker compose config` раскрывает подставленные значения переменных — не вставляйте этот вывод в тикеты и логи CI.
+- Ротируйте ключ DeepSeek при утечке; обновите `.env` и перезапустите контейнер.
+- Образ собирается с доступом к SOCKS только на этапе build; runtime-стадия не содержит `privoxy` и build-only пакетов вроде `build-essential`.
 
 ## Сборка образа
 
@@ -59,6 +74,12 @@ docker compose config
 
 ```bash
 docker compose build claude
+```
+
+Другая версия Claude при сборке:
+
+```bash
+CLAUDE_TARGET=latest docker compose build claude
 ```
 
 Полная пересборка без кэша:
@@ -87,7 +108,8 @@ docker compose build --no-cache claude
 При `docker compose run` в контейнер передаются (из `.env`):
 
 - `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`
-- `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY`
+- `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY` (обязателен)
+- `ANTHROPIC_MODEL` ← из `.env` (по умолчанию `deepseek-chat`)
 - `OLLAMA_HOST=http://host.docker.internal:${OLLAMA_PORT}`
 
 Подробнее: [интеграция Claude Code с DeepSeek](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code).
@@ -96,6 +118,8 @@ docker compose build --no-cache claude
 
 - **Сборка падает на bootstrap** — проверьте `SOCKS_HOST` и `SOCKS_PORT`; из контейнера должен проходить `nc -zv -w 3 <SOCKS_HOST> <SOCKS_PORT>`. При rootless Docker `172.17.0.1` обычно неверен.
 - **Ошибка `UnsupportedProxyProtocol`** — для шага установки Claude используется `fetch`, который часто не понимает `socks5://` напрямую; в этом образе это обходится через локальный HTTP bridge (`privoxy`).
+- **`set DEEPSEEK_API_KEY` при run** — задайте ключ в `.env`; без него Compose не поднимет сервис.
 - **Ollama недоступна из контейнера** — убедитесь, что Ollama слушает интерфейс, доступный с `host.docker.internal`, и что порт совпадает с `OLLAMA_PORT`.
 - **Нет proj2 в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
 - **Пустой `PROJECT_PATH_2` в compose** — не подключайте фрагмент `compose.proj2.yml`, иначе Compose потребует непустой путь.
+- **Права на файлы в bind-mount** — выровняйте `DEV_UID` и `DEV_GID` с `id -u` / `id -g` на хосте.

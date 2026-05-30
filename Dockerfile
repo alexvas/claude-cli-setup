@@ -6,7 +6,9 @@ ARG YARN_VERSION=4.15.0
 ARG SOCKS_PORT=1080
 ARG SOCKS_HOST=
 ARG CLAUDE_TARGET=stable
+ARG ASTRO_VERSION=6.4.2
 ARG DEV_UID=1000
+ARG DEV_GID=1000
 
 # -----------------------------------------------------------------------------
 # Builder: bootstrap, MCP, dev tools
@@ -18,7 +20,9 @@ ARG YARN_VERSION
 ARG SOCKS_PORT
 ARG SOCKS_HOST
 ARG CLAUDE_TARGET
+ARG ASTRO_VERSION
 ARG DEV_UID
+ARG DEV_GID
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/dev
@@ -43,7 +47,7 @@ COPY docker/install-node.sh /tmp/install-node.sh
 RUN chmod +x /tmp/install-node.sh && NODE_VERSION="${NODE_VERSION}" YARN_VERSION="${YARN_VERSION}" /tmp/install-node.sh
 
 COPY docker/setup-dev-user.sh /tmp/setup-dev-user.sh
-RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" /tmp/setup-dev-user.sh
+RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" DEV_GID="${DEV_GID}" /tmp/setup-dev-user.sh
 
 COPY claude.cli.agent.bootstrap.sh /usr/local/bin/claude-bootstrap.sh
 RUN chmod +x /usr/local/bin/claude-bootstrap.sh
@@ -72,13 +76,14 @@ RUN /usr/sbin/privoxy --no-daemon /tmp/privoxy-for-build.conf >/tmp/privoxy.log 
     wait "${PRIVOXY_PID}" 2>/dev/null || true; \
     exit "${STATUS}"
 
-# Rust
+# Rust (rustup installer is upstream-hosted; verify rustup.rs integrity out-of-band if needed)
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
     && . "$HOME/.cargo/env" \
     && cargo install --locked rust-mcp-server \
-    && (cargo install --git https://github.com/camshaft/cargo-mcp --locked 2>/dev/null || true)
+    && (cargo install --git https://github.com/camshaft/cargo-mcp --locked \
+        || echo "WARN: optional cargo-mcp install failed; MCP will use rust-mcp-server")
 
-# uv + ty CLI
+# uv + ty CLI (uv install script is upstream-hosted; pin uv version via UV_VERSION if needed)
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
     && export PATH="${HOME}/.local/bin:${PATH}" \
     && uv tool install ty \
@@ -89,7 +94,7 @@ RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
 # Astro CLI (user-local npm prefix)
 ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
 ENV PATH="/home/dev/.npm-global/bin:${PATH}"
-RUN npm install -g "astro@latest"
+RUN npm install -g "astro@${ASTRO_VERSION}"
 
 # MCP Yarn workspace (Berry)
 WORKDIR /home/dev/mcp
@@ -107,16 +112,28 @@ WORKDIR /home/dev
 COPY --chown=dev:dev docker/build-mcp.sh /home/dev/build-mcp.sh
 RUN chmod +x /home/dev/build-mcp.sh && /home/dev/build-mcp.sh
 
+# Drop build caches and temp files before exporting to runtime
+USER root
+RUN rm -rf \
+    /home/dev/.cargo/registry \
+    /home/dev/.cargo/git \
+    /home/dev/.claude/downloads \
+    /home/dev/build-mcp.sh \
+    /tmp/privoxy-for-build.conf \
+    /tmp/privoxy.log
+
 # -----------------------------------------------------------------------------
 # Runtime: no build proxy tooling
 # -----------------------------------------------------------------------------
 FROM ubuntu:24.04 AS runtime
 
 ARG DEV_UID=1000
+ARG DEV_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/dev
-ENV PATH="/home/dev/.local/bin:/home/dev/.cargo/bin:/usr/local/bin:${PATH}"
+ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
+ENV PATH="/home/dev/.npm-global/bin:/home/dev/.local/bin:/home/dev/.cargo/bin:/usr/local/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -126,9 +143,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     jq \
     ripgrep \
-    build-essential \
-    xz-utils \
-    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Node from builder
@@ -140,9 +154,14 @@ COPY --from=builder /usr/local/bin/corepack /usr/local/bin/corepack
 COPY --from=builder /usr/local/bin/yarn /usr/local/bin/yarn
 
 COPY docker/setup-dev-user.sh /tmp/setup-dev-user.sh
-RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" /tmp/setup-dev-user.sh
+RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" DEV_GID="${DEV_GID}" /tmp/setup-dev-user.sh
 
-COPY --from=builder --chown=dev:dev /home/dev /home/dev
+# Dev home: only runtime-needed paths (not full .cargo registry or build temps)
+COPY --from=builder --chown=dev:dev /home/dev/.claude /home/dev/.claude
+COPY --from=builder --chown=dev:dev /home/dev/.local /home/dev/.local
+COPY --from=builder --chown=dev:dev /home/dev/.cargo/bin /home/dev/.cargo/bin
+COPY --from=builder --chown=dev:dev /home/dev/.npm-global /home/dev/.npm-global
+COPY --from=builder --chown=dev:dev /home/dev/mcp /home/dev/mcp
 COPY --from=builder /usr/local/bin/claude-bootstrap.sh /usr/local/bin/claude-bootstrap.sh
 
 RUN mkdir -p /home/work && chown dev:dev /home/work
