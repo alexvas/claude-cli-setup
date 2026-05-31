@@ -14,13 +14,13 @@
 | [claude.cli.agent.bootstrap.sh](claude.cli.agent.bootstrap.sh) | Установщик Claude Code (используется при сборке образа) |
 | [Dockerfile](Dockerfile) | Multi-stage образ: Ubuntu 24.04, Claude, MCP, инструменты |
 | [docker-compose.yml](docker-compose.yml) | Сервис `claude`, переменные из `.env` |
-| [docker/compose.proj2.yml](docker/compose.proj2.yml) | Опциональный mount `/home/work/proj2` |
-| [docker/compose.proj3.yml](docker/compose.proj3.yml) | Опциональный mount `/home/work/proj3` |
+| [docker/compose.proj2.yml](docker/compose.proj2.yml) | Опциональный mount `/home/dev/work/proj2` |
+| [docker/compose.proj3.yml](docker/compose.proj3.yml) | Опциональный mount `/home/dev/work/proj3` |
 | [.env.example](.env.example) | Шаблон конфигурации |
 
 Образ собирается под пользователем `dev` (UID/GID из `DEV_UID` / `DEV_GID`, по умолчанию 1000). SOCKS нужен только на этапе **`docker compose build`**: в builder-стадии поднимается локальный HTTP bridge (`privoxy`), который форвардит в `SOCKS_HOST:SOCKS_PORT`, и уже его адрес передаётся в `HTTP_PROXY`/`HTTPS_PROXY`.
 
-В образ входят: Yarn Berry, `vim`, `git`, MCP для filesystem, ripgrep, fetch, git, Cargo, uv/ty, Astro CLI и удалённая документация Astro.
+В образ входят: Python 3, Yarn Berry, `vim`, `less`, `bat`, `git`, MCP для filesystem, ripgrep, fetch, git, Rust (stable), uv/ty, Astro CLI, `build-essential` и удалённая документация Astro.
 
 ## Подготовка
 
@@ -40,7 +40,7 @@ cp .env.example .env
 - `OLLAMA_PORT` — порт Ollama на хосте (по умолчанию `11434`).
 - `NODE_VERSION`, `YARN_VERSION`, `ASTRO_VERSION` — версии при сборке (по умолчанию `22.12.0`, `4.15.0`, `6.4.2`).
 - `CLAUDE_TARGET` — цель установщика Claude при сборке: `stable`, `latest` или конкретная версия `X.Y.Z` (по умолчанию `stable`).
-- `DEV_UID`, `DEV_GID` — UID/GID пользователя в контейнере; задайте под вашего пользователя на хосте, чтобы bind-mount не ломал права на файлы.
+- `DEV_UID`, `DEV_GID` — UID/GID пользователя в контейнере; **обязательно** выровняйте с владельцем каталога проекта на хосте (`id -u` / `id -g`), иначе bind-mount будет root-owned и git в контейнере сломается.
 - `ANTHROPIC_MODEL` — модель для Claude Code в контейнере (по умолчанию `deepseek-chat`).
 
 3. На хосте должны быть доступны SOCKS (на время сборки) и Ollama (на время работы контейнера). Для Ollama из контейнера часто нужно слушать все интерфейсы, например `OLLAMA_HOST=0.0.0.0 ollama serve`.
@@ -53,7 +53,7 @@ cp .env.example .env
 | Два проекта | `docker-compose.yml:docker/compose.proj2.yml` (+ `PROJECT_PATH_2`) |
 | Три проекта | `…:docker/compose.proj2.yml:docker/compose.proj3.yml` (+ `PROJECT_PATH_3`) |
 
-В контейнере пути: `/home/work/proj1`, `/home/work/proj2`, `/home/work/proj3`.
+В контейнере пути: `/home/dev/work/proj1`, `/home/dev/work/proj2`, `/home/dev/work/proj3`.
 
 Проверка итоговой конфигурации (секреты подставляются из `.env`; **не публикуйте вывод**, если в нём есть ключи):
 
@@ -66,7 +66,7 @@ docker compose config
 - Не коммитьте `.env` и не кладите в репозиторий `DEEPSEEK_API_KEY`.
 - `docker compose config` раскрывает подставленные значения переменных — не вставляйте этот вывод в тикеты и логи CI.
 - Ротируйте ключ DeepSeek при утечке; обновите `.env` и перезапустите контейнер.
-- Образ собирается с доступом к SOCKS только на этапе build; runtime-стадия не содержит `privoxy` и build-only пакетов вроде `build-essential`.
+- Образ собирается с доступом к SOCKS только на этапе build; runtime-стадия не содержит `privoxy`.
 
 ## Сборка образа
 
@@ -122,4 +122,6 @@ docker compose build --no-cache claude
 - **Ollama недоступна из контейнера** — убедитесь, что Ollama слушает интерфейс, доступный с `host.docker.internal`, и что порт совпадает с `OLLAMA_PORT`.
 - **Нет proj2 в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
 - **Пустой `PROJECT_PATH_2` в compose** — не подключайте фрагмент `compose.proj2.yml`, иначе Compose потребует непустой путь.
-- **Права на файлы в bind-mount** — выровняйте `DEV_UID` и `DEV_GID` с `id -u` / `id -g` на хосте.
+- **Права на файлы в bind-mount** — выровняйте `DEV_UID` и `DEV_GID` с `id -u` / `id -g` на хосте. Если `ls -la /home/dev/work/proj1` показывает `root:root`, каталог на хосте принадлежит root; исправьте на хосте: `sudo chown -R "$(id -u):$(id -g)" "$PROJECT_PATH_1"`. Контейнер не может менять владельца bind-mount без root; без chown на хосте git/read-only операции могут работать, но запись в файлы будет запрещена.
+- **`python3` / `pip` не найдены** — пересоберите образ (`docker compose build claude`); в runtime должны быть `python3`, `python3-pip`, `python3-venv`.
+- **`rustc` / `cargo` не работают** — пересоберите образ; в runtime копируется toolchain из builder (`~/.rustup`).

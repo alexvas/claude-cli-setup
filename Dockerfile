@@ -96,21 +96,19 @@ ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
 ENV PATH="/home/dev/.npm-global/bin:${PATH}"
 RUN npm install -g "astro@${ASTRO_VERSION}"
 
-# MCP Yarn workspace (Berry)
-WORKDIR /home/dev/mcp
-RUN yarn init -2 \
-    && yarn add \
-        @modelcontextprotocol/server-filesystem \
-        mcp-ripgrep
+# MCP Yarn workspace (Berry bundle downloaded at build time, not on host)
+COPY --chown=dev:dev docker/mcp /home/dev/mcp
+COPY --chown=dev:dev docker/setup-mcp-yarn.sh /home/dev/setup-mcp-yarn.sh
+RUN YARN_VERSION="${YARN_VERSION}" bash /home/dev/setup-mcp-yarn.sh
 
 USER root
-RUN mkdir -p /home/work && chown dev:dev /home/work
+RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work
 
 USER dev
 WORKDIR /home/dev
 
 COPY --chown=dev:dev docker/build-mcp.sh /home/dev/build-mcp.sh
-RUN chmod +x /home/dev/build-mcp.sh && /home/dev/build-mcp.sh
+RUN YARN_VERSION="${YARN_VERSION}" WORK_ROOT=/home/dev/work GIT_REPO=/home/dev/work/proj1 bash /home/dev/build-mcp.sh
 
 # Drop build caches and temp files before exporting to runtime
 USER root
@@ -119,6 +117,7 @@ RUN rm -rf \
     /home/dev/.cargo/git \
     /home/dev/.claude/downloads \
     /home/dev/build-mcp.sh \
+    /home/dev/setup-mcp-yarn.sh \
     /tmp/privoxy-for-build.conf \
     /tmp/privoxy.log
 
@@ -129,20 +128,31 @@ FROM ubuntu:24.04 AS runtime
 
 ARG DEV_UID=1000
 ARG DEV_GID=1000
+ARG YARN_VERSION=4.15.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/dev
+ENV RUSTUP_HOME=/home/dev/.rustup
+ENV CARGO_HOME=/home/dev/.cargo
 ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
 ENV PATH="/home/dev/.npm-global/bin:/home/dev/.local/bin:/home/dev/.cargo/bin:/usr/local/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     vim \
+    less \
+    bat \
     curl \
     wget \
     ca-certificates \
     jq \
     ripgrep \
+    python3 \
+    python3-pip \
+    python3-venv \
+    build-essential \
+    pkg-config \
+    && ln -sf /usr/bin/batcat /usr/local/bin/bat \
     && rm -rf /var/lib/apt/lists/*
 
 # Node from builder
@@ -150,22 +160,32 @@ COPY --from=builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=builder /usr/local/bin/npm /usr/local/bin/npm
 COPY --from=builder /usr/local/bin/npx /usr/local/bin/npx
-COPY --from=builder /usr/local/bin/corepack /usr/local/bin/corepack
-COPY --from=builder /usr/local/bin/yarn /usr/local/bin/yarn
 
 COPY docker/setup-dev-user.sh /tmp/setup-dev-user.sh
 RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" DEV_GID="${DEV_GID}" /tmp/setup-dev-user.sh
 
 # Dev home: only runtime-needed paths (not full .cargo registry or build temps)
 COPY --from=builder --chown=dev:dev /home/dev/.claude /home/dev/.claude
+COPY --from=builder --chown=dev:dev /home/dev/.claude.json /home/dev/.claude.json
 COPY --from=builder --chown=dev:dev /home/dev/.local /home/dev/.local
+COPY --from=builder --chown=dev:dev /home/dev/.rustup /home/dev/.rustup
 COPY --from=builder --chown=dev:dev /home/dev/.cargo/bin /home/dev/.cargo/bin
 COPY --from=builder --chown=dev:dev /home/dev/.npm-global /home/dev/.npm-global
 COPY --from=builder --chown=dev:dev /home/dev/mcp /home/dev/mcp
 COPY --from=builder /usr/local/bin/claude-bootstrap.sh /usr/local/bin/claude-bootstrap.sh
 
-RUN mkdir -p /home/work && chown dev:dev /home/work
+# Global yarn -> Berry bundle from MCP workspace (corepack shims break when cherry-picked)
+RUN printf '#!/bin/sh\nexec node /home/dev/mcp/.yarn/releases/yarn-%s.cjs "$@"\n' "${YARN_VERSION}" \
+    > /usr/local/bin/yarn \
+    && chmod +x /usr/local/bin/yarn
+
+RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work
 
 USER dev
 WORKDIR /home/dev
+# Bind-mounts may be owned by a different host UID; allow git in mounted project dirs.
+RUN git config --global --add safe.directory /home/dev/work \
+    && git config --global --add safe.directory /home/dev/work/proj1 \
+    && git config --global --add safe.directory /home/dev/work/proj2 \
+    && git config --global --add safe.directory /home/dev/work/proj3
 CMD ["bash"]

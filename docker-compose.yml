@@ -17,7 +17,7 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:/home/work/proj1
+      - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:/home/dev/work/proj1
     environment:
       ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
       ANTHROPIC_AUTH_TOKEN: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}

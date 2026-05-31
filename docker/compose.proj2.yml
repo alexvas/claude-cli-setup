@@ -1,4 +1,4 @@
 services:
   claude:
     volumes:
-      - ${PROJECT_PATH_2:?set PROJECT_PATH_2}:/home/work/proj2
+      - ${PROJECT_PATH_2:?set PROJECT_PATH_2}:/home/dev/work/proj2
