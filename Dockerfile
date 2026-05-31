@@ -147,11 +147,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     jq \
     ripgrep \
-    python3 \
-    python3-pip \
-    python3-venv \
+#   Do not use python3, use uv run instead
+#   Do not use python3-pip, use uv pip instead
+#   Do not use python3-venv, use uv venv instead
     build-essential \
     pkg-config \
+    gosu \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat \
     && rm -rf /var/lib/apt/lists/*
 
@@ -188,4 +189,10 @@ RUN git config --global --add safe.directory /home/dev/work \
     && git config --global --add safe.directory /home/dev/work/proj1 \
     && git config --global --add safe.directory /home/dev/work/proj2 \
     && git config --global --add safe.directory /home/dev/work/proj3
+
+USER root
+COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+WORKDIR /home/dev/work/proj1
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash"]

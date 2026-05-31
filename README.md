@@ -1,6 +1,6 @@
 Этот проект — среда для запуска агента Claude CLI в изолированном окружении Docker.
 
-Агент использует [DeepSeek Anthropic API](https://api-docs.deepseek.com/guides/anthropic_api) и локальную [Ollama](https://ollama.com/) на хосте.
+Агент использует [DeepSeek Anthropic API](https://api-docs.deepseek.com/guides/coding_agents) и локальную [Ollama](https://ollama.com/) на хосте.
 
 ## Требования
 
@@ -41,7 +41,10 @@ cp .env.example .env
 - `NODE_VERSION`, `YARN_VERSION`, `ASTRO_VERSION` — версии при сборке (по умолчанию `22.12.0`, `4.15.0`, `6.4.2`).
 - `CLAUDE_TARGET` — цель установщика Claude при сборке: `stable`, `latest` или конкретная версия `X.Y.Z` (по умолчанию `stable`).
 - `DEV_UID`, `DEV_GID` — UID/GID пользователя в контейнере; **обязательно** выровняйте с владельцем каталога проекта на хосте (`id -u` / `id -g`), иначе bind-mount будет root-owned и git в контейнере сломается.
-- `ANTHROPIC_MODEL` — модель для Claude Code в контейнере (по умолчанию `deepseek-chat`).
+- `ANTHROPIC_MODEL` — основная модель Claude Code (по умолчанию `deepseek-v4-pro[1m]`).
+- `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` — дефолты для профилей моделей Claude Code.
+- `CLAUDE_CODE_SUBAGENT_MODEL` — модель для subagents (по умолчанию `deepseek-v4-flash`).
+- `CLAUDE_CODE_EFFORT_LEVEL` — уровень усилия Claude Code (по умолчанию `max`).
 
 3. На хосте должны быть доступны SOCKS (на время сборки) и Ollama (на время работы контейнера). Для Ollama из контейнера часто нужно слушать все интерфейсы, например `OLLAMA_HOST=0.0.0.0 ollama serve`.
 
@@ -109,7 +112,9 @@ docker compose build --no-cache claude
 
 - `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`
 - `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY` (обязателен)
-- `ANTHROPIC_MODEL` ← из `.env` (по умолчанию `deepseek-chat`)
+- `ANTHROPIC_MODEL` ← из `.env` (по умолчанию `deepseek-v4-pro[1m]`)
+- `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` ← из `.env`
+- `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL` ← из `.env`
 - `OLLAMA_HOST=http://host.docker.internal:${OLLAMA_PORT}`
 
 Подробнее: [интеграция Claude Code с DeepSeek](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code).
@@ -122,6 +127,6 @@ docker compose build --no-cache claude
 - **Ollama недоступна из контейнера** — убедитесь, что Ollama слушает интерфейс, доступный с `host.docker.internal`, и что порт совпадает с `OLLAMA_PORT`.
 - **Нет proj2 в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
 - **Пустой `PROJECT_PATH_2` в compose** — не подключайте фрагмент `compose.proj2.yml`, иначе Compose потребует непустой путь.
-- **Права на файлы в bind-mount** — выровняйте `DEV_UID` и `DEV_GID` с `id -u` / `id -g` на хосте. Если `ls -la /home/dev/work/proj1` показывает `root:root`, каталог на хосте принадлежит root; исправьте на хосте: `sudo chown -R "$(id -u):$(id -g)" "$PROJECT_PATH_1"`. Контейнер не может менять владельца bind-mount без root; без chown на хосте git/read-only операции могут работать, но запись в файлы будет запрещена.
+- **EACCES при записи в `/home/dev/work/proj*`** — по умолчанию при старте entrypoint делает `chown -R dev:dev` на смонтированные каталоги (`CHOWN_WORK_ON_START=1`). Это меняет владельца файлов и на хосте. Отключить: `CHOWN_WORK_ON_START=0` в `.env` и выровняйте права на хосте вручную (`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`).
 - **`python3` / `pip` не найдены** — пересоберите образ (`docker compose build claude`); в runtime должны быть `python3`, `python3-pip`, `python3-venv`.
 - **`rustc` / `cargo` не работают** — пересоберите образ; в runtime копируется toolchain из builder (`~/.rustup`).

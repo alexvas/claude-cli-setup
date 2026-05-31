@@ -13,15 +13,20 @@ services:
         DEV_UID: ${DEV_UID:-1000}
         DEV_GID: ${DEV_GID:-1000}
     image: agent-claude:latest
-    user: "${DEV_UID:-1000}:${DEV_GID:-1000}"
     stdin_open: true
     tty: true
     volumes:
       - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:/home/dev/work/proj1
     environment:
+      CHOWN_WORK_ON_START: ${CHOWN_WORK_ON_START:-1}
       ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
       ANTHROPIC_AUTH_TOKEN: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-deepseek-chat}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-deepseek-v4-pro[1m]}
+      ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-deepseek-v4-pro[1m]}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro[1m]}
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-deepseek-v4-flash}
+      CLAUDE_CODE_SUBAGENT_MODEL: ${CLAUDE_CODE_SUBAGENT_MODEL:-deepseek-v4-flash}
+      CLAUDE_CODE_EFFORT_LEVEL: ${CLAUDE_CODE_EFFORT_LEVEL:-max}
       OLLAMA_HOST: http://host.docker.internal:${OLLAMA_PORT:-11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"
