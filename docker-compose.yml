@@ -1,18 +1,20 @@
+x-host-gateway: &host-gateway
+  extra_hosts:
+    # Rootful default: host-gateway (Docker resolves to host IP).
+    # Rootless: set HOST_GATEWAY_IP in .env via docker/build_wrapper.py build (often 10.0.2.2).
+    - "host.docker.internal:${HOST_GATEWAY_IP:-host-gateway}"
+
 services:
   inf-splitter:
     build: ./inf-splitter
     environment:
       LISTEN_ADDR: 0.0.0.0:${PROXY_PORT:-3000}
-      DOCKER_NETWORK_MODE: ${DOCKER_NETWORK_MODE:-rootful}
-      EXTERNAL_IP: ${EXTERNAL_IP:-}
-      SOCKS_HOST: ${SOCKS_HOST:-}
       OLLAMA_PORT: ${OLLAMA_PORT:-11434}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
       LOCAL_MODELS: ${LOCAL_MODELS:-gemma4:31b}
       DEEPSEEK_ANTHROPIC_BASE_URL: ${DEEPSEEK_ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}
       OMIT_STREAM_OPTIONS: "true"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    <<: *host-gateway
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PROXY_PORT:-3000}/health || exit 1"]
       interval: 30s
@@ -29,7 +31,7 @@ services:
         NODE_VERSION: ${NODE_VERSION:-22.12.0}
         YARN_VERSION: ${YARN_VERSION:-4.15.0}
         SOCKS_PORT: ${SOCKS_PORT:-1080}
-        SOCKS_HOST: ${SOCKS_HOST:-}
+        HOST_GATEWAY_IP: ${HOST_GATEWAY_IP:-host-gateway}
         CLAUDE_TARGET: ${CLAUDE_TARGET:-stable}
         ASTRO_VERSION: ${ASTRO_VERSION:-6.4.2}
         DEV_UID: ${DEV_UID:-1000}
@@ -50,5 +52,4 @@ services:
       CLAUDE_CODE_SUBAGENT_MODEL: ${CLAUDE_CODE_SUBAGENT_MODEL:-gemma4:31b}
       CLAUDE_CODE_EFFORT_LEVEL: ${CLAUDE_CODE_EFFORT_LEVEL:-max}
       OLLAMA_HOST: http://host.docker.internal:${OLLAMA_PORT:-11434}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    <<: *host-gateway

@@ -4,7 +4,7 @@
 ARG NODE_VERSION=22.12.0
 ARG YARN_VERSION=4.15.0
 ARG SOCKS_PORT=1080
-ARG SOCKS_HOST=
+ARG HOST_GATEWAY_IP=
 ARG CLAUDE_TARGET=stable
 ARG ASTRO_VERSION=6.4.2
 ARG DEV_UID=1000
@@ -18,7 +18,7 @@ FROM ubuntu:24.04 AS builder
 ARG NODE_VERSION
 ARG YARN_VERSION
 ARG SOCKS_PORT
-ARG SOCKS_HOST
+ARG HOST_GATEWAY_IP
 ARG CLAUDE_TARGET
 ARG ASTRO_VERSION
 ARG DEV_UID
@@ -55,26 +55,12 @@ RUN chmod +x /usr/local/bin/claude-bootstrap.sh
 USER dev
 WORKDIR /home/dev
 
+COPY docker/bootstrap-claude-build.sh /tmp/bootstrap-claude-build.sh
 # Fail fast: bootstrap Claude before long toolchain installs.
 # Use --build-arg CLAUDE_TARGET=latest|stable|X.Y.Z for troubleshooting.
-# Create local HTTP bridge (privoxy) -> upstream SOCKS, then use HTTP_PROXY/HTTPS_PROXY.
-RUN test -n "${SOCKS_HOST}" \
-    && cat > /tmp/privoxy-for-build.conf <<EOF
-listen-address  127.0.0.1:8118
-forward-socks5   / ${SOCKS_HOST}:${SOCKS_PORT} .
-EOF
-RUN /usr/sbin/privoxy --no-daemon /tmp/privoxy-for-build.conf >/tmp/privoxy.log 2>&1 & \
-    PRIVOXY_PID=$!; \
-    sleep 1; \
-    export HTTP_PROXY="http://127.0.0.1:8118"; \
-    export HTTPS_PROXY="${HTTP_PROXY}"; \
-    export ALL_PROXY="${HTTP_PROXY}"; \
-    /usr/local/bin/claude-bootstrap.sh "${CLAUDE_TARGET}"; \
-    STATUS=$?; \
-    if [ "${STATUS}" -ne 0 ]; then echo "=== privoxy log ==="; cat /tmp/privoxy.log; fi; \
-    kill "${PRIVOXY_PID}" 2>/dev/null || true; \
-    wait "${PRIVOXY_PID}" 2>/dev/null || true; \
-    exit "${STATUS}"
+RUN chmod +x /tmp/bootstrap-claude-build.sh \
+    && HOST_GATEWAY_IP="${HOST_GATEWAY_IP}" SOCKS_PORT="${SOCKS_PORT}" CLAUDE_TARGET="${CLAUDE_TARGET}" \
+       /tmp/bootstrap-claude-build.sh
 
 # Rust (rustup installer is upstream-hosted; verify rustup.rs integrity out-of-band if needed)
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
@@ -136,6 +122,10 @@ ENV RUSTUP_HOME=/home/dev/.rustup
 ENV CARGO_HOME=/home/dev/.cargo
 ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
 ENV PATH="/home/dev/.npm-global/bin:/home/dev/.local/bin:/home/dev/.cargo/bin:/usr/local/bin:${PATH}"
+ENV LANG=ru_RU.UTF-8
+ENV LC_ALL=ru_RU.UTF-8
+# Отключаем телеметрию Claude Code
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -147,20 +137,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     jq \
     ripgrep \
-#   Do not use python3, use uv run instead
+    locales \
+    openssh-client \
+    gh \
+    rpm \
+#   Do not use python3 from apt; python3 is provided via uv (see /etc/profile.d/dev-python.sh)
 #   Do not use python3-pip, use uv pip instead
 #   Do not use python3-venv, use uv venv instead
     build-essential \
     pkg-config \
     gosu \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat \
+    && sed -i 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen \
+    && locale-gen ru_RU.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-# Node from builder
+# Node from builder (npm/npx shims must point at npm-cli.js, not broken copied scripts)
 COPY --from=builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=builder /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=builder /usr/local/bin/npx /usr/local/bin/npx
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# python3/pip via uv (no system python3 package)
+RUN printf '#!/bin/sh\nexec uv run python "$@"\n' > /usr/local/bin/python3 \
+    && chmod +x /usr/local/bin/python3 \
+    && printf '%s\n' \
+    "alias python3='uv run python'" \
+    "alias pip='uv pip --system'" \
+    > /etc/profile.d/dev-python.sh
 
 COPY docker/setup-dev-user.sh /tmp/setup-dev-user.sh
 RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" DEV_GID="${DEV_GID}" /tmp/setup-dev-user.sh
@@ -185,10 +189,7 @@ RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work
 USER dev
 WORKDIR /home/dev
 # Bind-mounts may be owned by a different host UID; allow git in mounted project dirs.
-RUN git config --global --add safe.directory /home/dev/work \
-    && git config --global --add safe.directory /home/dev/work/proj1 \
-    && git config --global --add safe.directory /home/dev/work/proj2 \
-    && git config --global --add safe.directory /home/dev/work/proj3
+RUN git config --global --add safe.directory '/home/dev/work/*'
 
 USER root
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh

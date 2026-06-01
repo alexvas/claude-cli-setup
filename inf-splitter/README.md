@@ -22,6 +22,19 @@ docker compose run --rm claude claude
 
 По умолчанию `ANTHROPIC_DEFAULT_HAIKU_MODEL` и `CLAUDE_CODE_SUBAGENT_MODEL` указывают на локальную модель (`gemma4:31b`), остальные профили Claude Code — на DeepSeek.
 
+### Доступ к Ollama на хосте
+
+Роутер обращается к Ollama по `http://host.docker.internal:${OLLAMA_PORT}`.
+
+В [docker-compose.yml](../docker-compose.yml) задано `extra_hosts: host.docker.internal:${HOST_GATEWAY_IP:-host-gateway}`. В **rootful** Docker `host-gateway` резолвится автоматически. В **rootless** после настройки проброса портов хоста:
+
+```bash
+./docker/apply-rootless-port-forward.sh   # из корня репозитория
+docker compose up -d --force-recreate inf-splitter
+```
+
+Для rootless задайте `HOST_GATEWAY_IP` в `.env` через `docker/build_wrapper.py build` (часто `10.0.2.2`).
+
 ## Маршрутизация
 
 ```
@@ -82,27 +95,19 @@ Remote-запросы: auth-заголовки клиента (`x-api-key`, `Aut
 | `LOCAL_MODELS` | `gemma4:31b` | CSV whitelist моделей для Ollama |
 | `LISTEN_ADDR` | `0.0.0.0:3000` | Адрес прослушивания (или из `PROXY_PORT` / `LISTEN_PORT`) |
 | `DEEPSEEK_ANTHROPIC_BASE_URL` | `https://api.deepseek.com/anthropic` | Base URL DeepSeek Anthropic API |
-| `DOCKER_NETWORK_MODE` | `rootful` | `rootful` или `rootless` — как достичь Ollama на хосте |
-| `EXTERNAL_IP` | — | LAN-IP хоста (rootless Docker) |
-| `SOCKS_HOST` | — | Fallback для `EXTERNAL_IP` в rootless-режиме |
-| `OLLAMA_HOST_IP` | — | Deprecated alias для `EXTERNAL_IP` |
 | `OLLAMA_PORT` | `11434` | Порт Ollama на хосте |
-| `OLLAMA_BASE_URL` | — | Явный override URL Ollama (имеет приоритет над fallback) |
+| `OLLAMA_BASE_URL` | — | Явный override URL Ollama (имеет приоритет над `host.docker.internal`) |
 | `OMIT_STREAM_OPTIONS` | `true` (в compose) | Убрать `stream_options` из streaming-запросов к Ollama |
 | `REMOTE_MODEL_IDS` | `deepseek-v4-pro[1m],…` | Модели для `GET /v1/models` (не влияет на роутинг) |
 
 `DEEPSEEK_API_KEY` **не нужен** для `inf-splitter`.
 
-### Вычисление URL Ollama
+### URL Ollama
 
 | Условие | URL |
 |---------|-----|
 | `OLLAMA_BASE_URL` задан | используется как есть |
-| `DOCKER_NETWORK_MODE=rootful` | `http://host.docker.internal:${OLLAMA_PORT}` |
-| `DOCKER_NETWORK_MODE=rootless` | `http://${EXTERNAL_IP:-$SOCKS_HOST}:${OLLAMA_PORT}` |
-| rootless, IP не задан | сервис не стартует (fail-fast) |
-
-При `rootless` без `EXTERNAL_IP`, `SOCKS_HOST` и `OLLAMA_BASE_URL` контейнер не стартует.
+| иначе | `http://host.docker.internal:${OLLAMA_PORT}` (достижимость через `extra_hosts` в compose) |
 
 ## Сборка и запуск
 
@@ -114,7 +119,7 @@ Remote-запросы: auth-заголовки клиента (`x-api-key`, `Aut
 docker compose build inf-splitter
 docker compose up -d inf-splitter
 docker compose exec inf-splitter wget -qO- http://127.0.0.1:3000/health
-docker compose exec inf-splitter wget -qO- http://127.0.0.1:3000/v1/models
+docker compose exec inf-splitter wget -qO- http://host.docker.internal:11434/api/tags
 ```
 
 ### Локально (cargo)
@@ -123,7 +128,6 @@ docker compose exec inf-splitter wget -qO- http://127.0.0.1:3000/v1/models
 cd inf-splitter
 cargo build --release
 
-export DOCKER_NETWORK_MODE=rootful
 export LOCAL_MODELS=gemma4:31b
 ./target/release/inf-splitter
 ```
@@ -133,7 +137,6 @@ export LOCAL_MODELS=gemma4:31b
 ```bash
 docker build -t inf-splitter .
 docker run --rm -p 3000:3000 \
-  -e DOCKER_NETWORK_MODE=rootful \
   --add-host=host.docker.internal:host-gateway \
   inf-splitter
 ```
@@ -162,11 +165,8 @@ src/
 cargo test
 ```
 
-Unit-тесты для `config.rs` покрывают rootful/rootless/override сценарии вычисления `ollama_base_url`. Тесты `router.rs` проверяют формат и стабильный порядок `/v1/models`.
-
 ## Устранение неполадок
 
-- **inf-splitter не стартует (rootless)** — задайте `DOCKER_NETWORK_MODE=rootless` и `EXTERNAL_IP` (или полагайтесь на `SOCKS_HOST`), либо явный `OLLAMA_BASE_URL`.
-- **Локальная модель не маршрутизируется** — проверьте `LOCAL_MODELS` в `.env`, перезапустите `inf-splitter`. Health: `docker compose exec inf-splitter wget -qO- http://127.0.0.1:3000/health`.
-- **DeepSeek-запросы не проходят** — проверьте `DEEPSEEK_API_KEY` в контейнере `claude`, `DEEPSEEK_ANTHROPIC_BASE_URL` и доступность API из контейнера `inf-splitter`.
-- **Ollama недоступна из inf-splitter** — убедитесь, что Ollama слушает `0.0.0.0:${OLLAMA_PORT}` на хосте; для rootful проверьте `host.docker.internal`, для rootless — `EXTERNAL_IP`/`SOCKS_HOST`.
+- **Ollama: Connection refused на `host.docker.internal` (rootless)** — выполните [../docker/apply-rootless-port-forward.sh](../docker/apply-rootless-port-forward.sh), затем `docker compose up -d --force-recreate inf-splitter`. Проверка: `wget -qO- http://host.docker.internal:11434/api/tags` из контейнера `inf-splitter`.
+- **Локальная модель не маршрутизируется** — проверьте `LOCAL_MODELS` в `.env`, перезапустите `inf-splitter`.
+- **DeepSeek-запросы не проходят** — проверьте `DEEPSEEK_API_KEY` в контейнере `claude` и `DEEPSEEK_ANTHROPIC_BASE_URL`.
