@@ -10,15 +10,32 @@ PRIVOXY_LOG="/tmp/privoxy.log"
 PRIVOXY_PID=""
 
 resolve_gateway() {
-    local gateway="${HOST_GATEWAY_IP}"
+    local gateway="${HOST_GATEWAY_IP:-}"
     if [[ -z "${gateway}" || "${gateway}" == "host-gateway" ]]; then
-        gateway="$(ip route show default | awk '/default/ {print $3; exit}')"
+        if [[ -n "${SOCKS_HOST:-}" ]]; then
+            gateway="${SOCKS_HOST}"
+        elif [[ -n "${EXTERNAL_IP:-}" ]]; then
+            gateway="${EXTERNAL_IP}"
+        else
+            gateway="$(ip route show default | awk '/default/ {print $3; exit}')"
+        fi
     fi
     if [[ -z "${gateway}" ]]; then
-        echo "Cannot resolve host gateway for SOCKS (set HOST_GATEWAY_IP or check network)" >&2
+        echo "Cannot resolve host gateway for SOCKS (set HOST_GATEWAY_IP, SOCKS_HOST, or check network)" >&2
         exit 1
     fi
     printf '%s' "${gateway}"
+}
+
+check_socks_reachable() {
+    local gateway="$1"
+    if command -v nc >/dev/null 2>&1; then
+        if ! nc -zv -w 3 "${gateway}" "${SOCKS_PORT}" >/dev/null 2>&1; then
+            echo "Cannot reach SOCKS at ${gateway}:${SOCKS_PORT}" >&2
+            echo "Ensure SOCKS listens on 0.0.0.0:${SOCKS_PORT} and HOST_GATEWAY_IP/SOCKS_HOST is reachable from the build container." >&2
+            exit 1
+        fi
+    fi
 }
 
 stop_privoxy() {
@@ -32,6 +49,8 @@ stop_privoxy() {
 trap stop_privoxy EXIT
 
 gateway="$(resolve_gateway)"
+echo "Bootstrap SOCKS gateway: ${gateway}:${SOCKS_PORT}" >&2
+check_socks_reachable "${gateway}"
 cat > "${PRIVOXY_CONF}" <<EOF
 listen-address  127.0.0.1:8118
 forward-socks5   / ${gateway}:${SOCKS_PORT} .

@@ -5,6 +5,8 @@ ARG NODE_VERSION=22.12.0
 ARG YARN_VERSION=4.15.0
 ARG SOCKS_PORT=1080
 ARG HOST_GATEWAY_IP=
+ARG SOCKS_HOST=
+ARG EXTERNAL_IP=
 ARG CLAUDE_TARGET=stable
 ARG ASTRO_VERSION=6.4.2
 ARG DEV_UID=1000
@@ -19,6 +21,8 @@ ARG NODE_VERSION
 ARG YARN_VERSION
 ARG SOCKS_PORT
 ARG HOST_GATEWAY_IP
+ARG SOCKS_HOST
+ARG EXTERNAL_IP
 ARG CLAUDE_TARGET
 ARG ASTRO_VERSION
 ARG DEV_UID
@@ -55,11 +59,11 @@ RUN chmod +x /usr/local/bin/claude-bootstrap.sh
 USER dev
 WORKDIR /home/dev
 
-COPY docker/bootstrap-claude-build.sh /tmp/bootstrap-claude-build.sh
+COPY --chmod=755 docker/bootstrap-claude-build.sh /tmp/bootstrap-claude-build.sh
 # Fail fast: bootstrap Claude before long toolchain installs.
 # Use --build-arg CLAUDE_TARGET=latest|stable|X.Y.Z for troubleshooting.
-RUN chmod +x /tmp/bootstrap-claude-build.sh \
-    && HOST_GATEWAY_IP="${HOST_GATEWAY_IP}" SOCKS_PORT="${SOCKS_PORT}" CLAUDE_TARGET="${CLAUDE_TARGET}" \
+RUN HOST_GATEWAY_IP="${HOST_GATEWAY_IP}" SOCKS_HOST="${SOCKS_HOST}" EXTERNAL_IP="${EXTERNAL_IP}" \
+       SOCKS_PORT="${SOCKS_PORT}" CLAUDE_TARGET="${CLAUDE_TARGET}" \
        /tmp/bootstrap-claude-build.sh
 
 # Rust (rustup installer is upstream-hosted; verify rustup.rs integrity out-of-band if needed)

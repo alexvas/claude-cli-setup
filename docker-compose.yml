@@ -6,14 +6,12 @@ x-host-gateway: &host-gateway
 
 services:
   inf-splitter:
-    build: ./inf-splitter
-    environment:
-      LISTEN_ADDR: 0.0.0.0:${PROXY_PORT:-3000}
-      OLLAMA_PORT: ${OLLAMA_PORT:-11434}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
-      LOCAL_MODELS: ${LOCAL_MODELS:-gemma4:31b}
-      DEEPSEEK_ANTHROPIC_BASE_URL: ${DEEPSEEK_ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}
-      OMIT_STREAM_OPTIONS: "true"
+    build:
+      context: ../inf-splitter.git
+    image: inf-splitter:latest
+    volumes:
+      - ${INF_SPLITTER_CONFIG_DIR:-../inf-splitter.git}/config:/app/config:ro
+      - ${INF_SPLITTER_SECRETS_DIR:-../inf-splitter.git/secrets}:/app/secrets:ro
     <<: *host-gateway
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PROXY_PORT:-3000}/health || exit 1"]
@@ -31,25 +29,27 @@ services:
         NODE_VERSION: ${NODE_VERSION:-22.12.0}
         YARN_VERSION: ${YARN_VERSION:-4.15.0}
         SOCKS_PORT: ${SOCKS_PORT:-1080}
-        HOST_GATEWAY_IP: ${HOST_GATEWAY_IP:-host-gateway}
+        HOST_GATEWAY_IP: ${HOST_GATEWAY_IP:-${SOCKS_HOST:-${EXTERNAL_IP:-host-gateway}}}
+        SOCKS_HOST: ${SOCKS_HOST:-}
+        EXTERNAL_IP: ${EXTERNAL_IP:-}
         CLAUDE_TARGET: ${CLAUDE_TARGET:-stable}
         ASTRO_VERSION: ${ASTRO_VERSION:-6.4.2}
         DEV_UID: ${DEV_UID:-1000}
         DEV_GID: ${DEV_GID:-1000}
-    image: agent-claude:latest
+    image: claude:latest
     stdin_open: true
     tty: true
     volumes:
       - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:/home/dev/work/proj1
     environment:
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: 900000
       CHOWN_WORK_ON_START: ${CHOWN_WORK_ON_START:-1}
-      ANTHROPIC_BASE_URL: http://inf-splitter:${PROXY_PORT:-3000}
-      ANTHROPIC_AUTH_TOKEN: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      ANTHROPIC_BASE_URL: http://inf-splitter:${PROXY_PORT:-3000}/anthropic
+      ANTHROPIC_AUTH_TOKEN: dummy
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-deepseek-v4-pro[1m]}
       ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-deepseek-v4-pro[1m]}
       ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro[1m]}
       ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-gemma4:31b}
       CLAUDE_CODE_SUBAGENT_MODEL: ${CLAUDE_CODE_SUBAGENT_MODEL:-gemma4:31b}
       CLAUDE_CODE_EFFORT_LEVEL: ${CLAUDE_CODE_EFFORT_LEVEL:-max}
-      OLLAMA_HOST: http://host.docker.internal:${OLLAMA_PORT:-11434}
     <<: *host-gateway
