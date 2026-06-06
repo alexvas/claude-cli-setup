@@ -38,6 +38,7 @@ services:
         EXTERNAL_IP: ${EXTERNAL_IP:-}
         CLAUDE_TARGET: ${CLAUDE_TARGET:-stable}
         ASTRO_VERSION: ${ASTRO_VERSION:-6.4.2}
+        OH_MY_ZSH_VERSION: ${OH_MY_ZSH_VERSION:-70ad5e3df8f7bed68aa6672029496926e632aedd}
         DEV_UID: ${DEV_UID:-1000}
         DEV_GID: ${DEV_GID:-1000}
     image: claude:latest

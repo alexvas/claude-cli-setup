@@ -138,6 +138,7 @@ FROM ubuntu:24.04 AS runtime
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 ARG YARN_VERSION=4.15.0
+ARG OH_MY_ZSH_VERSION=70ad5e3df8f7bed68aa6672029496926e632aedd
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/dev
@@ -172,6 +173,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     build-essential \
     pkg-config \
     gosu \
+    zsh \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat \
     && sed -i 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen ru_RU.UTF-8 \
@@ -212,6 +214,12 @@ RUN printf '#!/bin/sh\nexec node /home/dev/mcp/.yarn/releases/yarn-%s.cjs "$@"\n
 
 RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work
 
+COPY docker/zsh/zshenv /tmp/zshenv.fragment
+COPY docker/setup-zsh.sh /tmp/setup-zsh.sh
+RUN chmod +x /tmp/setup-zsh.sh \
+    && runuser -u dev -- env HOME=/home/dev OH_MY_ZSH_VERSION="${OH_MY_ZSH_VERSION}" /tmp/setup-zsh.sh \
+    && rm -f /tmp/setup-zsh.sh /tmp/zshenv.fragment
+
 USER dev
 WORKDIR /home/dev
 
@@ -220,4 +228,4 @@ COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 WORKDIR /home/dev
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["bash"]
+CMD ["zsh"]

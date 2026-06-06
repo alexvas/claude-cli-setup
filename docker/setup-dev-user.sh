@@ -23,8 +23,13 @@ ensure_dev_group() {
 
 ensure_dev_group
 
+dev_shell="/bin/bash"
+if [ -x /bin/zsh ]; then
+  dev_shell="/bin/zsh"
+fi
+
 if id dev >/dev/null 2>&1; then
-  usermod -u "${DEV_UID}" -g dev dev 2>/dev/null || true
+  usermod -u "${DEV_UID}" -g dev -s "${dev_shell}" dev 2>/dev/null || true
   chown -R dev:dev /home/dev 2>/dev/null || true
   exit 0
 fi
@@ -34,12 +39,12 @@ if existing="$(getent passwd "${DEV_UID}" | cut -d: -f1)" && [ -n "${existing}" 
   if [ -d "/home/${existing}" ] && [ "$(ls -A "/home/${existing}" 2>/dev/null | wc -l)" -gt 0 ]; then
     cp -a "/home/${existing}/." /home/dev/ 2>/dev/null || true
   fi
-  usermod -l dev -d /home/dev -g dev "${existing}"
+  usermod -l dev -d /home/dev -g dev -s "${dev_shell}" "${existing}"
   if getent group "${existing}" >/dev/null 2>&1 && [ "${existing}" != "dev" ]; then
     groupmod -n dev "${existing}" 2>/dev/null || true
   fi
 elif ! getent passwd dev >/dev/null; then
-  useradd -m -u "${DEV_UID}" -g dev -s /bin/bash dev
+  useradd -m -u "${DEV_UID}" -g dev -s "${dev_shell}" dev
 fi
 
 mkdir -p /home/dev
