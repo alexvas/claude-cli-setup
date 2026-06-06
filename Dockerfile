@@ -196,6 +196,7 @@ RUN chmod +x /tmp/setup-dev-user.sh && DEV_UID="${DEV_UID}" DEV_GID="${DEV_GID}"
 
 # Dev home: only runtime-needed paths (not full .cargo registry or build temps)
 COPY --from=builder --chown=dev:dev /home/dev/.claude /home/dev/.claude
+COPY --chown=dev:dev docker/claude-settings/keybindings.json /home/dev/.claude/keybindings.json
 COPY --from=builder --chown=dev:dev /home/dev/.claude.json /home/dev/.claude.json
 COPY --from=builder --chown=dev:dev /home/dev/.local /home/dev/.local
 COPY --from=builder --chown=dev:dev /home/dev/.rustup /home/dev/.rustup
@@ -213,12 +214,10 @@ RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work
 
 USER dev
 WORKDIR /home/dev
-# Bind-mounts may be owned by a different host UID; allow git in mounted project dirs.
-RUN git config --global --add safe.directory '/home/dev/work/*'
 
 USER root
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-WORKDIR /home/dev/work/proj1
+WORKDIR /home/dev
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash"]

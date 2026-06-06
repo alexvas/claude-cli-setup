@@ -14,7 +14,11 @@ services:
       - ${INF_SPLITTER_SECRETS_DIR:-../inf-splitter.git/secrets}:/app/secrets:ro
     <<: *host-gateway
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PROXY_PORT:-3000}/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:${PROXY_PORT:-3000}/health || exit 1",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -39,11 +43,15 @@ services:
     image: claude:latest
     stdin_open: true
     tty: true
+    working_dir: ${PROJECT_PATH_1:?set PROJECT_PATH_1}
     volumes:
-      - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:/home/dev/work/proj1
+      - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:${PROJECT_PATH_1:?set PROJECT_PATH_1}
     environment:
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: 900000
       CHOWN_WORK_ON_START: ${CHOWN_WORK_ON_START:-1}
+      PROJECT_PATH_1: ${PROJECT_PATH_1:?set PROJECT_PATH_1}
+      PROJECT_PATH_2: ${PROJECT_PATH_2:-}
+      PROJECT_PATH_3: ${PROJECT_PATH_3:-}
       ANTHROPIC_BASE_URL: http://inf-splitter:${PROXY_PORT:-3000}/anthropic
       ANTHROPIC_AUTH_TOKEN: dummy
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-deepseek-v4-pro[1m]}
