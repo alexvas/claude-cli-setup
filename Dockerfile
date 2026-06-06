@@ -32,7 +32,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/dev
 ENV PATH="/home/dev/.local/bin:/home/dev/.cargo/bin:${PATH}"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     git \
     vim \
     privoxy \
@@ -67,14 +69,28 @@ RUN HOST_GATEWAY_IP="${HOST_GATEWAY_IP}" SOCKS_HOST="${SOCKS_HOST}" EXTERNAL_IP=
        /tmp/bootstrap-claude-build.sh
 
 # Rust (rustup installer is upstream-hosted; verify rustup.rs integrity out-of-band if needed)
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
-    && . "$HOME/.cargo/env" \
-    && cargo install --locked rust-mcp-server \
-    && (cargo install --git https://github.com/camshaft/cargo-mcp --locked \
-        || echo "WARN: optional cargo-mcp install failed; MCP will use rust-mcp-server")
+USER root
+RUN --mount=type=cache,target=/cache/cargo/registry,uid=${DEV_UID},gid=${DEV_GID} \
+    --mount=type=cache,target=/cache/cargo/git,uid=${DEV_UID},gid=${DEV_GID} \
+    --mount=type=cache,target=/cache/rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \
+    --mount=type=cache,target=/cache/cargo-target,uid=${DEV_UID},gid=${DEV_GID} \
+    mkdir -p /home/dev/.cargo /home/dev/.rustup \
+    && chown -R dev:dev /home/dev/.cargo /home/dev/.rustup \
+    && ln -sfn /cache/cargo/registry /home/dev/.cargo/registry \
+    && ln -sfn /cache/cargo/git /home/dev/.cargo/git \
+    && ln -sfn /cache/rustup/downloads /home/dev/.rustup/downloads \
+    && runuser -u dev -- env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
+        bash -euo pipefail -c '\
+      curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
+      && . "$HOME/.cargo/env" \
+      && CARGO_TARGET_DIR=/cache/cargo-target cargo install --locked rust-mcp-server \
+      && (CARGO_TARGET_DIR=/cache/cargo-target cargo install --git https://github.com/camshaft/cargo-mcp --locked \
+          || echo "WARN: optional cargo-mcp install failed; MCP will use rust-mcp-server")'
+USER dev
 
 # uv + ty CLI (uv install script is upstream-hosted; pin uv version via UV_VERSION if needed)
-RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
+RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
+    curl -fsSL https://astral.sh/uv/install.sh | sh \
     && export PATH="${HOME}/.local/bin:${PATH}" \
     && uv tool install ty \
     && uv tool install mcp-server-git \
@@ -84,7 +100,8 @@ RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
 # Astro CLI (user-local npm prefix)
 ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
 ENV PATH="/home/dev/.npm-global/bin:${PATH}"
-RUN npm install -g "astro@${ASTRO_VERSION}"
+RUN --mount=type=cache,target=/home/dev/.npm,uid=${DEV_UID},gid=${DEV_GID} \
+    npm install -g "astro@${ASTRO_VERSION}"
 
 # MCP Yarn workspace (Berry bundle downloaded at build time, not on host)
 COPY --chown=dev:dev docker/mcp /home/dev/mcp
@@ -98,13 +115,15 @@ USER dev
 WORKDIR /home/dev
 
 COPY --chown=dev:dev docker/build-mcp.sh /home/dev/build-mcp.sh
-RUN YARN_VERSION="${YARN_VERSION}" WORK_ROOT=/home/dev/work GIT_REPO=/home/dev/work/proj1 bash /home/dev/build-mcp.sh
+RUN --mount=type=cache,target=/home/dev/mcp/.yarn/cache,uid=${DEV_UID},gid=${DEV_GID} \
+    YARN_VERSION="${YARN_VERSION}" WORK_ROOT=/home/dev/work GIT_REPO=/home/dev/work/proj1 bash /home/dev/build-mcp.sh
 
 # Drop build caches and temp files before exporting to runtime
 USER root
 RUN rm -rf \
     /home/dev/.cargo/registry \
     /home/dev/.cargo/git \
+    /home/dev/.rustup/downloads \
     /home/dev/.claude/downloads \
     /home/dev/build-mcp.sh \
     /home/dev/setup-mcp-yarn.sh \
@@ -131,7 +150,9 @@ ENV LC_ALL=ru_RU.UTF-8
 # Отключаем телеметрию Claude Code
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     git \
     vim \
     less \
