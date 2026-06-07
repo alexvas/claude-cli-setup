@@ -130,7 +130,7 @@ docker compose build --no-cache claude
 | `docker compose run --rm claude claude` | Сразу запустить Claude CLI |
 | `docker compose run --rm claude bash -lc 'claude --version'` | Проверить установку Claude (работает без запущенного `inf-splitter`) |
 | `docker compose run --rm claude bash -lc 'claude mcp list'` | Список MCP-серверов (работает без запущенного `inf-splitter`) |
-| `docker compose run --rm claude bash -lc 'curl -s "$OLLAMA_HOST/api/tags"'` | Проверить доступ к Ollama на хосте |
+| `docker compose run --rm claude bash -lc 'curl -s http://host.docker.internal:11434/api/tags'` | Проверить доступ к Ollama на хосте |
 
 Флаг `--rm` удобен для одноразовых сессий; без него контейнер можно снова запустить через `docker compose start`.
 
@@ -159,7 +159,6 @@ docker compose run --rm claude claude
 - `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` ← DeepSeek
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` ← локальная Ollama-модель
 - `CLAUDE_CODE_EFFORT_LEVEL` ← из `.env`
-- `OLLAMA_HOST=http://host.docker.internal:${OLLAMA_PORT}` (прямая диагностика Ollama из `claude`)
 
 Подробнее: [интеграция Claude Code с DeepSeek](https://api-docs.deepseek.com/guides/coding_agents).
 
@@ -168,7 +167,7 @@ docker compose run --rm claude claude
 - **Сборка падает на bootstrap** — проверьте `SOCKS_PORT` (SOCKS на хосте слушает `0.0.0.0`). Rootful: `docker compose build claude` без `build_wrapper`. Rootless: `python3 docker/build_wrapper.py diagnose`; при необходимости `docker/apply-rootless-port-forward.sh`.
 - **Ошибка `UnsupportedProxyProtocol`** — для шага установки Claude используется `fetch`, который часто не понимает `socks5://` напрямую; в этом образе это обходится через локальный HTTP bridge (`privoxy`).
 - **`set DEEPSEEK_API_KEY` при run claude** — задайте ключ в `.env`; без него Compose не поднимет контейнер `claude`.
-- **Ollama недоступна из контейнера `claude`** — убедитесь, что Ollama слушает `0.0.0.0:${OLLAMA_PORT}`. Проверка: `curl -s "$OLLAMA_HOST/api/tags"`.
+- **Ollama недоступна из контейнера `claude`** — убедитесь, что Ollama слушает `0.0.0.0:${OLLAMA_PORT}`. Проверка: `curl -s http://host.docker.internal:11434/api/tags`.
 - **Проблемы с `inf-splitter`** — см. [inf-splitter/README.md](inf-splitter/README.md#устранение-неполадок).
 - **Ollama: Connection refused на `host.docker.internal` (rootless)** — выполните `docker/apply-rootless-port-forward.sh`, пересоздайте контейнеры (`docker compose up -d --force-recreate inf-splitter`). Проверка: `docker compose exec inf-splitter wget -qO- http://host.docker.internal:11434/api/tags`.
 - **Нет proj2 в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.

@@ -12,7 +12,7 @@ esac
 NODE_TARBALL="node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
 NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
 
-curl -fsSL "${NODE_URL}" -o "/tmp/${NODE_TARBALL}"
+curl -fsSL "${NODE_URL}" -o "/tmp/${NODE_TARBALL}" || { echo "Failed to download Node.js" >&2; exit 1; }
 tar -xJf "/tmp/${NODE_TARBALL}" -C /usr/local --strip-components=1
 rm -f "/tmp/${NODE_TARBALL}"
 

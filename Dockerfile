@@ -76,9 +76,9 @@ RUN --mount=type=cache,target=/cache/cargo/registry,uid=${DEV_UID},gid=${DEV_GID
     --mount=type=cache,target=/cache/cargo-target,uid=${DEV_UID},gid=${DEV_GID} \
     mkdir -p /home/dev/.cargo /home/dev/.rustup \
     && chown -R dev:dev /home/dev/.cargo /home/dev/.rustup \
-    && ln -sfn /cache/cargo/registry /home/dev/.cargo/registry \
-    && ln -sfn /cache/cargo/git /home/dev/.cargo/git \
-    && ln -sfn /cache/rustup/downloads /home/dev/.rustup/downloads \
+    && ln -sf /cache/cargo/registry /home/dev/.cargo/registry \
+    && ln -sf /cache/cargo/git /home/dev/.cargo/git \
+    && ln -sf /cache/rustup/downloads /home/dev/.rustup/downloads \
     && runuser -u dev -- env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
         bash -euo pipefail -c '\
       curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
@@ -185,7 +185,10 @@ COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
-# python3/pip via uv (no system python3 package)
+# python3/pip via uv (no system python3 package).
+# NOTE: python3 is a thin wrapper around "uv run python" — arbitrary packages
+# are NOT available unless installed with "uv pip install --system <pkg>" or
+# the working directory is a uv-managed project with the dependency declared.
 RUN printf '#!/bin/sh\nexec uv run python "$@"\n' > /usr/local/bin/python3 \
     && chmod +x /usr/local/bin/python3 \
     && printf '%s\n' \

@@ -58,7 +58,11 @@ EOF
 
 /usr/sbin/privoxy --no-daemon "${PRIVOXY_CONF}" >"${PRIVOXY_LOG}" 2>&1 &
 PRIVOXY_PID=$!
-sleep 1
+# Wait for privoxy to be ready (poll up to 5 seconds)
+for i in $(seq 1 10); do
+  if nc -z 127.0.0.1 8118 2>/dev/null; then break; fi
+  sleep 0.5
+done
 
 export HTTP_PROXY="http://127.0.0.1:8118"
 export HTTPS_PROXY="${HTTP_PROXY}"

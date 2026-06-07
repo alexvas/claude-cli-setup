@@ -167,7 +167,7 @@ def docker_rootless() -> bool:
         raise
 
 
-def override_present() -> bool:
+def override_matches() -> bool:
     if not OVERRIDE_DEST.is_file():
         return False
     try:
@@ -322,8 +322,8 @@ def run_diagnosis(
             probe_port=probe_port,
             probe_token=server.token,
             lan_ip=lan_ip,
-            override_installed=override_present(),
-            override_needed=rootless and not override_present(),
+            override_installed=override_matches(),
+            override_needed=rootless and not override_matches(),
         )
         for cand in candidates(rootless, lan_ip):
             d.probes.append(probe_host_mapping(cand, probe_port, server.token))
@@ -373,7 +373,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     dotenv = load_dotenv(env_path)
     merged = merge_env(dotenv)
 
-    if docker_rootless() and not override_present() and not args.skip_override:
+    if docker_rootless() and not override_matches() and not args.skip_override:
         print("Rootless Docker without port-forward override.")
         if args.yes:
             apply_rootless_override(assume_yes=True)
