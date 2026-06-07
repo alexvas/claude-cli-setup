@@ -214,11 +214,11 @@ RUN printf '#!/bin/sh\nexec node /home/dev/mcp/.yarn/releases/yarn-%s.cjs "$@"\n
 
 RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work
 
-COPY docker/zsh/zshenv /tmp/zshenv.fragment
+COPY docker/zsh/zshrc.fragment /tmp/zshrc.fragment
 COPY docker/setup-zsh.sh /tmp/setup-zsh.sh
 RUN chmod +x /tmp/setup-zsh.sh \
     && runuser -u dev -- env HOME=/home/dev OH_MY_ZSH_VERSION="${OH_MY_ZSH_VERSION}" /tmp/setup-zsh.sh \
-    && rm -f /tmp/setup-zsh.sh /tmp/zshenv.fragment
+    && rm -f /tmp/setup-zsh.sh /tmp/zshrc.fragment
 
 USER dev
 WORKDIR /home/dev

@@ -1,0 +1,61 @@
+# ── Глобальная история (общая между сессиями, без дублей) ──
+HISTFILE=~/.zhistory
+HISTSIZE=63000
+SAVEHIST=63000
+setopt HIST_IGNORE_ALL_DUPS
+setopt HIST_SAVE_NO_DUPS
+setopt HIST_REDUCE_BLANKS
+setopt EXTENDED_HISTORY
+
+# ── Промпт ─────────────────────────────────────────────────
+show_login=false
+bg_p_color=33
+end_p='>'
+
+# показывать логин в промпте, только когда нет XAUTHORITY (SSH)
+[[ -z $XAUTHORITY ]] && show_login=true
+
+case $USER in
+  (root) bg_p_color=31; end_p='#'; show_login=false ;;
+esac
+
+s="%{"$'\e['
+e="m%}"
+
+PS1="${s}01;07;${bg_p_color};40${e}"
+[[ $show_login == true ]] && PS1+="${s}42${e}%n${s}46${e}@${s}40${e}"
+PS1+="%m${s}00;31${e}%(?..(%?%))${s}01;${bg_p_color}${e}${end_p}${s}00${e} "
+
+RPS1="[${s}01;${bg_p_color}${e}%38<...<%~%<<${s}00${e}]"
+
+unset s e show_login bg_p_color end_p
+
+# Терминальный заголовок
+_title_hook() {
+  [[ -t 1 ]] || return
+  local title
+  case $USER in
+    (root)  title="Root" ;;
+    (*)     title="%n" ;;
+  esac
+  title+="@%m: %~"
+  print -Pn "\e]2;${title}\a"
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _title_hook
+
+# ── Алиасы ────────────────────────────────────────────────
+alias ls='ls --color=auto'
+alias ll='ls -l --color=auto'
+alias l.='ls -a --color=auto'
+alias touch='nocorrect touch'
+alias mv='nocorrect mv'
+alias cp='nocorrect cp'
+alias rm='nocorrect rm'
+alias du='du -hc'
+alias df='df -h'
+alias psu="ps -u $USER"
+alias scp='scp -p'
+
+# ── Функции ───────────────────────────────────────────────
+pps() { ps $(pgrep "$1") }

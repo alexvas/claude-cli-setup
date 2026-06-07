@@ -1,10 +1,11 @@
 #!/bin/bash
-# Install oh-my-zsh at a pinned git ref and append project zshenv for user dev.
+# Install oh-my-zsh at a pinned git ref and set up minimal zsh config for user dev.
 set -euo pipefail
 
 HOME="${HOME:-/home/dev}"
 ZSH="${HOME}/.oh-my-zsh"
-ZSH_ENV_MARKER='# claude-cli zshenv'
+ZSHRC="${HOME}/.zshrc"
+PROMPT_FILE="${HOME}/.claude-cli-zsh-prompt"
 OH_MY_ZSH_VERSION="${OH_MY_ZSH_VERSION:?OH_MY_ZSH_VERSION required}"
 OH_MY_ZSH_REPO="${OH_MY_ZSH_REPO:-https://github.com/ohmyzsh/ohmyzsh.git}"
 
@@ -29,22 +30,23 @@ install_oh_my_zsh() {
   git checkout -q FETCH_HEAD
   git config oh-my-zsh.lastVersion "${OH_MY_ZSH_VERSION}"
   cd - >/dev/null
-
-  if [ ! -f "${HOME}/.zshrc" ]; then
-    sed "s|^export ZSH=.*$|export ZSH=\"\${HOME}/.oh-my-zsh\"|" \
-      "${ZSH}/templates/zshrc.zsh-template" > "${HOME}/.zshrc"
-  fi
 }
 
 install_oh_my_zsh
 
-if [ -f /tmp/zshenv.fragment ]; then
-  touch "${HOME}/.zshenv"
-  if ! grep -qF "${ZSH_ENV_MARKER}" "${HOME}/.zshenv"; then
-    {
-      echo
-      echo "${ZSH_ENV_MARKER}"
-      cat /tmp/zshenv.fragment
-    } >> "${HOME}/.zshenv"
-  fi
+# Write minimal .zshrc: oh-my-zsh base + user fragment
+cat > "${ZSHRC}" <<'ZSHRC_EOF'
+export ZSH="${HOME}/.oh-my-zsh"
+ZSH_DISABLE_COMPFIX=true
+ZSH_THEME=""
+plugins=(git)
+source "$ZSH/oh-my-zsh.sh"
+
+# claude-cli zsh prompt
+[[ -f "${HOME}/.claude-cli-zsh-prompt" ]] && source "${HOME}/.claude-cli-zsh-prompt"
+ZSHRC_EOF
+
+# Copy prompt/alias fragment
+if [ -f /tmp/zshrc.fragment ]; then
+  cp /tmp/zshrc.fragment "${PROMPT_FILE}"
 fi
