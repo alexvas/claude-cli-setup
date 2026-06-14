@@ -173,6 +173,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     build-essential \
     pkg-config \
     gosu \
+    socat \
     zsh \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat \
     && sed -i 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen \

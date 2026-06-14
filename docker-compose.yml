@@ -23,6 +23,7 @@ services:
     working_dir: ${PROJECT_PATH_1:?set PROJECT_PATH_1}
     volumes:
       - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:${PROJECT_PATH_1:?set PROJECT_PATH_1}
+      - ${HOME}/.claude:/home/dev/.claude
     environment:
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: 900000
       CHOWN_WORK_ON_START: ${CHOWN_WORK_ON_START:-1}
