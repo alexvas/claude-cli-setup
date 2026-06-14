@@ -37,18 +37,11 @@ cp .env.example .env
 - `HOST_GATEWAY_IP` — 可选。**Rootful：** 留空（compose 使用 `host-gateway`，Dockerfile 检测桥接 IP）。**Rootless：** 由 `docker/build_wrapper.py build` 在探测后设置。
 - `PROJECT_PATH_1` — **必需**的主机第一个项目路径。
 - `PROJECT_PATH_2`、`PROJECT_PATH_3` — 可选；通过 `COMPOSE_FILE` 包含片段（见下文）。
-- `DEEPSEEK_API_KEY` — `claude` 容器的**必需** DeepSeek 密钥（没有它，`docker compose run claude` 将失败）。
-- `OLLAMA_PORT` — 主机上 Ollama 的端口（默认 `11434`）。
 - **Rootless Docker：** 使用 [docker/build_wrapper.py](docker/build_wrapper.py)；如有需要，它会建议使用 [docker/apply-rootless-port-forward.sh](docker/apply-rootless-port-forward.sh)。
-- `NODE_VERSION`、`YARN_VERSION`、`ASTRO_VERSION` — 构建时版本（默认 `22.12.0`、`4.15.0`、`6.4.2`）。
 - `CLAUDE_TARGET` — 构建时 Claude 安装目标：`stable`、`latest` 或特定版本 `X.Y.Z`（默认 `stable`）。
 - `DEV_UID`、`DEV_GID` — 容器内用户的 UID/GID；**必须**与主机上项目目录的所有者匹配（`id -u` / `id -g`），否则 bind-mount 将为 root 所有，容器内的 git 将无法正常工作。
-- `ANTHROPIC_MODEL` — 主要的 Claude Code 模型（默认 `deepseek-v4-pro[1m]`）。
-- `ANTHROPIC_DEFAULT_OPUS_MODEL`、`ANTHROPIC_DEFAULT_SONNET_MODEL` — DeepSeek 配置（默认 `deepseek-v4-pro[1m]`）。
-- `ANTHROPIC_DEFAULT_HAIKU_MODEL`、`CLAUDE_CODE_SUBAGENT_MODEL` — 通过 Ollama 的本地模型（默认 `gemma4:31b`）。
-- `CLAUDE_CODE_EFFORT_LEVEL` — Claude Code 努力级别（默认 `max`）。
 
-3. 主机上必须可用 SOCKS（构建期间）和 Ollama（容器运行期间）。要使 Ollama 可以从容器访问，通常需要在所有接口上监听，例如 `OLLAMA_HOST=0.0.0.0 ollama serve`。
+3. 主机上必须可用 SOCKS（构建期间）。
 
 ### 主机项目（1–3 个目录）
 
@@ -68,10 +61,10 @@ docker compose config
 
 ## 安全
 
-- 不要提交 `.env` 或将 `DEEPSEEK_API_KEY` 存储在仓库中。
+- 不要提交 `.env` 或将 API 密钥存储在仓库中。
 - `docker compose config` 会显示替换后的变量值 — 不要将这些输出粘贴到工单或 CI 日志中。
-- 如果密钥泄露，请轮换 DeepSeek 密钥；更新 `.env` 并重启容器。
-- 镜像仅在构建阶段可访问 SOCKS；运行时阶段不包含 `privoxy`。
+- 如果密钥泄露，请轮换 API 密钥；更新 `.env` 并重启容器。
+- 镜像仅在构建阶段可访问 SOCKS。
 
 ## 构建镜像
 
@@ -124,7 +117,6 @@ docker compose build --no-cache claude
 | `docker compose run --rm claude claude` | 立即启动 Claude CLI |
 | `docker compose run --rm claude bash -lc 'claude --version'` | 检查 Claude 安装 |
 | `docker compose run --rm claude bash -lc 'claude mcp list'` | 列出 MCP 服务器 |
-| `docker compose run --rm claude bash -lc 'curl -s http://host.docker.internal:11434/api/tags'` | 检查主机上的 Ollama 访问 |
 
 `--rm` 标志适用于一次性会话；不使用时，可以通过 `docker compose start` 重新启动容器。
 
@@ -133,7 +125,7 @@ docker compose build --no-cache claude
 运行 `docker compose run` 时，以下变量会传递到容器中（来自 `.env`）：
 
 - `ANTHROPIC_BASE_URL` ← Anthropic 兼容 API 地址（直接端点或代理）
-- `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY`（可选）
+- `ANTHROPIC_AUTH_TOKEN` ← API 密钥（可选）
 - `ANTHROPIC_MODEL` ← 来自 `.env`（默认 `deepseek-v4-pro[1m]`）
 - `ANTHROPIC_DEFAULT_OPUS_MODEL`、`ANTHROPIC_DEFAULT_SONNET_MODEL` ← DeepSeek
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`、`CLAUDE_CODE_SUBAGENT_MODEL` ← deepseek-flash 或本地 Ollama/llamacpp 模型

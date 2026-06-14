@@ -37,18 +37,11 @@ cp .env.example .env
 - `HOST_GATEWAY_IP` — optional. **Rootful:** leave unset (compose uses `host-gateway`, Dockerfile detects the bridge IP). **Rootless:** set by `docker/build_wrapper.py build` after probing.
 - `PROJECT_PATH_1` — **required** path to the first project on the host.
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — optional; include fragments via `COMPOSE_FILE` (see below).
-- `DEEPSEEK_API_KEY` — **required** DeepSeek key for the `claude` container (without it, `docker compose run claude` will fail).
-- `OLLAMA_PORT` — Ollama port on the host (default `11434`).
 - **Rootless Docker:** use [docker/build_wrapper.py](docker/build_wrapper.py); if needed, it will suggest [docker/apply-rootless-port-forward.sh](docker/apply-rootless-port-forward.sh).
-- `NODE_VERSION`, `YARN_VERSION`, `ASTRO_VERSION` — build-time versions (default `22.12.0`, `4.15.0`, `6.4.2`).
 - `CLAUDE_TARGET` — Claude installer target during build: `stable`, `latest`, or a specific version `X.Y.Z` (default `stable`).
 - `DEV_UID`, `DEV_GID` — UID/GID of the user inside the container; **must** match the owner of the project directory on the host (`id -u` / `id -g`), otherwise the bind-mount will be root-owned and git inside the container will break.
-- `ANTHROPIC_MODEL` — primary Claude Code model (default `deepseek-v4-pro[1m]`).
-- `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` — DeepSeek profiles (default `deepseek-v4-pro[1m]`).
-- `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` — local models via Ollama (default `gemma4:31b`).
-- `CLAUDE_CODE_EFFORT_LEVEL` — Claude Code effort level (default `max`).
 
-3. The host must have SOCKS available (during build) and Ollama available (while the container is running). For Ollama access from the container, it is often necessary to listen on all interfaces, e.g. `OLLAMA_HOST=0.0.0.0 ollama serve`.
+3. The host must have SOCKS available (during build).
 
 ### Host projects (1–3 directories)
 
@@ -68,10 +61,10 @@ docker compose config
 
 ## Security
 
-- Do not commit `.env` or store `DEEPSEEK_API_KEY` in the repository.
+- Do not commit `.env` or store API keys in the repository.
 - `docker compose config` reveals substituted variable values — do not paste this output into tickets or CI logs.
-- Rotate the DeepSeek key if leaked; update `.env` and restart the container.
-- The image is built with SOCKS access only during the build stage; the runtime stage does not contain `privoxy`.
+- Rotate the API key if leaked; update `.env` and restart the container.
+- The image is built with SOCKS access only during the build stage.
 
 ## Building the image
 
@@ -124,7 +117,6 @@ docker compose build --no-cache claude
 | `docker compose run --rm claude claude` | Launch Claude CLI immediately |
 | `docker compose run --rm claude bash -lc 'claude --version'` | Check Claude installation |
 | `docker compose run --rm claude bash -lc 'claude mcp list'` | List MCP servers |
-| `docker compose run --rm claude bash -lc 'curl -s http://host.docker.internal:11434/api/tags'` | Check Ollama access on the host |
 
 The `--rm` flag is convenient for one-off sessions; without it, the container can be restarted via `docker compose start`.
 
@@ -133,7 +125,7 @@ The `--rm` flag is convenient for one-off sessions; without it, the container ca
 When running `docker compose run`, the following are passed to the container (from `.env`):
 
 - `ANTHROPIC_BASE_URL` ← Anthropic-compatible API URL (direct endpoint or proxy)
-- `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY` (optional)
+- `ANTHROPIC_AUTH_TOKEN` ← API key (optional)
 - `ANTHROPIC_MODEL` ← from `.env` (default `deepseek-v4-pro[1m]`)
 - `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` ← DeepSeek
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` ← deepseek-flash or local Ollama/llamacpp model
