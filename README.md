@@ -1,6 +1,6 @@
-Этот проект — среда для запуска агента Claude CLI в изолированном окружении Docker.
+**Русский** | [ English ](README.en.md) | [ 中文 ](README.zh.md)
 
-Агент использует [DeepSeek Anthropic API](https://api-docs.deepseek.com/guides/coding_agents) и локальную [Ollama](https://ollama.com/) на хосте.
+Этот проект — среда для запуска агента Claude CLI в изолированном окружении Docker.
 
 ## Требования
 
@@ -13,8 +13,7 @@
 |------|------------|
 | [claude.cli.agent.bootstrap.sh](claude.cli.agent.bootstrap.sh) | Установщик Claude Code (используется при сборке образа) |
 | [Dockerfile](Dockerfile) | Multi-stage образ: Ubuntu 24.04, Claude, MCP, инструменты |
-| [docker-compose.yml](docker-compose.yml) | Сервисы `claude` и `inf-splitter`, переменные из `.env` |
-| [inf-splitter/README.md](inf-splitter/README.md) | Rust-роутер Anthropic API: local (Ollama) / remote (DeepSeek) |
+| [docker-compose.yml](docker-compose.yml) | Сервис `claude`, переменные из `.env` |
 | [docker/compose.proj2.yml](docker/compose.proj2.yml) | Опциональный mount `PROJECT_PATH_2` (1:1 как на хосте) |
 | [docker/compose.proj3.yml](docker/compose.proj3.yml) | Опциональный mount `PROJECT_PATH_3` (1:1 как на хосте) |
 | [.env.example](.env.example) | Шаблон конфигурации |
@@ -40,7 +39,6 @@ cp .env.example .env
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — при необходимости; подключите фрагменты через `COMPOSE_FILE` (см. ниже).
 - `DEEPSEEK_API_KEY` — **обязательный** ключ DeepSeek для контейнера `claude` (без него `docker compose run claude` завершится с ошибкой).
 - `OLLAMA_PORT` — порт Ollama на хосте (по умолчанию `11434`).
-- параметры `inf-splitter` (`LOCAL_MODELS`, `PROXY_PORT`, …) — см. [inf-splitter/README.md](inf-splitter/README.md).
 - **Rootless Docker:** используйте [docker/build_wrapper.py](docker/build_wrapper.py); при необходимости он предложит [docker/apply-rootless-port-forward.sh](docker/apply-rootless-port-forward.sh).
 - `NODE_VERSION`, `YARN_VERSION`, `ASTRO_VERSION` — версии при сборке (по умолчанию `22.12.0`, `4.15.0`, `6.4.2`).
 - `CLAUDE_TARGET` — цель установщика Claude при сборке: `stable`, `latest` или конкретная версия `X.Y.Z` (по умолчанию `stable`).
@@ -82,7 +80,6 @@ docker compose config
 ### Rootful Docker (по умолчанию)
 
 ```bash
-docker compose build inf-splitter
 docker compose build claude
 ```
 
@@ -101,7 +98,6 @@ python3 docker/build_wrapper.py build -y
 Ручная сборка rootless (если `HOST_GATEWAY_IP` уже в `.env`):
 
 ```bash
-docker compose build inf-splitter
 docker compose build claude
 ```
 
@@ -122,54 +118,31 @@ docker compose build --no-cache claude
 | Команда | Назначение |
 |---------|------------|
 | `docker compose build claude` | Собрать образ |
-| `docker compose build inf-splitter` | Собрать роутер |
 | `docker compose build --no-cache claude` | Собрать образ с нуля |
-| `docker compose up -d inf-splitter` | Запустить роутер в фоне |
 | `docker compose run claude` | Запустить контейнер (bash по умолчанию); контейнер остаётся после выхода |
 | `docker compose run --rm claude` | То же, но удалить контейнер после выхода |
 | `docker compose run --rm claude claude` | Сразу запустить Claude CLI |
-| `docker compose run --rm claude bash -lc 'claude --version'` | Проверить установку Claude (работает без запущенного `inf-splitter`) |
-| `docker compose run --rm claude bash -lc 'claude mcp list'` | Список MCP-серверов (работает без запущенного `inf-splitter`) |
+| `docker compose run --rm claude bash -lc 'claude --version'` | Проверить установку Claude |
+| `docker compose run --rm claude bash -lc 'claude mcp list'` | Список MCP-серверов |
 | `docker compose run --rm claude bash -lc 'curl -s http://host.docker.internal:11434/api/tags'` | Проверить доступ к Ollama на хосте |
 
 Флаг `--rm` удобен для одноразовых сессий; без него контейнер можно снова запустить через `docker compose start`.
-
-## Маршрутизация через inf-splitter
-
-Claude Code обращается к DeepSeek и Ollama через Rust-роутер `inf-splitter` (`ANTHROPIC_BASE_URL=http://inf-splitter:3000` внутри Docker-сети).
-
-Перед сессией с API-запросами:
-
-```bash
-docker compose up -d inf-splitter
-docker compose run --rm claude claude
-```
-
-Команды `claude --version` и `claude mcp list` работают без запущенного `inf-splitter`.
-
-Маршрутизация моделей, переменные окружения, доступ к Ollama, HTTP API, сборка и troubleshooting — в [inf-splitter/README.md](inf-splitter/README.md).
 
 ## Переменные в контейнере
 
 При `docker compose run` в контейнер передаются (из `.env`):
 
-- `ANTHROPIC_BASE_URL=http://inf-splitter:3000` (см. [inf-splitter/README.md](inf-splitter/README.md))
-- `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY` (обязателен)
+- `ANTHROPIC_BASE_URL` ← URL Anthropic-совместимого API (прямой эндпоинт или прокси)
+- `ANTHROPIC_AUTH_TOKEN` ← `DEEPSEEK_API_KEY` (опционален)
 - `ANTHROPIC_MODEL` ← из `.env` (по умолчанию `deepseek-v4-pro[1m]`)
 - `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` ← DeepSeek
-- `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` ← локальная Ollama-модель
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` ← deepseek-flash или локальная Ollama/llamacpp модель
 - `CLAUDE_CODE_EFFORT_LEVEL` ← из `.env`
-
-Подробнее: [интеграция Claude Code с DeepSeek](https://api-docs.deepseek.com/guides/coding_agents).
 
 ## Устранение неполадок
 
 - **Сборка падает на bootstrap** — проверьте `SOCKS_PORT` (SOCKS на хосте слушает `0.0.0.0`). Rootful: `docker compose build claude` без `build_wrapper`. Rootless: `python3 docker/build_wrapper.py diagnose`; при необходимости `docker/apply-rootless-port-forward.sh`.
 - **Ошибка `UnsupportedProxyProtocol`** — для шага установки Claude используется `fetch`, который часто не понимает `socks5://` напрямую; в этом образе это обходится через локальный HTTP bridge (`privoxy`).
-- **`set DEEPSEEK_API_KEY` при run claude** — задайте ключ в `.env`; без него Compose не поднимет контейнер `claude`.
-- **Ollama недоступна из контейнера `claude`** — убедитесь, что Ollama слушает `0.0.0.0:${OLLAMA_PORT}`. Проверка: `curl -s http://host.docker.internal:11434/api/tags`.
-- **Проблемы с `inf-splitter`** — см. [inf-splitter/README.md](inf-splitter/README.md#устранение-неполадок).
-- **Ollama: Connection refused на `host.docker.internal` (rootless)** — выполните `docker/apply-rootless-port-forward.sh`, пересоздайте контейнеры (`docker compose up -d --force-recreate inf-splitter`). Проверка: `docker compose exec inf-splitter wget -qO- http://host.docker.internal:11434/api/tags`.
 - **Нет второго проекта в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
 - **Пустой `PROJECT_PATH_2` в compose** — не подключайте фрагмент `compose.proj2.yml`, иначе Compose потребует непустой путь.
 - **EACCES при записи в рабочий каталог** — по умолчанию при старте entrypoint делает `chown -R dev:dev` на смонтированные каталоги (`CHOWN_WORK_ON_START=1`). Это меняет владельца файлов и на хосте. Отключить: `CHOWN_WORK_ON_START=0` в `.env` и выровняйте права на хосте вручную (`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`).

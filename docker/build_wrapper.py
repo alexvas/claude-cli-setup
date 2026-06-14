@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Prepare Docker host reachability (rootless/rootful), probe via ephemeral host
-HTTP server, then build claude + inf-splitter images.
+HTTP server, then build claude image.
 
 Usage:
   python3 docker/build_wrapper.py diagnose
@@ -403,13 +403,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     update_env_file(env_path, updates, remove_keys=["SOCKS_HOST"])
 
     env_extra = {**updates, **{k: v for k, v in merged.items() if k not in updates}}
-    if args.claude_only:
-        services = ["claude"]
-    elif args.inf_splitter_only:
-        services = ["inf-splitter"]
-    else:
-        services = ["inf-splitter", "claude"]
-    compose_build(env_extra, services)
+    compose_build(env_extra, ["claude"])
     print("\nBuild finished.")
     return 0
 
@@ -441,13 +435,6 @@ def main() -> int:
     p_build = sub.add_parser("build", help="Probe, update .env, build images")
     add_yes_arg(p_build)
     p_build.add_argument("--skip-override", action="store_true", help="Do not offer rootless override")
-    build_target = p_build.add_mutually_exclusive_group()
-    build_target.add_argument("--claude-only", action="store_true", help="Build only the claude image")
-    build_target.add_argument(
-        "--inf-splitter-only",
-        action="store_true",
-        help="Build only the inf-splitter image",
-    )
 
     args = parser.parse_args()
     args.yes = effective_yes(args)
