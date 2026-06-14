@@ -25,6 +25,13 @@ if [ "$(id -u)" = "0" ]; then
     mkdir -p -m 0700 /home/dev/.claude/ide
     chown dev:dev /home/dev/.claude/ide
   fi
+
+  # Register git MCP server for the mounted project (path known only at runtime)
+  if [ -n "${PROJECT_PATH_1:-}" ] && [ -d "${PROJECT_PATH_1}" ]; then
+    echo "==> Registering git MCP server for ${PROJECT_PATH_1}"
+    gosu dev:dev claude mcp add --scope user --transport stdio git -- uvx mcp-server-git --repository "${PROJECT_PATH_1}" || true
+  fi
+
   exec gosu dev:dev "$@"
 fi
 

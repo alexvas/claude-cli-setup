@@ -3,7 +3,6 @@
 set -euo pipefail
 
 WORK_ROOT="${WORK_ROOT:-/home/dev/work}"
-GIT_REPO="${GIT_REPO:-/home/dev/work/proj1}"
 MCP_DIR="${MCP_DIR:-/home/dev/mcp}"
 YARN_VERSION="${YARN_VERSION:-4.15.0}"
 YARN_BIN="${MCP_DIR}/.yarn/releases/yarn-${YARN_VERSION}.cjs"
@@ -48,8 +47,6 @@ add_yarn_mcp ripgrep mcp-ripgrep mcp-ripgrep "${WORK_ROOT}"
 
 # Fetch + Git (official Python MCP servers)
 run_mcp_add fetch uvx mcp-server-fetch
-
-run_mcp_add git uvx mcp-server-git --repository "${GIT_REPO}"
 
 # Rust (cargo-mcp from camshaft/cargo-mcp)
 if command -v cargo-mcp >/dev/null 2>&1; then

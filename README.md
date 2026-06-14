@@ -15,8 +15,8 @@
 | [Dockerfile](Dockerfile) | Multi-stage образ: Ubuntu 24.04, Claude, MCP, инструменты |
 | [docker-compose.yml](docker-compose.yml) | Сервисы `claude` и `inf-splitter`, переменные из `.env` |
 | [inf-splitter/README.md](inf-splitter/README.md) | Rust-роутер Anthropic API: local (Ollama) / remote (DeepSeek) |
-| [docker/compose.proj2.yml](docker/compose.proj2.yml) | Опциональный mount `/home/dev/work/proj2` |
-| [docker/compose.proj3.yml](docker/compose.proj3.yml) | Опциональный mount `/home/dev/work/proj3` |
+| [docker/compose.proj2.yml](docker/compose.proj2.yml) | Опциональный mount `PROJECT_PATH_2` (1:1 как на хосте) |
+| [docker/compose.proj3.yml](docker/compose.proj3.yml) | Опциональный mount `PROJECT_PATH_3` (1:1 как на хосте) |
 | [.env.example](.env.example) | Шаблон конфигурации |
 | [docker/build_wrapper.py](docker/build_wrapper.py) | Подготовка сети (host gateway + SOCKS) и сборка образов |
 
@@ -60,7 +60,7 @@ cp .env.example .env
 | Два проекта | `docker-compose.yml:docker/compose.proj2.yml` (+ `PROJECT_PATH_2`) |
 | Три проекта | `…:docker/compose.proj2.yml:docker/compose.proj3.yml` (+ `PROJECT_PATH_3`) |
 
-В контейнере пути: `/home/dev/work/proj1`, `/home/dev/work/proj2`, `/home/dev/work/proj3`.
+Пути в контейнере совпадают с хостовыми (bind-mount 1:1).
 
 Проверка итоговой конфигурации (секреты подставляются из `.env`; **не публикуйте вывод**, если в нём есть ключи):
 
@@ -170,8 +170,8 @@ docker compose run --rm claude claude
 - **Ollama недоступна из контейнера `claude`** — убедитесь, что Ollama слушает `0.0.0.0:${OLLAMA_PORT}`. Проверка: `curl -s http://host.docker.internal:11434/api/tags`.
 - **Проблемы с `inf-splitter`** — см. [inf-splitter/README.md](inf-splitter/README.md#устранение-неполадок).
 - **Ollama: Connection refused на `host.docker.internal` (rootless)** — выполните `docker/apply-rootless-port-forward.sh`, пересоздайте контейнеры (`docker compose up -d --force-recreate inf-splitter`). Проверка: `docker compose exec inf-splitter wget -qO- http://host.docker.internal:11434/api/tags`.
-- **Нет proj2 в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
+- **Нет второго проекта в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
 - **Пустой `PROJECT_PATH_2` в compose** — не подключайте фрагмент `compose.proj2.yml`, иначе Compose потребует непустой путь.
-- **EACCES при записи в `/home/dev/work/proj*`** — по умолчанию при старте entrypoint делает `chown -R dev:dev` на смонтированные каталоги (`CHOWN_WORK_ON_START=1`). Это меняет владельца файлов и на хосте. Отключить: `CHOWN_WORK_ON_START=0` в `.env` и выровняйте права на хосте вручную (`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`).
+- **EACCES при записи в рабочий каталог** — по умолчанию при старте entrypoint делает `chown -R dev:dev` на смонтированные каталоги (`CHOWN_WORK_ON_START=1`). Это меняет владельца файлов и на хосте. Отключить: `CHOWN_WORK_ON_START=0` в `.env` и выровняйте права на хосте вручную (`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`).
 - **`python3` / `pip` не найдены** — пересоберите образ (`docker compose build claude`). `python3` вызывает `uv run python`; `pip` — alias на `uv pip --system` (в интерактивном shell). Вне проекта для установки пакетов используйте `uv pip install --system …` или `uv run` внутри venv проекта.
 - **`rustc` / `cargo` не работают** — пересоберите образ; в runtime копируется toolchain из builder (`~/.rustup`).

@@ -116,7 +116,7 @@ WORKDIR /home/dev
 
 COPY --chown=dev:dev docker/build-mcp.sh /home/dev/build-mcp.sh
 RUN --mount=type=cache,target=/home/dev/mcp/.yarn/cache,uid=${DEV_UID},gid=${DEV_GID} \
-    YARN_VERSION="${YARN_VERSION}" WORK_ROOT=/home/dev/work GIT_REPO=/home/dev/work/proj1 bash /home/dev/build-mcp.sh
+    YARN_VERSION="${YARN_VERSION}" WORK_ROOT=/home/dev/work bash /home/dev/build-mcp.sh
 
 # Drop build caches and temp files before exporting to runtime
 USER root
