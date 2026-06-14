@@ -134,9 +134,6 @@ docker compose build --no-cache claude
 ## Устранение неполадок
 
 - **Сборка падает на bootstrap** — проверьте `SOCKS_PORT` (SOCKS на хосте слушает `0.0.0.0`). Rootful: `docker compose build claude` без `build_wrapper`. Rootless: `python3 docker/build_wrapper.py diagnose`; при необходимости `docker/apply-rootless-port-forward.sh`.
-- **Ошибка `UnsupportedProxyProtocol`** — для шага установки Claude используется `fetch`, который часто не понимает `socks5://` напрямую; в этом образе это обходится через локальный HTTP bridge (`privoxy`).
 - **Нет второго проекта в контейнере** — задайте `PROJECT_PATH_2` и добавьте `docker/compose.proj2.yml` в `COMPOSE_FILE`.
 - **Пустой `PROJECT_PATH_2` в compose** — не подключайте фрагмент `compose.proj2.yml`, иначе Compose потребует непустой путь.
 - **EACCES при записи в рабочий каталог** — по умолчанию при старте entrypoint делает `chown -R dev:dev` на смонтированные каталоги (`CHOWN_WORK_ON_START=1`). Это меняет владельца файлов и на хосте. Отключить: `CHOWN_WORK_ON_START=0` в `.env` и выровняйте права на хосте вручную (`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`).
-- **`python3` / `pip` не найдены** — пересоберите образ (`docker compose build claude`). `python3` вызывает `uv run python`; `pip` — alias на `uv pip --system` (в интерактивном shell). Вне проекта для установки пакетов используйте `uv pip install --system …` или `uv run` внутри venv проекта.
-- **`rustc` / `cargo` не работают** — пересоберите образ; в runtime копируется toolchain из builder (`~/.rustup`).

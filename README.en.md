@@ -134,9 +134,6 @@ When running `docker compose run`, the following are passed to the container (fr
 ## Troubleshooting
 
 - **Build fails at bootstrap** — check `SOCKS_PORT` (SOCKS on the host must listen on `0.0.0.0`). Rootful: `docker compose build claude` without `build_wrapper`. Rootless: `python3 docker/build_wrapper.py diagnose`; if needed, `docker/apply-rootless-port-forward.sh`.
-- **`UnsupportedProxyProtocol` error** — the Claude installation step uses `fetch`, which often does not support `socks5://` directly; this image works around it via a local HTTP bridge (`privoxy`).
 - **Missing second project in the container** — set `PROJECT_PATH_2` and add `docker/compose.proj2.yml` to `COMPOSE_FILE`.
 - **Empty `PROJECT_PATH_2` in compose** — do not include the `compose.proj2.yml` fragment unless the path is set.
 - **EACCES when writing to the working directory** — by default, the entrypoint runs `chown -R dev:dev` on mounted directories at startup (`CHOWN_WORK_ON_START=1`). This also changes file ownership on the host. To disable: `CHOWN_WORK_ON_START=0` in `.env` and align permissions on the host manually (`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`).
-- **`python3` / `pip` not found** — rebuild the image (`docker compose build claude`). `python3` invokes `uv run python`; `pip` is an alias for `uv pip --system` (in interactive shell). Outside a project, use `uv pip install --system …` or `uv run` inside a project venv.
-- **`rustc` / `cargo` not working** — rebuild the image; the toolchain is copied from the builder at runtime (`~/.rustup`).

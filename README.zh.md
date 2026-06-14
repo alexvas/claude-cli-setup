@@ -134,9 +134,6 @@ docker compose build --no-cache claude
 ## 故障排除
 
 - **构建在 bootstrap 阶段失败** — 检查 `SOCKS_PORT`（主机上的 SOCKS 必须监听 `0.0.0.0`）。Rootful：直接使用 `docker compose build claude`（无需 `build_wrapper`）。Rootless：`python3 docker/build_wrapper.py diagnose`；如有需要，`docker/apply-rootless-port-forward.sh`。
-- **`UnsupportedProxyProtocol` 错误** — Claude 安装步骤使用 `fetch`，它通常不直接支持 `socks5://`；此镜像通过本地 HTTP 桥接（`privoxy`）来解决此问题。
 - **容器中缺少第二个项目** — 设置 `PROJECT_PATH_2` 并将 `docker/compose.proj2.yml` 添加到 `COMPOSE_FILE`。
 - **compose 中 `PROJECT_PATH_2` 为空** — 除非路径已设置，否则不要包含 `compose.proj2.yml` 片段。
 - **写入工作目录时出现 EACCES** — 默认情况下，入口点在启动时对挂载目录运行 `chown -R dev:dev`（`CHOWN_WORK_ON_START=1`）。这也会更改主机上的文件所有权。禁用方法：在 `.env` 中设置 `CHOWN_WORK_ON_START=0`，并手动调整主机权限（`chown` + `DEV_UID`/`DEV_GID` = `id -u` / `id -g`）。
-- **`python3` / `pip` 未找到** — 重建镜像（`docker compose build claude`）。`python3` 调用 `uv run python`；`pip` 是 `uv pip --system` 的别名（在交互式 shell 中）。在项目之外，请使用 `uv pip install --system …` 或在项目 venv 内使用 `uv run`。
-- **`rustc` / `cargo` 无法使用** — 重建镜像；工具链在运行时从构建阶段复制（`~/.rustup`）。
