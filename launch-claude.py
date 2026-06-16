@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -319,9 +320,10 @@ def run_tui(projects: list[dict], *, light_theme: bool) -> tuple[int, set[int]]:
     num = next_container_num()
     status_msg = ""
     status_ttl = 0  # ticks until status clears
+    last_enter_time = 0.0
 
     def draw(stdscr) -> tuple[int, set[int]]:
-        nonlocal main_idx, cursor, status_msg, status_ttl
+        nonlocal main_idx, cursor, status_msg, status_ttl, last_enter_time
 
         curses.curs_set(0)
         curses.start_color()
@@ -389,7 +391,7 @@ def run_tui(projects: list[dict], *, light_theme: bool) -> tuple[int, set[int]]:
                     else "?"
                 )
                 footer = (
-                    f"  Space:cycle  Enter:launch  q:quit"
+                    f"  Space:cycle  Enter:main  dbl-Enter/F5/r:launch  q:quit"
                     f"    main: {Path(main_path).name}"
                     f"  extra: {len(additional)}"
                 )
@@ -405,6 +407,19 @@ def run_tui(projects: list[dict], *, light_theme: bool) -> tuple[int, set[int]]:
             elif key in (curses.KEY_DOWN, ord("j")):
                 cursor = (cursor + 1) % len(projects)
             elif key in (curses.KEY_ENTER, 10, 13):
+                now = time.monotonic()
+                if now - last_enter_time < 0.5 and main_idx >= 0:
+                    return main_idx, additional
+                last_enter_time = now
+                # Single Enter: set focused project as main
+                if cursor != main_idx:
+                    if main_idx >= 0:
+                        additional.discard(cursor)
+                        additional.add(main_idx)
+                    else:
+                        additional.discard(cursor)
+                    main_idx = cursor
+            elif key in (curses.KEY_F5, ord("r")):
                 if main_idx >= 0:
                     return main_idx, additional
             elif key == ord(" "):
