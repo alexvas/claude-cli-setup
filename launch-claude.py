@@ -251,6 +251,8 @@ def generate_main_override(
     if has_ide and main_project is not None:
         lines.append(f'      CLAUDE_CODE_SSE_PORT: "{main_project["port"]}"')
         lines.append('      ENABLE_IDE_INTEGRATION: "true"')
+    else:
+        lines.append('      ENABLE_IDE_INTEGRATION: "false"')
     for i, path in enumerate(additional_paths, start=2):
         lines.append(f"      PROJECT_PATH_{i}: {path}")
 
@@ -310,6 +312,8 @@ def run_container(
     if main_project:
         print(f"CLAUDE_CODE_SSE_PORT={main_project['port']}")
         print("ENABLE_IDE_INTEGRATION=true")
+    else:
+        print("ENABLE_IDE_INTEGRATION=false")
     print()
     if dry_run:
         print(f"--- override ({override_path}) ---")
@@ -826,15 +830,17 @@ def main() -> None:
     for n in range(2, len(additional_paths) + 2):
         extra_fragments.append(generate_proj_fragment(n))
 
-    # Build the full projects list for init script (IDE projects only for lock files)
-    all_ide_projects = []
-    if main_project_for_launch is not None:
-        all_ide_projects.append(main_project_for_launch)
-    for proj in additional_projects:
-        if proj.get("rawContent"):
-            all_ide_projects.append(proj)
-
-    all_ports = [p["port"] for p in all_ide_projects if p.get("port")]
+    # Build the full projects list for init script (IDE projects only for lock files).
+    # When main is not an IDE project, skip lock file generation entirely.
+    if has_ide_main:
+        all_ide_projects = [main_project_for_launch] if main_project_for_launch else []
+        for proj in additional_projects:
+            if proj.get("rawContent"):
+                all_ide_projects.append(proj)
+        all_ports = [p["port"] for p in all_ide_projects if p.get("port")]
+    else:
+        all_ide_projects = []
+        all_ports = []
     init_script_path = generate_init_script(
         all_ide_projects, all_ports, no_forward=args.no_forward
     )
