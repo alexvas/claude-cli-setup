@@ -69,33 +69,23 @@ RUN HOST_GATEWAY_IP="${HOST_GATEWAY_IP}" SOCKS_HOST="${SOCKS_HOST}" EXTERNAL_IP=
        /tmp/bootstrap-claude-build.sh
 
 # Rust (rustup installer is upstream-hosted; verify rustup.rs integrity out-of-band if needed)
-USER root
-RUN --mount=type=cache,target=/cache/cargo/registry,uid=${DEV_UID},gid=${DEV_GID} \
-    --mount=type=cache,target=/cache/cargo/git,uid=${DEV_UID},gid=${DEV_GID} \
-    --mount=type=cache,target=/cache/rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \
-    --mount=type=cache,target=/cache/cargo-target,uid=${DEV_UID},gid=${DEV_GID} \
-    mkdir -p /home/dev/.cargo /home/dev/.rustup \
-    && chown -R dev:dev /home/dev/.cargo /home/dev/.rustup \
-    && ln -sf /cache/cargo/registry /home/dev/.cargo/registry \
-    && ln -sf /cache/cargo/git /home/dev/.cargo/git \
-    && ln -sf /cache/rustup/downloads /home/dev/.rustup/downloads \
-    && runuser -u dev -- env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
-        bash -euo pipefail -c '\
-      curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable \
-      && . "$HOME/.cargo/env" \
-      && CARGO_TARGET_DIR=/cache/cargo-target cargo install --locked rust-mcp-server \
-      && (CARGO_TARGET_DIR=/cache/cargo-target cargo install --git https://github.com/camshaft/cargo-mcp --locked \
-          || echo "WARN: optional cargo-mcp install failed; MCP will use rust-mcp-server")'
-USER dev
+# 1. Заранее создаем родительские папки от имени пользователя dev
+RUN mkdir -p /home/dev/.cargo /home/dev/.rustup
+
+# 2. Теперь монтируем кеш в уже существующие папки
+RUN --mount=type=cache,target=/home/dev/.cargo/registry,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/dev/.cargo/git,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/dev/.rustup/downloads,uid=1000,gid=1000 \
+    env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
+    bash -euo pipefail -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && . "$HOME/.cargo/env"'
+
+RUN cargo install --git https://github.com/rtk-ai/rtk
 
 # uv + ty CLI (uv install script is upstream-hosted; pin uv version via UV_VERSION if needed)
 RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
     curl -fsSL https://astral.sh/uv/install.sh | sh \
     && export PATH="${HOME}/.local/bin:${PATH}" \
-    && uv tool install ty \
-    && uv tool install mcp-server-git \
-    && uv tool install mcp-server-fetch \
-    && uv tool install mcp-server-uv
+    && uv tool install ty
 
 # Astro CLI (user-local npm prefix)
 ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global

@@ -41,31 +41,5 @@ add_yarn_mcp() {
   run_mcp_add "${name}" "${bin_path}" "$@"
 }
 
-# Node MCP servers (deps installed here, not in package.json)
-add_yarn_mcp filesystem @modelcontextprotocol/server-filesystem mcp-server-filesystem "${WORK_ROOT}"
-add_yarn_mcp ripgrep mcp-ripgrep mcp-ripgrep "${WORK_ROOT}"
-
-# Fetch + Git (official Python MCP servers)
-run_mcp_add fetch uvx mcp-server-fetch
-
-# Rust (cargo-mcp from camshaft/cargo-mcp)
-if command -v cargo-mcp >/dev/null 2>&1; then
-  run_mcp_add cargo cargo-mcp
-elif command -v rust-mcp-server >/dev/null 2>&1; then
-  run_mcp_add cargo rust-mcp-server
-fi
-
-# Python (Astral)
-run_mcp_add uv uvx mcp-server-uv
-
-if uvx mcp-ty --help >/dev/null 2>&1; then
-  run_mcp_add ty uvx mcp-ty
-else
-  echo "==> mcp-ty not on PyPI; ty CLI available via: ty --version"
-fi
-
-# Astro docs (remote HTTP); name must be slug-style.
-claude mcp add --scope user --transport http astro-docs https://mcp.docs.astro.build/mcp
-
 echo "==> MCP servers registered:"
 claude mcp list || true
