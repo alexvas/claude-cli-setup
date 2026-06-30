@@ -4,11 +4,13 @@ set -euo pipefail
 
 CHOWN_WORK_ON_START="${CHOWN_WORK_ON_START:-1}"
 
-chown_dev() {
+# Selectively repair ownership: find files and directories not owned by dev:dev
+# and chown only those. Does NOT follow symbolic links (find default without -L).
+fix_ownership() {
   if [ -e "${1}" ]; then
-    echo "==> chown dev:dev ${1}"
+    echo "==> fix ownership dev:dev ${1}"
     if [ -d "${1}" ]; then
-      chown -R dev:dev "${1}"
+      find "${1}" \( -type f -o -type d \) \( ! -user dev -o ! -group dev \) -exec chown dev:dev {} +
     elif [ -f "${1}" ]; then
       chown dev:dev "${1}"
     fi
@@ -20,16 +22,16 @@ if [ "$(id -u)" = "0" ]; then
     for var in ${!PROJECT_PATH_@}; do
       path="${!var}"
       if [ -n "${path}" ] && [ -d "${path}" ]; then
-        chown_dev "$path"
+        fix_ownership "$path"
         gosu dev:dev git config --global --add safe.directory "${path}" 2>/dev/null || true
       fi
     done
 
-    # .pi: chown everything except ide/ (tmpfs, handled separately below)
-    chown_dev "/home/dev/.pi"
-    chown_dev "/home/dev/.cargo"
-    chown_dev "/home/dev/.npm"
-    chown_dev "/home/dev/.npm-global"
+    # Runtime cache directories
+    fix_ownership "/home/dev/.pi"
+    fix_ownership "/home/dev/.cargo"
+    fix_ownership "/home/dev/.npm"
+    fix_ownership "/home/dev/.npm-global"
   fi
   exec gosu dev:dev "$@"
 fi
