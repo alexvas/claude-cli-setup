@@ -287,6 +287,7 @@ def run_tui(
     main_key: tuple | None = None
     additional_keys: set[tuple] = set()
     cursor = 0
+    viewport_offset = 0
     status_msg = ""
     status_ttl = 0
     last_enter_time = 0.0
@@ -332,11 +333,29 @@ def run_tui(
             # Find nearest selectable
             cursor = min(sel, key=lambda i: abs(i - cursor))
 
+    def _ensure_cursor_visible(list_height: int) -> None:
+        nonlocal viewport_offset, cursor
+        if not flat_items:
+            viewport_offset = 0
+            return
+        # Shift viewport so cursor stays within the visible window
+        if cursor < viewport_offset:
+            viewport_offset = cursor
+        elif cursor >= viewport_offset + list_height:
+            viewport_offset = cursor - list_height + 1
+        # Clamp to valid range
+        max_offset = max(0, len(flat_items) - list_height)
+        if viewport_offset > max_offset:
+            viewport_offset = max_offset
+        if viewport_offset < 0:
+            viewport_offset = 0
+
     def draw(stdscr) -> tuple[FlatItem | None, list[FlatItem]]:
         nonlocal \
             main_key, \
             additional_keys, \
             cursor, \
+            viewport_offset, \
             status_msg, \
             status_ttl, \
             last_enter_time
@@ -378,13 +397,16 @@ def run_tui(
             list_height = h - 3
             sel_marker_col = w - 4  # right-aligned selection marker column
 
+            # Ensure viewport keeps cursor visible (handles resize too)
+            _ensure_cursor_visible(list_height)
+
             main_idx = _current_main_idx()
             additional_set = _current_additional_set()
 
-            for vi, item in enumerate(flat_items):
-                row = list_start + vi
-                if row >= list_start + list_height:
-                    break
+            visible_end = min(len(flat_items), viewport_offset + list_height)
+            for vi in range(viewport_offset, visible_end):
+                item = flat_items[vi]
+                row = list_start + (vi - viewport_offset)
 
                 is_main = vi == main_idx
                 is_additional = vi in additional_set
@@ -495,15 +517,17 @@ def run_tui(
                 if sel:
                     try:
                         cur_pos = sel.index(cursor)
-                        cursor = sel[(cur_pos - 1) % len(sel)]
+                        if cur_pos > 0:
+                            cursor = sel[cur_pos - 1]
                     except ValueError:
-                        cursor = sel[0]
+                        cursor = sel[-1] if sel else 0
             elif key in (curses.KEY_DOWN, ord("j")):
                 sel = _selectable_indices()
                 if sel:
                     try:
                         cur_pos = sel.index(cursor)
-                        cursor = sel[(cur_pos + 1) % len(sel)]
+                        if cur_pos < len(sel) - 1:
+                            cursor = sel[cur_pos + 1]
                     except ValueError:
                         cursor = sel[0]
             elif key == curses.KEY_RIGHT:
