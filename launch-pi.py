@@ -3,18 +3,18 @@
 # requires-python = ">=3.10"
 # ///
 
-"""Launch Claude Code Docker container with IDE integration.
+"""Launch π Docker container with IDE integration.
 
-Discovers IDE projects from ~/.claude/ide/*.lock files, provides a TUI
-for selecting main and additional projects, then runs docker compose
-with the appropriate mounts, env vars, and port forwarding.
+Provides a TUI for selecting main and additional projects,
+then runs docker compose with the appropriate mounts, env vars,
+and port forwarding.
 
 Usage:
-  uv run launch-claude.py                   # auto-detect main project, no TUI
-  uv run launch-claude.py --tui             # interactive project selection
-  uv run launch-claude.py --dry-run         # print command, don't run
-  uv run launch-claude.py --light           # light theme (with --tui)
-  uv run launch-claude.py --no-forward      # skip socat port forwarding
+  uv run launch-pi.py                   # auto-detect main project, no TUI
+  uv run launch-pi.py --tui             # interactive project selection
+  uv run launch-pi.py --dry-run         # print command, don't run
+  uv run launch-pi.py --light           # light theme (with --tui)
+  uv run launch-pi.py --no-forward      # skip socat port forwarding
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import atexit
 import curses
-import json
 import os
 import re
 import subprocess
@@ -64,9 +63,9 @@ def build_tree(root: Path, depth: int = 0, max_depth: int = 5) -> list[TreeNode]
         for p in sorted(root.iterdir(), key=lambda p: p.name):
             if not p.is_dir():
                 continue
-            has_subdirs = any(
-                q.is_dir() for q in p.iterdir()
-            ) if depth + 1 < max_depth else False
+            has_subdirs = (
+                any(q.is_dir() for q in p.iterdir()) if depth + 1 < max_depth else False
+            )
             entries.append(
                 TreeNode(
                     path=p,
@@ -99,72 +98,10 @@ def load_env() -> dict[str, str]:
     return result
 
 
-def discover_projects() -> list[dict]:
-    ide_dir = Path.home() / ".claude" / "ide"
-    if not ide_dir.is_dir():
-        return []
-
-    projects = []
-    for lock_file in sorted(ide_dir.glob("*.lock")):
-        port_str = lock_file.stem
-        try:
-            port = int(port_str)
-        except ValueError:
-            continue
-
-        try:
-            raw = lock_file.read_text()
-            data = json.loads(raw)
-        except (json.JSONDecodeError, OSError):
-            continue
-
-        if data.get("transport") != "ws":
-            continue
-
-        pid = data.get("pid")
-        if pid is None:
-            continue
-
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            continue
-
-        projects.append(
-            {
-                "port": port,
-                "pid": pid,
-                "workspaceFolders": data.get("workspaceFolders", []),
-                "authToken": data.get("authToken", ""),
-                "ideName": data.get("ideName", "unknown"),
-                "rawContent": raw,
-            }
-        )
-
-    return projects
-
-
-def resolve_main_project(projects: list[dict]) -> int | None:
-    """Pick the main project index from CLAUDE_CODE_SSE_PORT env var.
-    Returns the index if a matching live project is found, None otherwise.
-    """
-    target_port = os.environ.get("CLAUDE_CODE_SSE_PORT")
-    if target_port is None:
-        return None
-    try:
-        target_port_int = int(target_port)
-    except ValueError:
-        return None
-    for i, proj in enumerate(projects):
-        if proj["port"] == target_port_int:
-            return i
-    return None
-
-
 def next_container_num() -> int:
     try:
         result = subprocess.run(
-            ["docker", "ps", "--filter", "name=claude-", "--format", "{{.Names}}"],
+            ["docker", "ps", "--filter", "name=pi-", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
         )
@@ -174,7 +111,7 @@ def next_container_num() -> int:
 
     nums: set[int] = set()
     for name in result.stdout.strip().split():
-        m = re.match(r"claude-(\d+)", name)
+        m = re.match(r"pi-(\d+)", name)
         if m:
             nums.add(int(m.group(1)))
     n = 1
@@ -184,7 +121,7 @@ def next_container_num() -> int:
 
 
 def _temp_file(suffix: str) -> Path:
-    fd, path = tempfile.mkstemp(suffix=suffix, prefix="claude-launcher-")
+    fd, path = tempfile.mkstemp(suffix=suffix, prefix="π-launcher-")
     os.close(fd)
     p = Path(path)
     atexit.register(lambda: p.unlink(missing_ok=True))
@@ -195,85 +132,33 @@ def generate_proj_fragment(n: int) -> Path:
     path = _temp_file(f".proj{n}.yml")
     path.write_text(
         "services:\n"
-        "  claude:\n"
+        "  pi:\n"
         "    volumes:\n"
         f"      - ${{PROJECT_PATH_{n}:?set PROJECT_PATH_{n}}}:${{PROJECT_PATH_{n}:?set PROJECT_PATH_{n}}}\n"
     )
     return path
 
 
-def generate_init_script(
-    projects: list[dict], all_ports: list[int], *, no_forward: bool
-) -> Path:
-    """Shell script that creates IDE lock files and starts socat port forwarding."""
-    lines = ["#!/bin/bash", "mkdir -p -m 0700 /home/dev/.claude/ide || exit 1"]
-    for proj in projects:
-        content = proj.get("rawContent", "")
-        if not content:
-            continue
-        port = proj["port"]
-        lines.append(f"cat > /home/dev/.claude/ide/{port}.lock << 'LOCKEOF'")
-        lines.append(content)
-        lines.append("LOCKEOF")
-        # Host PID is meaningless inside the container PID namespace.
-        # Replace it with $$ (the shell's PID) so the CLI's liveness check passes.
-        lines.append(
-            f'sed -i "s/\\"pid\\":[0-9]*/\\"pid\\":$$/" '
-            f"/home/dev/.claude/ide/{port}.lock"
-        )
-        lines.append(f"chmod 0600 /home/dev/.claude/ide/{port}.lock")
-    if not no_forward:
-        ports_str = " ".join(str(p) for p in all_ports)
-        lines.append(f"for PORT in {ports_str}; do")
-        lines.append(
-            '  socat TCP-LISTEN:"$PORT",fork,bind=127.0.0.1 TCP:host.docker.internal:"$PORT" &'
-        )
-        lines.append("done")
-    lines.append("exec claude")
-    path = _temp_file(".claude-init.sh")
-    path.write_text("\n".join(lines) + "\n")
-    path.chmod(0o644)
-    return path
-
-
-def generate_main_override(
-    main_project: dict | None,
+def generate_override(
+    main_path: str,
     additional_paths: list[str],
-    init_script_path: Path,
-    *,
-    has_ide: bool = True,
 ) -> Path:
     lines = [
         "services:",
-        "  claude:",
+        "  pi:",
         "    environment:",
     ]
-    if has_ide and main_project is not None:
-        lines.append(f'      CLAUDE_CODE_SSE_PORT: "{main_project["port"]}"')
-        lines.append('      ENABLE_IDE_INTEGRATION: "true"')
-    else:
-        lines.append('      ENABLE_IDE_INTEGRATION: "false"')
+    lines.append(f"      PROJECT_PATH_1: {main_path}")
     for i, path in enumerate(additional_paths, start=2):
         lines.append(f"      PROJECT_PATH_{i}: {path}")
-
-    lines.append("    volumes:")
-    if has_ide:
-        lines.append("      - type: tmpfs")
-        lines.append("        target: /home/dev/.claude/ide")
-    lines.append(f"      - {init_script_path}:/usr/local/bin/claude-init.sh:ro")
-
-    lines.append("    command:")
-    lines.append('      - "bash"')
-    lines.append('      - "/usr/local/bin/claude-init.sh"')
     lines.append("")
-
     path = _temp_file(".override.yml")
     path.write_text("\n".join(lines))
     return path
 
 
 def run_container(
-    main_project: dict | None,
+    main_path: str,
     additional_projects: list[dict],
     override_path: Path,
     extra_fragments: list[Path],
@@ -282,7 +167,7 @@ def run_container(
     dry_run: bool,
 ) -> None:
     env = os.environ.copy()
-    env["PROJECT_PATH_1"] = main_project["workspaceFolders"][0] if main_project else ""
+    env["PROJECT_PATH_1"] = main_path
     for i, proj in enumerate(additional_projects, start=2):
         env[f"PROJECT_PATH_{i}"] = proj["workspaceFolders"][0]
     env["COMPOSE_FILE"] = ":".join(
@@ -291,7 +176,7 @@ def run_container(
         + [str(override_path)]
     )
 
-    name = f"claude-{container_num}"
+    name = f"pi-{container_num}"
     cmd = [
         "docker",
         "compose",
@@ -302,18 +187,13 @@ def run_container(
         "--remove-orphans",
         "--name",
         name,
-        "claude",
+        "pi",
     ]
 
     print(f"COMPOSE_FILE={env['COMPOSE_FILE']}")
     print(f"PROJECT_PATH_1={env['PROJECT_PATH_1']}")
     for i in range(2, len(additional_projects) + 2):
         print(f"PROJECT_PATH_{i}={env.get(f'PROJECT_PATH_{i}', '')}")
-    if main_project:
-        print(f"CLAUDE_CODE_SSE_PORT={main_project['port']}")
-        print("ENABLE_IDE_INTEGRATION=true")
-    else:
-        print("ENABLE_IDE_INTEGRATION=false")
     print()
     if dry_run:
         print(f"--- override ({override_path}) ---")
@@ -333,7 +213,7 @@ def run_container(
 
 def _tui_draw_header(stdscr, container_num: int) -> None:
     h, w = stdscr.getmaxyx()
-    title = f" Claude Code Launcher — container: claude-{container_num} "
+    title = f"π Launcher — container: π-{container_num} "
     stdscr.addstr(0, max(0, (w - len(title)) // 2), title, curses.A_REVERSE)
 
 
@@ -395,7 +275,9 @@ def run_tui(
     if has_ide and has_tree:
         source.append(FlatItem(kind="separator", label="Открыты в IDE", indent=0))
     if has_tree:
-        source.append(FlatItem(kind="separator", label="В базовой директории", indent=0))
+        source.append(
+            FlatItem(kind="separator", label="В базовой директории", indent=0)
+        )
         for node in tree_roots:
             source.append(FlatItem(kind="tree", label=node.name, indent=0, node=node))
 
@@ -451,7 +333,13 @@ def run_tui(
             cursor = min(sel, key=lambda i: abs(i - cursor))
 
     def draw(stdscr) -> tuple[FlatItem | None, list[FlatItem]]:
-        nonlocal main_key, additional_keys, cursor, status_msg, status_ttl, last_enter_time
+        nonlocal \
+            main_key, \
+            additional_keys, \
+            cursor, \
+            status_msg, \
+            status_ttl, \
+            last_enter_time
         nonlocal flat_items
 
         curses.curs_set(0)
@@ -485,7 +373,8 @@ def run_tui(
             stdscr.erase()
             _tui_draw_header(stdscr, num)
 
-            list_start = 2
+            # If the very first item is a separator, skip the blank row
+            list_start = 1 if (flat_items and flat_items[0].kind == "separator") else 2
             list_height = h - 3
             sel_marker_col = w - 4  # right-aligned selection marker column
 
@@ -525,9 +414,7 @@ def run_tui(
                     ide = proj["ideName"]
                     port_str = str(proj["port"])
                     ws_path = (
-                        proj["workspaceFolders"][0]
-                        if proj["workspaceFolders"]
-                        else "?"
+                        proj["workspaceFolders"][0] if proj["workspaceFolders"] else "?"
                     )
                     suffix = f"  :{port_str}  {ide}"
                     prefix = "  "
@@ -538,8 +425,12 @@ def run_tui(
                         ws_path = "..." + ws_path[-(available - 3) :]
                     left = prefix + ws_path
                     right = f"{sel_marker}  {suffix}"
-                    right_aligned = right.rjust(w - len(left)) if len(left) + len(right) <= w else right
-                    line = left + right_aligned[len(left):]
+                    right_aligned = (
+                        right.rjust(w - len(left))
+                        if len(left) + len(right) <= w
+                        else right
+                    )
+                    line = left + right_aligned[len(left) :]
                 elif item.kind == "tree":
                     indent_str = "    " * item.indent
                     indicator = _tree_indicator(item.node) if item.node else "[ ]"
@@ -744,7 +635,7 @@ def main() -> None:
     if base_project_dir is not None:
         base_project_dir = os.path.expanduser(base_project_dir)
 
-    projects = discover_projects()
+    projects = []
 
     # Fallback: if no IDE projects and no base dir, use home directory
     if not projects and base_project_dir is None:
@@ -764,103 +655,47 @@ def main() -> None:
             )
             tree_roots = build_tree(Path.home())
 
-    need_tui = args.tui or (
-        sys.stdin.isatty()
-        and resolve_main_project(projects) is None
-    )
-
     if not projects and tree_roots is None:
-        print("No live IDE projects found and no base directory available", file=sys.stderr)
+        print(
+            "No live IDE projects found and no base directory available",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    if need_tui:
-        main_item, additional_items = run_tui(
-            projects, tree_roots, light_theme=args.light
-        )
-    else:
-        # Non-TUI: auto-detect main from IDE projects
-        main_idx = resolve_main_project(projects)
-        if main_idx is not None:
-            main_item = FlatItem(kind="ide", label="", ide_index=main_idx)
-        elif tree_roots is not None and len(tree_roots) > 0:
-            main_item = FlatItem(
-                kind="tree", label=tree_roots[0].name, node=tree_roots[0]
-            )
-        else:
-            main_item = FlatItem(kind="ide", label="", ide_index=0)
-        additional_items: list[FlatItem] = []
+    main_item, additional_items = run_tui(projects, tree_roots, light_theme=args.light)
 
     if main_item is None:
         print("No project selected", file=sys.stderr)
         sys.exit(1)
 
     # Build launch data from selected items
-    main_project_for_launch: dict | None = None
     main_path: str = ""
     additional_projects: list[dict] = []
     additional_paths: list[str] = []
 
-    if main_item.kind == "ide" and main_item.ide_index is not None:
-        main_project_for_launch = projects[main_item.ide_index]
-        if main_project_for_launch.get("workspaceFolders"):
-            main_path = main_project_for_launch["workspaceFolders"][0]
-    elif main_item.kind == "tree" and main_item.node is not None:
+    if main_item.kind == "tree" and main_item.node is not None:
         main_path = str(main_item.node.path)
 
     if not main_path:
         print("Main project has no path", file=sys.stderr)
         sys.exit(1)
 
-    has_ide_main = main_project_for_launch is not None
-
     for item in additional_items:
-        if item.kind == "ide" and item.ide_index is not None:
-            proj = projects[item.ide_index]
-            additional_projects.append(proj)
-            if proj.get("workspaceFolders"):
-                additional_paths.append(proj["workspaceFolders"][0])
-        elif item.kind == "tree" and item.node is not None:
-            # Tree additional: synthetic project dict for path mounting
+        if item.kind == "tree" and item.node is not None:
             additional_projects.append(
                 {"workspaceFolders": [str(item.node.path)], "port": 0, "rawContent": ""}
             )
             additional_paths.append(str(item.node.path))
 
-    extra_fragments: list[Path] = []
-    for n in range(2, len(additional_paths) + 2):
-        extra_fragments.append(generate_proj_fragment(n))
-
-    # Build the full projects list for init script (IDE projects only for lock files).
-    # When main is not an IDE project, skip lock file generation entirely.
-    if has_ide_main:
-        all_ide_projects = [main_project_for_launch] if main_project_for_launch else []
-        for proj in additional_projects:
-            if proj.get("rawContent"):
-                all_ide_projects.append(proj)
-        all_ports = [p["port"] for p in all_ide_projects if p.get("port")]
-    else:
-        all_ide_projects = []
-        all_ports = []
-    init_script_path = generate_init_script(
-        all_ide_projects, all_ports, no_forward=args.no_forward
-    )
-    override_path = generate_main_override(
-        main_project_for_launch,
-        additional_paths,
-        init_script_path,
-        has_ide=has_ide_main,
-    )
-
-    # Synthesize main_project dict for run_container if main is a tree path
-    run_main_project = main_project_for_launch or {
-        "workspaceFolders": [main_path],
-        "port": 0,
-    }
+    extra_fragments = [
+        generate_proj_fragment(n) for n in range(2, len(additional_paths) + 2)
+    ]
+    override_path = generate_override(main_path, additional_paths)
 
     container_num = next_container_num()
     try:
         run_container(
-            run_main_project,
+            main_path,
             additional_projects,
             override_path,
             extra_fragments,
