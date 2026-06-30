@@ -1,4 +1,4 @@
 services:
-  claude:
+  pi:
     volumes:
       - ${PROJECT_PATH_3:?set PROJECT_PATH_3}:${PROJECT_PATH_3:?set PROJECT_PATH_3}
