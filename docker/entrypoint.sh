@@ -5,8 +5,14 @@ set -euo pipefail
 CHOWN_WORK_ON_START="${CHOWN_WORK_ON_START:-1}"
 
 chown_dev() {
-  echo "==> chown dev:dev ${1}"
-  chown -R dev:dev "${1}"
+  if [ -e "${1}" ]; then
+    echo "==> chown dev:dev ${1}"
+    if [ -d "${1}" ]; then
+      chown -R dev:dev "${1}"
+    elif [ -f "${1}" ]; then
+      chown dev:dev "${1}"
+    fi
+  fi
 }
 
 if [ "$(id -u)" = "0" ]; then
@@ -20,10 +26,10 @@ if [ "$(id -u)" = "0" ]; then
     done
 
     # .pi: chown everything except ide/ (tmpfs, handled separately below)
-    pi_dir="/home/dev/.pi"
-    if [ -d "$pi_dir" ]; then
-        chown_dev "$pi_dir"
-    fi
+    chown_dev "/home/dev/.pi"
+    chown_dev "/home/dev/.cargo"
+    chown_dev "/home/dev/.npm"
+    chown_dev "/home/dev/.npm-global"
   fi
   exec gosu dev:dev "$@"
 fi
