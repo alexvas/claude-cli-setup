@@ -146,6 +146,7 @@ def generate_override(
     lines = [
         "services:",
         "  pi:",
+        f"    working_dir: {main_path}",
         "    environment:",
     ]
     lines.append(f"      PROJECT_PATH_1: {main_path}")
@@ -159,6 +160,7 @@ def generate_override(
 
 def run_container(
     main_path: str,
+    mount_main_path: str,
     additional_projects: list[dict],
     override_path: Path,
     extra_fragments: list[Path],
@@ -167,7 +169,7 @@ def run_container(
     dry_run: bool,
 ) -> None:
     env = os.environ.copy()
-    env["PROJECT_PATH_1"] = main_path
+    env["PROJECT_PATH_1"] = mount_main_path
     for i, proj in enumerate(additional_projects, start=2):
         env[f"PROJECT_PATH_{i}"] = proj["workspaceFolders"][0]
     env["COMPOSE_FILE"] = ":".join(
@@ -192,6 +194,8 @@ def run_container(
 
     print(f"COMPOSE_FILE={env['COMPOSE_FILE']}")
     print(f"PROJECT_PATH_1={env['PROJECT_PATH_1']}")
+    if mount_main_path != main_path:
+        print(f"working_dir={main_path}")
     for i in range(2, len(additional_projects) + 2):
         print(f"PROJECT_PATH_{i}={env.get(f'PROJECT_PATH_{i}', '')}")
     print()
@@ -630,6 +634,12 @@ def run_tui(
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+def _path_contains(parent: str, child: str) -> bool:
+    parent_path = Path(parent).resolve()
+    child_path = Path(child).resolve()
+    return parent_path != child_path and child_path.is_relative_to(parent_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -711,15 +721,33 @@ def main() -> None:
             )
             additional_paths.append(str(item.node.path))
 
-    extra_fragments = [
-        generate_proj_fragment(n) for n in range(2, len(additional_paths) + 2)
+    mount_main_path = main_path
+    mounted_additional_paths = additional_paths
+    containing_additional_paths = [
+        path for path in additional_paths if _path_contains(path, main_path)
     ]
-    override_path = generate_override(main_path, additional_paths)
+    if containing_additional_paths:
+        mount_main_path = min(
+            containing_additional_paths, key=lambda path: len(Path(path).resolve().parts)
+        )
+        mounted_additional_paths = [
+            path for path in additional_paths if path != mount_main_path
+        ]
+        additional_projects = [
+            {"workspaceFolders": [path], "port": 0, "rawContent": ""}
+            for path in mounted_additional_paths
+        ]
+
+    extra_fragments = [
+        generate_proj_fragment(n) for n in range(2, len(mounted_additional_paths) + 2)
+    ]
+    override_path = generate_override(main_path, mounted_additional_paths)
 
     container_num = next_container_num()
     try:
         run_container(
             main_path,
+            mount_main_path,
             additional_projects,
             override_path,
             extra_fragments,
