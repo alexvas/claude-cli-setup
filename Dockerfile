@@ -19,6 +19,8 @@ ARG SOCKS_HOST
 ARG EXTERNAL_IP
 ARG DEV_UID
 ARG DEV_GID
+ARG PI_VERSION
+ARG OPENSPEC_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/dev
@@ -71,7 +73,8 @@ RUN bash /home/dev/setup-mcp-yarn.sh
 
 USER root
 
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION}
+RUN npm install -g @fission-ai/openspec@${OPENSPEC_VERSION}
 RUN cargo install --git https://github.com/rtk-ai/rtk \
   && rtk init -g --agent pi \
   && rtk telemetry disable \
@@ -162,6 +165,7 @@ COPY --from=builder /home/dev/.cargo/bin /home/dev/.cargo/bin
 COPY --from=builder /home/dev/mcp /home/dev/mcp
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js /usr/local/bin/pi
+RUN ln -sf /usr/local/lib/node_modules/@fission-ai/openspec/bin/openspec.js /usr/local/bin/openspec
 
 RUN mkdir -p /home/dev/work && chown dev:dev /home/dev/work \
   && mkdir -p /home/dev/.npm-global/bin && chown dev:dev /home/dev/.npm-global \
