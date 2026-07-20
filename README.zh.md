@@ -81,7 +81,26 @@ python3 launch-pi.py
 
 ## Shell prompt
 
-新的 prompt 文件为 `/home/dev/.pi-zsh-prompt`。迁移期间，如果新文件不存在，也会加载 `.claude-cli-zsh-prompt`；两者都存在时优先使用 Pi 文件。
+唯一支持的 prompt 文件是 `/home/dev/.pi-zsh-prompt`。不会加载其他 prompt 文件。
+
+## Docker 存储清理
+
+旧 prompt 名称可能仍存在于旧 rootless Docker 镜像的层中。不要手动删除 `~/.local/share/docker/containerd/` 下的文件。先检查存储：
+
+```bash
+docker system df -v
+```
+
+然后按需清理构建缓存或未使用的镜像：
+
+```bash
+docker builder prune
+# 更激进地清理：
+# docker builder prune -af
+# docker image prune -a
+```
+
+除非确认 volumes 中没有需要的数据，否则不要使用 `--volumes`。
 
 ## 故障排除
 

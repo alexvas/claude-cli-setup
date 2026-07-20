@@ -81,7 +81,26 @@ python3 launch-pi.py
 
 ## Shell prompt
 
-The new prompt fragment is `/home/dev/.pi-zsh-prompt`. During migration, `.claude-cli-zsh-prompt` is also loaded when the new file is absent; when both exist, the Pi file takes precedence.
+The only supported prompt file is `/home/dev/.pi-zsh-prompt`. Other prompt files are not loaded.
+
+## Docker storage cleanup
+
+Old prompt names may remain in layers of older rootless Docker images. Do not delete files manually under `~/.local/share/docker/containerd/`. Inspect storage first:
+
+```bash
+docker system df -v
+```
+
+Then prune build cache or unused images as needed:
+
+```bash
+docker builder prune
+# more aggressively:
+# docker builder prune -af
+# docker image prune -a
+```
+
+Do not use `--volumes` unless you have verified that no required data is stored there.
 
 ## Troubleshooting
 

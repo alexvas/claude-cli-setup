@@ -82,7 +82,26 @@ python3 launch-pi.py
 
 ## Shell prompt
 
-Новый фрагмент prompt хранится в `/home/dev/.pi-zsh-prompt`. Во время переходного периода файл `.claude-cli-zsh-prompt` также загружается, если новый файл отсутствует; при наличии обоих используется Pi-файл.
+Единственный поддерживаемый prompt-файл — `/home/dev/.pi-zsh-prompt`. Другие prompt-файлы не загружаются.
+
+## Очистка Docker storage
+
+Старые имена prompt могут находиться в слоях старых rootless Docker images. Не удаляйте файлы вручную из `~/.local/share/docker/containerd/`. Сначала проверьте использование:
+
+```bash
+docker system df -v
+```
+
+Затем при необходимости очистите build cache или неиспользуемые образы:
+
+```bash
+docker builder prune
+# более агрессивно:
+# docker builder prune -af
+# docker image prune -a
+```
+
+Не используйте `--volumes`, если не проверили, что volumes не содержат нужные данные.
 
 ## Устранение неполадок
 

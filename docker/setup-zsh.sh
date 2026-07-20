@@ -42,12 +42,8 @@ ZSH_THEME=""
 plugins=(git)
 source "$ZSH/oh-my-zsh.sh"
 
-# Pi zsh prompt; retain compatibility with the legacy Claude filename.
-if [[ -f "${HOME}/.pi-zsh-prompt" ]]; then
-  source "${HOME}/.pi-zsh-prompt"
-elif [[ -f "${HOME}/.claude-cli-zsh-prompt" ]]; then
-  source "${HOME}/.claude-cli-zsh-prompt"
-fi
+# Pi zsh prompt
+[[ -f "${HOME}/.pi-zsh-prompt" ]] && source "${HOME}/.pi-zsh-prompt"
 ZSHRC_EOF
 
 # Copy prompt/alias fragment

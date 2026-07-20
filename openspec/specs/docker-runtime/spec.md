@@ -69,7 +69,11 @@ The system SHALL install a pinned oh-my-zsh setup for the `dev` user.
 - **WHEN** `docker/setup-zsh.sh` runs
 - **THEN** it clones oh-my-zsh at the configured pinned git ref
 - **AND** writes a minimal `.zshrc` with the `git` plugin enabled
-- **AND** loads the Pi prompt fragment from `.pi-zsh-prompt`, falling back to `.claude-cli-zsh-prompt` during migration
+- **AND** loads only the Pi prompt fragment from `.pi-zsh-prompt`
+
+#### Scenario: Only an obsolete prompt customization exists
+- **WHEN** an obsolete prompt customization exists but `.pi-zsh-prompt` does not
+- **THEN** zsh setup SHALL not load the obsolete customization
 
 ### Requirement: Include bundled π skills and extensions
 The system SHALL make bundled π assets available in the runtime home directory.
@@ -99,10 +103,9 @@ The Russian, English, and Chinese README files SHALL describe the tools, environ
 - **THEN** their supported commands and configuration concepts SHALL be equivalent
 - **AND** references to removed files, services, build targets, and proxy bootstrap behavior SHALL be absent
 
-### Requirement: Migrate legacy shell identity safely
-The shell setup SHALL use Pi-oriented names for project-owned prompt configuration while preserving an explicit migration path for an existing legacy prompt file if that path is renamed.
+### Requirement: Use the Pi prompt path exclusively
+The shell setup SHALL use `/home/dev/.pi-zsh-prompt` as the only project-owned prompt configuration path.
 
-#### Scenario: Legacy prompt customization exists
-- **WHEN** the dev home contains only the legacy project prompt file during the compatibility period
-- **THEN** the shell setup SHALL continue loading that customization or migrate it to the Pi-oriented path
-- **AND** SHALL prefer the Pi-oriented path when both files exist
+#### Scenario: Pi prompt customization exists
+- **WHEN** the dev home contains `/home/dev/.pi-zsh-prompt`
+- **THEN** zsh SHALL load that prompt fragment
