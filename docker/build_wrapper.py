@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Prepare Docker host reachability (rootless/rootful), probe via ephemeral host
-HTTP server, then build claude image.
+HTTP server, then build the Pi image.
 
 Usage:
   python3 docker/build_wrapper.py diagnose
@@ -128,7 +128,9 @@ def load_dotenv(path: Path) -> dict[str, str]:
         if "=" not in line:
             continue
         key, _, value = line.partition("=")
-        env[key.strip()] = value.strip()
+        # Compose expands ${VAR} values from .env, so mirror that behavior
+        # before forwarding parsed values through subprocess.env.
+        env[key.strip()] = os.path.expandvars(value.strip())
     return env
 
 
@@ -403,8 +405,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     update_env_file(env_path, updates, remove_keys=["SOCKS_HOST"])
 
     env_extra = {**updates, **{k: v for k, v in merged.items() if k not in updates}}
-    compose_build(env_extra, ["claude"])
-    print("\nBuild finished.")
+    compose_build(env_extra, ["pi"])
+    print("\nPi build finished.")
     return 0
 
 

@@ -5,7 +5,7 @@ set -euo pipefail
 HOME="${HOME:-/home/dev}"
 ZSH="${HOME}/.oh-my-zsh"
 ZSHRC="${HOME}/.zshrc"
-PROMPT_FILE="${HOME}/.claude-cli-zsh-prompt"
+PROMPT_FILE="${HOME}/.pi-zsh-prompt"
 OH_MY_ZSH_VERSION="${OH_MY_ZSH_VERSION:?OH_MY_ZSH_VERSION required}"
 OH_MY_ZSH_REPO="${OH_MY_ZSH_REPO:-https://github.com/ohmyzsh/ohmyzsh.git}"
 
@@ -42,8 +42,12 @@ ZSH_THEME=""
 plugins=(git)
 source "$ZSH/oh-my-zsh.sh"
 
-# claude-cli zsh prompt
-[[ -f "${HOME}/.claude-cli-zsh-prompt" ]] && source "${HOME}/.claude-cli-zsh-prompt"
+# Pi zsh prompt; retain compatibility with the legacy Claude filename.
+if [[ -f "${HOME}/.pi-zsh-prompt" ]]; then
+  source "${HOME}/.pi-zsh-prompt"
+elif [[ -f "${HOME}/.claude-cli-zsh-prompt" ]]; then
+  source "${HOME}/.claude-cli-zsh-prompt"
+fi
 ZSHRC_EOF
 
 # Copy prompt/alias fragment

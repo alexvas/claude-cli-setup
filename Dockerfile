@@ -1,10 +1,6 @@
 # syntax=docker/dockerfile:1
-# Multi-stage: builder installs Claude + tools; runtime has no build proxy tooling.
+# Multi-stage: builder installs Pi + tools; runtime has no build proxy tooling.
 
-ARG SOCKS_PORT=1080
-ARG HOST_GATEWAY_IP=
-ARG SOCKS_HOST=
-ARG EXTERNAL_IP=
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 
@@ -13,10 +9,6 @@ ARG DEV_GID=1000
 # -----------------------------------------------------------------------------
 FROM node:24-bookworm-slim AS builder
 
-ARG SOCKS_PORT
-ARG HOST_GATEWAY_IP
-ARG SOCKS_HOST
-ARG EXTERNAL_IP
 ARG DEV_UID
 ARG DEV_GID
 ARG PI_VERSION

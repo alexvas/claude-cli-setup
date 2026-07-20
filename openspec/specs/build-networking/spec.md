@@ -52,7 +52,7 @@ The system SHALL write the chosen host gateway IP to `.env` before building.
 - **WHEN** `python3 docker/build_wrapper.py build` succeeds in probing host reachability
 - **THEN** it updates `.env` with `HOST_GATEWAY_IP=<detected-ip>`
 - **AND** removes `SOCKS_HOST` from `.env` if present
-- **AND** runs `docker compose build claude`
+- **AND** runs `docker compose build pi`
 
 ### Requirement: Expose host mapping in compose
 The system SHALL inject a host mapping for the runtime service.
@@ -60,7 +60,7 @@ The system SHALL inject a host mapping for the runtime service.
 #### Scenario: Starting compose service `pi`
 - **WHEN** `docker-compose.yml` is evaluated
 - **THEN** service `pi` sets `extra_hosts` entry `host.docker.internal:${HOST_GATEWAY_IP:-host-gateway}`
-- **AND** build args pass through `SOCKS_PORT`, `HOST_GATEWAY_IP`, `SOCKS_HOST`, and `EXTERNAL_IP`
+- **AND** the build configuration does not pass unused host-proxy arguments to the Dockerfile
 
 ### Requirement: Generate model proxy configuration from inf-splitter TOML
 The system SHALL generate a π models.json file from an inf-splitter configuration.
