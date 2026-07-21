@@ -33,7 +33,8 @@ RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked 
        openssh-client gh rpm build-essential pkg-config gosu socat bash zsh \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat \
     && sed -i 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen \
-    && locale-gen ru_RU.UTF-8
+    && locale-gen ru_RU.UTF-8 \
+    && apt-get autoclean
 
 COPY docker/setup-dev-user.sh /tmp/setup-dev-user.sh
 RUN chmod +x /tmp/setup-dev-user.sh \
@@ -50,7 +51,8 @@ FROM base AS toolchain
 RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-trixie,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
-    && apt-get install -y --no-install-recommends privoxy xz-utils netcat-openbsd iproute2
+    && apt-get install -y --no-install-recommends privoxy xz-utils netcat-openbsd iproute2 \
+    && apt-get autoclean
 
 USER dev
 WORKDIR /home/dev
