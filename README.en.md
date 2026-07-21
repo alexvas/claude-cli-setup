@@ -34,7 +34,8 @@ Set in `.env`:
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — optional additional projects;
 - `COMPOSE_FILE` — the base Compose file plus required fragments;
 - `HOST_GATEWAY_IP` — host address for rootless Docker, usually set by the wrapper;
-- `DEV_UID`, `DEV_GID` — the container `dev` user's UID/GID.
+- `DEV_UID`, `DEV_GID` — the container `dev` user's UID/GID;
+- `PYTHON_VERSION` — uv-managed CPython version (defaults exactly to `3.14.6`; overrides must be `3.14.6` or newer).
 
 `SOCKS_PORT`, `SOCKS_HOST`, and `EXTERNAL_IP` are no longer used for image builds and are not part of the supported interface. Runtime access to host services uses `host.docker.internal`.
 
@@ -62,11 +63,37 @@ python3 docker/build_wrapper.py build -y
 
 The wrapper stores the detected `HOST_GATEWAY_IP` in `.env`, preserves the runtime host mapping, and builds service `pi`.
 
+The image exposes direct `python` and `python3` executables for the configured uv-managed CPython from any working directory. They do not run `uv run` or synchronize a project environment. There is no standalone `pip` or `pip3` command; install packages explicitly, for example `uv pip install --python "$(command -v python3)" <package>`.
+
+Override the Python version deliberately when building:
+
+```bash
+PYTHON_VERSION=3.14.6 docker compose build pi
+```
+
 For a full rebuild:
 
 ```bash
 docker compose build --no-cache pi
 ```
+
+### BuildKit cache verification
+
+Use plain progress output so cached and executed steps are distinguishable:
+
+```bash
+docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
+docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
+PI_VERSION=0.80.10 OPENSPEC_VERSION=1.5.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-openspec.log
+PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-version.log
+```
+
+The second build should be cached. The OpenSpec-only build should execute only the
+OpenSpec installation and final assembly, while the Pi-only build should retain
+the OpenSpec installation. Record elapsed time and `docker image ls` size from
+these runs when comparing builders. BuildKit caches are disposable; reclaim them
+normally with `docker builder prune` (use `-af` only when a full cache reset is
+intended).
 
 ## Run
 
@@ -74,6 +101,7 @@ docker compose build --no-cache pi
 docker compose run --rm pi
 docker compose run --rm pi pi --version
 docker compose run --rm pi bash -lc 'openspec --help'
+./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```
 

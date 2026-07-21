@@ -10,6 +10,7 @@ services:
       context: .
       target: runtime
       args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.14.6}
         PI_VERSION: ${PI_VERSION:-0.80.10}
         OPENSPEC_VERSION: ${OPENSPEC_VERSION:-1.6.0}
         OH_MY_ZSH_VERSION: ${OH_MY_ZSH_VERSION:-70ad5e3df8f7bed68aa6672029496926e632aedd}

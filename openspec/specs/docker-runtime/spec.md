@@ -10,24 +10,60 @@ The system SHALL provide a multi-stage Docker image for running π inside an iso
 
 #### Scenario: Builder stage installs developer tooling
 - **WHEN** the image is built
-- **THEN** the builder stage uses `node:24-bookworm-slim`
+- **THEN** the builder stage uses `node:24-trixie-slim`
 - **AND** installs developer tooling including git, vim, curl, jq, ripgrep, build-essential, Rust, uv, ty, pi, rtk, and fd
 - **AND** bootstraps the MCP Yarn workspace under `/home/dev/mcp`
 
 #### Scenario: Runtime stage includes interactive shell environment
 - **WHEN** the runtime stage is built
-- **THEN** it uses `node:24-bookworm-slim`
+- **THEN** it uses `node:24-trixie-slim`
 - **AND** installs runtime tools including git, vim, less, bat, jq, ripgrep, openssh-client, gh, rpm, gosu, socat, bash, and zsh
 - **AND** configures locale `ru_RU.UTF-8`
 - **AND** exposes `pi` on the runtime `PATH`
 
 ### Requirement: Provide Python through uv
-The system SHALL expose Python tooling through `uv` instead of an apt-installed `python3` package.
+The system SHALL install an explicit uv-managed CPython runtime whose configured version is 3.14.6 or newer, with exactly 3.14.6 as the default build input. The runtime SHALL expose direct `python` and `python3` executables and SHALL NOT implement either command through `uv run`, a project-aware wrapper, or a shell alias. The system SHALL NOT advertise or create a standalone `pip` command or alias; package operations SHALL be documented through explicit `uv pip` subcommands.
 
 #### Scenario: Running python3 in the container
-- **WHEN** a user invokes `python3`
-- **THEN** the command executes `uv run python`
-- **AND** shell aliases provide `python3='uv run python'` and `pip='uv pip --system'`
+- **WHEN** a user invokes `python3` from any working directory
+- **THEN** the configured uv-managed CPython interpreter executes directly
+- **AND** invocation SHALL NOT discover or synchronize a project environment through `uv run`
+- **AND** the interpreter version SHALL be 3.14.6 or newer
+
+#### Scenario: Building with the default Python version
+- **WHEN** the image is built without a Python version override
+- **THEN** the image SHALL install exactly CPython 3.14.6
+- **AND** build-time verification SHALL confirm the installed version and executable path
+
+#### Scenario: Building with a supported Python override
+- **WHEN** the image is built with an available Python version override equal to or newer than 3.14.6
+- **THEN** the image SHALL install and expose the requested version
+- **AND** Python-backed uv tool installation SHALL use that configured Python selection explicitly
+
+#### Scenario: Building with an unsupported older Python override
+- **WHEN** the image is built with a Python version override older than 3.14.6
+- **THEN** the build SHALL fail with a clear version-requirement error
+
+#### Scenario: Installing Python packages
+- **WHEN** documentation instructs a user to perform a Python package operation
+- **THEN** it SHALL use an explicit `uv pip` subcommand and target context
+- **AND** it SHALL NOT rely on a `pip` or `pip3` alias supplied by the image
+
+### Requirement: Reuse shared operating-system setup across image stages
+The multi-stage Docker image SHALL derive builder and runtime assembly from a shared base stage for their common operating-system packages and user setup, while builder-only packages SHALL remain outside the final runtime lineage when they are not runtime requirements.
+
+#### Scenario: Building builder and runtime descendants
+- **WHEN** Docker builds the tool builder and runtime image
+- **THEN** common Debian package and dev-user setup SHALL originate from the same cached base layers
+- **AND** common package installation SHALL NOT execute independently in both descendants
+
+### Requirement: Preserve the runtime interface after tool isolation
+The runtime image SHALL expose Pi, OpenSpec, Rust/Cargo tools, uv, ty, rtk, and fd on the existing runtime `PATH` after their build stages or installation prefixes are isolated.
+
+#### Scenario: Running isolated tools in the final image
+- **WHEN** the final runtime container is started as user `dev`
+- **THEN** `pi`, `openspec`, `cargo`, `uv`, `ty`, `rtk`, and `fd` SHALL resolve from `PATH`
+- **AND** each command SHALL execute without requiring its build-stage cache mounts
 
 ### Requirement: Run as a configurable dev user
 The system SHALL create and use a `dev` user whose UID and GID can be aligned with the host.

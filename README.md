@@ -34,7 +34,8 @@ cp .env.example .env
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — дополнительные проекты;
 - `COMPOSE_FILE` — базовый compose и необходимые fragments;
 - `HOST_GATEWAY_IP` — адрес хоста для rootless Docker, обычно задаётся wrapper;
-- `DEV_UID`, `DEV_GID` — UID/GID пользователя `dev`.
+- `DEV_UID`, `DEV_GID` — UID/GID пользователя `dev`;
+- `PYTHON_VERSION` — версия CPython под управлением uv (по умолчанию точно `3.14.6`; override допускается только для `3.14.6` или новее).
 
 Параметры `SOCKS_PORT`, `SOCKS_HOST` и `EXTERNAL_IP` больше не используются для сборки и удалены из поддерживаемого интерфейса. Доступ к host services во время работы контейнера обеспечивается через `host.docker.internal`.
 
@@ -62,11 +63,42 @@ python3 docker/build_wrapper.py build -y
 
 Wrapper записывает обнаруженный `HOST_GATEWAY_IP` в `.env`, сохраняет runtime mapping и собирает именно сервис `pi`.
 
+Образ предоставляет прямые исполняемые файлы `python` и `python3` для настроенного CPython под управлением uv из любого каталога. Они не запускают `uv run` и не синхронизируют окружение проекта. Отдельных команд `pip` и `pip3` нет; устанавливайте пакеты явно, например `uv pip install --python "$(command -v python3)" <package>`.
+
+Версию Python можно явно переопределить при сборке:
+
+```bash
+PYTHON_VERSION=3.14.6 docker compose build pi
+```
+
 Для полного rebuild:
 
 ```bash
 docker compose build --no-cache pi
 ```
+
+### Проверка кеширования BuildKit
+
+Используйте обычный вывод прогресса, чтобы отличать кешированные шаги от выполненных:
+
+```bash
+docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
+docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
+PI_VERSION=0.80.10 OPENSPEC_VERSION=1.5.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-openspec.log
+PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-version.log
+```
+
+Вторая сборка должна использовать кеш. Сборка только с изменённым OpenSpec
+должна выполнять установку OpenSpec и финальную сборку, сохраняя кеш Pi.
+Сборка только с изменённым Pi должна сохранять установку OpenSpec.
+Проверка runtime-инструментов от имени `dev`:
+
+```bash
+./docker/verify-runtime.sh pi-cli-pi:latest
+```
+
+Кеш BuildKit можно освобождать командой `docker builder prune`; используйте
+`-af` только для полного сброса кеша.
 
 ## Запуск
 
@@ -75,6 +107,7 @@ docker compose run --rm pi
 
 docker compose run --rm pi pi --version
 docker compose run --rm pi bash -lc 'openspec --help'
+./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```
 

@@ -34,7 +34,8 @@ cp .env.example .env
 - `PROJECT_PATH_2`、`PROJECT_PATH_3` — 可选的其他项目；
 - `COMPOSE_FILE` — 基础 Compose 文件和所需 fragments；
 - `HOST_GATEWAY_IP` — rootless Docker 的主机地址，通常由 wrapper 设置；
-- `DEV_UID`、`DEV_GID` — 容器 `dev` 用户的 UID/GID。
+- `DEV_UID`、`DEV_GID` — 容器 `dev` 用户的 UID/GID；
+- `PYTHON_VERSION` — uv 管理的 CPython 版本（默认严格为 `3.14.6`；覆盖值必须为 `3.14.6` 或更高版本）。
 
 `SOCKS_PORT`、`SOCKS_HOST` 和 `EXTERNAL_IP` 不再用于镜像构建，也不属于受支持的接口。容器运行时通过 `host.docker.internal` 访问主机服务。
 
@@ -62,11 +63,43 @@ python3 docker/build_wrapper.py build -y
 
 wrapper 会将检测到的 `HOST_GATEWAY_IP` 写入 `.env`，保留运行时主机映射，并构建 `pi` 服务。
 
+镜像从任意工作目录提供配置的 uv-managed CPython 的直接 `python` 和 `python3` 可执行文件。它们不会运行 `uv run`，也不会同步项目环境。镜像不提供独立的 `pip` 或 `pip3` 命令；请显式使用，例如 `uv pip install --python "$(command -v python3)" <package>`。
+
+构建时可以明确覆盖 Python 版本：
+
+```bash
+PYTHON_VERSION=3.14.6 docker compose build pi
+```
+
 完全重建：
 
 ```bash
 docker compose build --no-cache pi
 ```
+
+### BuildKit 缓存验证
+
+使用普通进度输出，以区分已缓存和实际执行的步骤：
+
+```bash
+docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
+docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
+PI_VERSION=0.80.10 OPENSPEC_VERSION=1.5.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-openspec.log
+PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-version.log
+```
+
+第二次构建应使用缓存。仅修改 OpenSpec 的构建应只执行 OpenSpec
+安装和必要的最终组装，并保留 Pi 相关步骤的缓存；仅修改 Pi 的构建
+应保留 OpenSpec 安装缓存。
+
+验证 `dev` 用户下的运行时工具：
+
+```bash
+./docker/verify-runtime.sh pi-cli-pi:latest
+```
+
+BuildKit 缓存可以使用 `docker builder prune` 清理；只有需要完全重置
+缓存时才使用 `-af`。
 
 ## 运行
 
@@ -74,6 +107,7 @@ docker compose build --no-cache pi
 docker compose run --rm pi
 docker compose run --rm pi pi --version
 docker compose run --rm pi bash -lc 'openspec --help'
+./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```
 
