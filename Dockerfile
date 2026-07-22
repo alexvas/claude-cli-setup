@@ -62,7 +62,7 @@ RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/
     --mount=type=cache,id=cargo-git-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/git,uid=${DEV_UID},gid=${DEV_GID} \
     --mount=type=cache,id=rustup-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \
     env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
-    bash -euo pipefail -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable'
+    bash -euo pipefail -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable && rustup component add rustfmt clippy'
 
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
     curl -fsSL https://astral.sh/uv/install.sh | sh

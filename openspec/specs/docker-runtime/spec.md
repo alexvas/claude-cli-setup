@@ -58,12 +58,20 @@ The multi-stage Docker image SHALL derive builder and runtime assembly from a sh
 - **AND** common package installation SHALL NOT execute independently in both descendants
 
 ### Requirement: Preserve the runtime interface after tool isolation
-The runtime image SHALL expose Pi, OpenSpec, Rust/Cargo tools, uv, ty, rtk, and fd on the existing runtime `PATH` after their build stages or installation prefixes are isolated.
+The runtime image SHALL expose Pi, OpenSpec, Rust/Cargo tools, uv, ty, rtk, and fd on the existing runtime `PATH` after their build stages or installation prefixes are isolated. The Rust toolchain SHALL use rustup's minimal profile and SHALL explicitly include the stable-toolchain `rustfmt` and `clippy` components.
 
 #### Scenario: Running isolated tools in the final image
 - **WHEN** the final runtime container is started as user `dev`
-- **THEN** `pi`, `openspec`, `cargo`, `uv`, `ty`, `rtk`, and `fd` SHALL resolve from `PATH`
-- **AND** each command SHALL execute without requiring its build-stage cache mounts
+- **THEN** `pi`, `openspec`, `cargo`, `rustc`, `rustfmt`, `uv`, `ty`, `rtk`, and `fd` SHALL resolve from `PATH`
+- **AND** each required command SHALL execute without requiring build-stage cache mounts
+- **AND** `cargo clippy --version` SHALL succeed
+
+#### Scenario: Verifying the minimal Rust profile
+- **WHEN** the runtime verification script checks the Rust installation
+- **THEN** the active stable toolchain SHALL be available through rustup
+- **AND** `rustfmt` SHALL be installed as an explicit component
+- **AND** `clippy` SHALL be installed as an explicit component
+- **AND** the verification SHALL fail with an actionable error if either component is unavailable
 
 ### Requirement: Run as a configurable dev user
 The system SHALL create and use a `dev` user whose UID and GID can be aligned with the host.

@@ -7,7 +7,7 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
   set -eu
   test "$(id -un)" = dev
 
-  for command in pi openspec cargo uv ty rtk fd; do
+  for command in pi openspec cargo rustc rustfmt uv ty rtk fd; do
     command -v "$command" >/dev/null || { echo "MISSING: $command" >&2; exit 1; }
     "$command" --version >/dev/null || { echo "FAILED: $command --version" >&2; exit 1; }
   done
@@ -36,6 +36,17 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
       exit 1
     fi
   done
+
+  echo "=== rust component checks ==="
+  cargo clippy --version >/dev/null || { echo "FAILED: cargo clippy --version" >&2; exit 1; }
+  # Assert clippy and rustfmt are installed components
+  for component in clippy rustfmt; do
+    rustup component list 2>/dev/null | grep -q "$component.*(installed)" || {
+      echo "MISSING Rust component: $component" >&2
+      exit 1
+    }
+  done
+  echo "rust components ok"
 
   echo "=== ownership checks ==="
   required_paths="/home/dev/.pi /home/dev/.local /home/dev/.rustup /home/dev/.cargo/bin /home/dev/mcp /home/dev/work /home/dev/.npm-global"
