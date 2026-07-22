@@ -134,5 +134,5 @@ Do not use `--volumes` unless you have verified that no required data is stored 
 
 - **No host gateway** — run `python3 docker/build_wrapper.py diagnose`; for rootless Docker, run `apply -y` if needed.
 - **Missing additional project** — set `PROJECT_PATH_2`/`PROJECT_PATH_3` and add the corresponding fragment to `COMPOSE_FILE`.
-- **EACCES** — check `DEV_UID`/`DEV_GID`, or set `CHOWN_WORK_ON_START=0` and fix permissions manually.
+- **EACCES** — `CHOWN_WORK_ON_START` repairs mounted `PROJECT_PATH_*` paths and `/home/dev/.pi` when they are mount points (`mountpoint -q`). Check `DEV_UID`/`DEV_GID`, or set `CHOWN_WORK_ON_START=0` and fix permissions manually. Verify image ownership: `./docker/verify-runtime.sh pi-cli-pi:latest`.
 - **Stale names** — update the wrapper and documentation; the service and commands are named `pi`.

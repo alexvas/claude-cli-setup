@@ -30,7 +30,7 @@ RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked 
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        git vim less bat curl wget ca-certificates jq ripgrep locales \
-       openssh-client gh rpm build-essential pkg-config gosu socat bash zsh \
+       openssh-client gh rpm build-essential pkg-config gosu socat bash zsh util-linux \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat \
     && sed -i 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen ru_RU.UTF-8 \
@@ -121,9 +121,17 @@ COPY --from=toolchain /home/dev/.rustup /home/dev/.rustup
 COPY --from=toolchain /home/dev/.cargo/bin /home/dev/.cargo/bin
 COPY --from=toolchain /home/dev/mcp /home/dev/mcp
 
-RUN ln -sf /opt/pi/bin/pi /usr/local/bin/pi \
-    && mkdir -p /home/dev/work /home/dev/.npm-global/bin \
-    && chown -R dev:dev /home/dev
+RUN chown dev:dev \
+      /home/dev/.pi \
+      /home/dev/.local \
+      /home/dev/.rustup \
+      /home/dev/.cargo \
+      /home/dev/.cargo/bin \
+      /home/dev/mcp \
+    && ln -sf /opt/pi/bin/pi /usr/local/bin/pi \
+    && install -d -o dev -g dev /home/dev/work \
+    && install -d -o dev -g dev /home/dev/.npm-global \
+    && install -d -o dev -g dev /home/dev/.npm-global/bin
 
 COPY docker/zsh/zshrc.fragment /tmp/zshrc.fragment
 COPY docker/setup-zsh.sh /tmp/setup-zsh.sh

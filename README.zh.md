@@ -140,5 +140,5 @@ docker builder prune
 
 - **没有主机网关** — 运行 `python3 docker/build_wrapper.py diagnose`；rootless Docker 必要时运行 `apply -y`。
 - **缺少其他项目** — 设置 `PROJECT_PATH_2`/`PROJECT_PATH_3`，并将对应 fragment 加入 `COMPOSE_FILE`。
-- **EACCES** — 检查 `DEV_UID`/`DEV_GID`，或设置 `CHOWN_WORK_ON_START=0` 后手动修复权限。
+- **EACCES** — `CHOWN_WORK_ON_START` 修复作为挂载点（`mountpoint -q`）的 `PROJECT_PATH_*` 路径和 `/home/dev/.pi`。检查 `DEV_UID`/`DEV_GID`，或设置 `CHOWN_WORK_ON_START=0` 后手动修复权限。验证镜像内权限：`./docker/verify-runtime.sh pi-cli-pi:latest`。
 - **仍显示旧名称** — 更新 wrapper 和文档；服务及命令名称统一为 `pi`。

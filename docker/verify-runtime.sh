@@ -3,7 +3,7 @@
 set -eu
 IMAGE="${1:-pi-cli-pi:latest}"
 
-docker run --rm "$IMAGE" bash -c '
+docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
   set -eu
   test "$(id -un)" = dev
 
@@ -36,6 +36,38 @@ docker run --rm "$IMAGE" bash -c '
       exit 1
     fi
   done
+
+  echo "=== ownership checks ==="
+  required_paths="/home/dev/.pi /home/dev/.local /home/dev/.rustup /home/dev/.cargo/bin /home/dev/mcp /home/dev/work /home/dev/.npm-global"
+  for path in $required_paths; do
+    test -e "$path" || { echo "MISSING image-provided path: $path" >&2; exit 1; }
+  done
+  # Capture stdout and stderr separately; fail on traversal errors.
+  find_err=$(mktemp)
+  set +e
+  mismatch=$(find $required_paths \( ! -user dev -o ! -group dev \) -print -quit 2>"$find_err")
+  find_rc=$?
+  set -e
+  if [ "$find_rc" -ne 0 ]; then
+    echo "OWNERSHIP TRAVERSAL FAILED (exit $find_rc):" >&2
+    cat "$find_err" >&2
+    rm -f "$find_err"
+    exit 1
+  fi
+  rm -f "$find_err"
+  if [ -n "$mismatch" ]; then
+    actual=$(stat -c "%U:%G (uid=%u gid=%g mode=%a)" -- "$mismatch")
+    echo "OWNERSHIP MISMATCH: $mismatch" >&2
+    echo "  expected: dev:dev" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+  echo "ownership ok"
+
+  echo "=== mount checks ==="
+  command -v mountpoint >/dev/null 2>&1 || { echo "MISSING mountpoint command" >&2; exit 1; }
+  mountpoint -q -- / || { echo "FAILED: mountpoint detection not working" >&2; exit 1; }
+  echo "mount detection ok"
 
   project=$(mktemp -d)
   trap "rm -rf \"$project\"" EXIT

@@ -140,5 +140,5 @@ docker builder prune
 
 - **Нет host gateway** — запустите `python3 docker/build_wrapper.py diagnose`, для rootless при необходимости `apply -y`.
 - **Нет дополнительного проекта** — задайте `PROJECT_PATH_2`/`PROJECT_PATH_3` и добавьте соответствующий fragment в `COMPOSE_FILE`.
-- **EACCES** — проверьте `DEV_UID`/`DEV_GID` или отключите `CHOWN_WORK_ON_START=0` и исправьте права вручную.
+- **EACCES** — `CHOWN_WORK_ON_START` исправляет права на смонтированных путях `PROJECT_PATH_*` и `/home/dev/.pi` (`mountpoint -q`). Проверьте `DEV_UID`/`DEV_GID` или установите `CHOWN_WORK_ON_START=0` и исправьте права вручную. Проверка прав образа: `./docker/verify-runtime.sh pi-cli-pi:latest`.
 - **Неожиданные старые имена** — обновите wrapper и README; сервис и команды имеют имя `pi`.
