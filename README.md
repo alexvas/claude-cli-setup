@@ -97,6 +97,21 @@ PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain p
 ./docker/verify-runtime.sh pi-cli-pi:latest
 ```
 
+### Установка расширений Pi и регистрация rtk
+
+Расширения Pi и интеграция rtk устанавливаются не в образ, а в смонтированную
+хостовую директорию `/home/dev/.pi` через защищённый скрипт. После первого
+запуска контейнера выполните:
+
+```bash
+docker compose run --rm pi /home/dev/install-pi-extensions.sh
+```
+
+Скрипт устанавливает закреплённые версии `@arcanemachine/pi-read`,
+`@llblab/pi-codex-usage`, `pi-proxy` и регистрирует
+`rtk` для Pi. Повторный запуск безопасен — установка идемпотентна.
+Без смонтированной `/home/dev/.pi` скрипт завершится с ошибкой.
+
 Кеш BuildKit можно освобождать командой `docker builder prune`; используйте
 `-af` только для полного сброса кеша.
 

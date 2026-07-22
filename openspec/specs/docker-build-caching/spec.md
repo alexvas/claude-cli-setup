@@ -43,7 +43,7 @@ The build SHALL provide independent `rtk` and `fd` artifact stages and SHALL cop
 - **AND** the runtime stage SHALL perform no network download for either tool
 
 ### Requirement: Isolate independently versioned Node tools
-The Docker build SHALL install Pi and OpenSpec into independent build stages or prefixes that can be copied into the runtime image separately.
+The Docker build SHALL install Pi and OpenSpec into independent build stages or prefixes that can be copied into the runtime image separately. Pi extension installation SHALL NOT run during Docker image assembly; extension setup SHALL be performed by the protected runtime setup script after the mounted Pi home is available.
 
 #### Scenario: Changing the Pi version
 - **WHEN** only `PI_VERSION` changes
@@ -54,6 +54,11 @@ The Docker build SHALL install Pi and OpenSpec into independent build stages or 
 - **WHEN** only `OPENSPEC_VERSION` changes
 - **THEN** the Pi installation stage and Pi-dependent plugin setup SHALL remain cacheable
 - **AND** the final image SHALL expose the previously requested Pi and the newly requested OpenSpec
+
+#### Scenario: Changing an extension version
+- **WHEN** only a pinned Pi extension version changes
+- **THEN** unrelated Docker image stages SHALL remain cacheable
+- **AND** the new extension version SHALL be installed by the runtime setup script when invoked
 
 ### Requirement: Retain dependency downloads outside image layers
 The Docker build SHALL use BuildKit cache mounts for package-manager data whose reuse accelerates an otherwise uncached installation, and correctness SHALL NOT depend on cache contents.

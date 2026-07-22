@@ -57,8 +57,21 @@ docker run --rm -e CHOWN_WORK_ON_START=0 -e RTK_EXPECTED_VERSION="${RTK_EXPECTED
   echo "$fd_version" | grep -qF "$expected_fd" || { echo "VERSION MISMATCH: fd expected $expected_fd, got: $fd_version" >&2; exit 1; }
   echo "prebuilt versions ok"
 
+  echo "=== pi extension setup script checks ==="
+  script="/home/dev/install-pi-extensions.sh"
+  test -f "$script" || { echo "MISSING: $script" >&2; exit 1; }
+  script_owner=$(stat -c '%U:%G' "$script")
+  test "$script_owner" = "root:root" || { echo "OWNERSHIP MISMATCH: $script expected root:root, got $script_owner" >&2; exit 1; }
+  script_mode=$(stat -c '%a' "$script")
+  test "$script_mode" = "755" || { echo "MODE MISMATCH: $script expected 755, got $script_mode" >&2; exit 1; }
+  # The smoke container already runs as dev via the entrypoint.
+  if ! test -r "$script"; then echo "ERROR: dev cannot read $script" >&2; exit 1; fi
+  if ! test -x "$script"; then echo "ERROR: dev cannot execute $script" >&2; exit 1; fi
+  if test -w "$script"; then echo "ERROR: dev can write $script (should be root:root 755)" >&2; exit 1; fi
+  echo "pi extension setup script ok"
+
   echo "=== ownership checks ==="
-  required_paths="/home/dev/.pi /home/dev/.local /home/dev/.rustup /home/dev/.cargo/bin /home/dev/mcp /home/dev/work /home/dev/.npm-global"
+  required_paths="/home/dev/.local /home/dev/.rustup /home/dev/.cargo/bin /home/dev/mcp /home/dev/work /home/dev/.npm-global"
   for path in $required_paths; do
     test -e "$path" || { echo "MISSING image-provided path: $path" >&2; exit 1; }
   done

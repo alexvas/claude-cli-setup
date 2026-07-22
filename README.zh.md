@@ -98,6 +98,19 @@ PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain p
 ./docker/verify-runtime.sh pi-cli-pi:latest
 ```
 
+### 安装 Pi 扩展和注册 rtk
+
+Pi 扩展和 rtk 集成通过受保护的脚本安装到挂载的主机
+`/home/dev/.pi` 目录中，而非写入镜像。首次启动容器后，运行：
+
+```bash
+docker compose run --rm pi /home/dev/install-pi-extensions.sh
+```
+
+脚本安装固定版本的 `@arcanemachine/pi-read`、`@llblab/pi-codex-usage`、
+`pi-proxy`，并为 Pi 注册 `rtk`。重复运行安全——
+安装是幂等的。未挂载 `/home/dev/.pi` 时脚本会报错退出。
+
 BuildKit 缓存可以使用 `docker builder prune` 清理；只有需要完全重置
 缓存时才使用 `-af`。
 

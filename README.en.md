@@ -105,6 +105,21 @@ docker compose run --rm pi bash -lc 'openspec --help'
 python3 launch-pi.py
 ```
 
+### Installing Pi extensions and registering rtk
+
+Pi extensions and rtk integration are installed into the mounted host
+`/home/dev/.pi` directory via a protected script — not baked into the image.
+After starting the container for the first time, run:
+
+```bash
+docker compose run --rm pi /home/dev/install-pi-extensions.sh
+```
+
+The script installs pinned versions of `@arcanemachine/pi-read`,
+`@llblab/pi-codex-usage`, `pi-proxy`, and registers
+`rtk` for Pi. Re-running is safe — the setup is idempotent.
+Without a mounted `/home/dev/.pi` the script exits with an error.
+
 `launch-pi.py` selects up to three projects and runs `docker compose run ... pi`. Additional projects are mounted through the fragments in `docker/`.
 
 ## Shell prompt

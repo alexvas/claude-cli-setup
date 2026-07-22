@@ -118,7 +118,6 @@ RUN mkdir -p /opt/pi && chown -R dev:dev /opt/pi
 USER dev
 RUN --mount=type=cache,id=npm-pi-${DEV_UID}-${DEV_GID},target=/home/dev/.npm,uid=${DEV_UID},gid=${DEV_GID} \
     npm_config_cache=/home/dev/.npm npm install --global --prefix /opt/pi --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}"
-RUN /opt/pi/bin/pi install git:github.com/arcanemachine/pi-read
 
 FROM base AS openspec-tools
 
@@ -137,14 +136,12 @@ FROM base AS runtime
 ARG OH_MY_ZSH_VERSION=70ad5e3df8f7bed68aa6672029496926e632aedd
 
 COPY --from=pi-tools /opt/pi /opt/pi
-COPY --from=pi-tools /home/dev/.pi /home/dev/.pi
 COPY --from=toolchain /home/dev/.local /home/dev/.local
 COPY --from=toolchain /home/dev/.rustup /home/dev/.rustup
 COPY --from=toolchain /home/dev/.cargo/bin /home/dev/.cargo/bin
 COPY --from=toolchain /home/dev/mcp /home/dev/mcp
 
 RUN chown dev:dev \
-      /home/dev/.pi \
       /home/dev/.local \
       /home/dev/.rustup \
       /home/dev/.cargo \
@@ -157,8 +154,7 @@ RUN chown dev:dev \
 
 COPY --from=rtk-prebuilt /usr/local/bin/rtk /usr/local/bin/rtk
 COPY --from=fd-prebuilt /usr/local/bin/fd /usr/local/bin/fd
-RUN runuser -u dev -- rtk init -g --agent pi \
-    && runuser -u dev -- rtk telemetry disable
+# rtk integration is registered at runtime via /home/dev/install-pi-extensions.sh
 
 COPY docker/zsh/zshrc.fragment /tmp/zshrc.fragment
 COPY docker/setup-zsh.sh /tmp/setup-zsh.sh
@@ -172,6 +168,9 @@ RUN ln -sf /opt/openspec/bin/openspec /usr/local/bin/openspec
 
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+COPY docker/install-pi-extensions.sh /home/dev/install-pi-extensions.sh
+RUN chmod 755 /home/dev/install-pi-extensions.sh
 
 # Keep the image root by default: entrypoint.sh repairs bind-mount ownership and drops to dev.
 WORKDIR /home/dev
