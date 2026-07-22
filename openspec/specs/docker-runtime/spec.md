@@ -58,7 +58,7 @@ The multi-stage Docker image SHALL derive builder and runtime assembly from a sh
 - **AND** common package installation SHALL NOT execute independently in both descendants
 
 ### Requirement: Preserve the runtime interface after tool isolation
-The runtime image SHALL expose Pi, OpenSpec, Rust/Cargo tools, uv, ty, rtk, and fd on the existing runtime `PATH` after their build stages or installation prefixes are isolated. The Rust toolchain SHALL use rustup's minimal profile and SHALL explicitly include the stable-toolchain `rustfmt` and `clippy` components.
+The runtime image SHALL expose Pi, OpenSpec, Rust/Cargo tools, uv, ty, rtk, and fd on the existing runtime `PATH` after their build stages or installation prefixes are isolated. The Rust toolchain SHALL use rustup's minimal profile and SHALL explicitly include the stable-toolchain `rustfmt` and `clippy` components. `rtk` and `fd` SHALL be supplied by verified pinned prebuilt release artifacts, and `rtk` integration setup SHALL remain available.
 
 #### Scenario: Running isolated tools in the final image
 - **WHEN** the final runtime container is started as user `dev`
@@ -72,6 +72,21 @@ The runtime image SHALL expose Pi, OpenSpec, Rust/Cargo tools, uv, ty, rtk, and 
 - **AND** `rustfmt` SHALL be installed as an explicit component
 - **AND** `clippy` SHALL be installed as an explicit component
 - **AND** the verification SHALL fail with an actionable error if either component is unavailable
+
+#### Scenario: Running prebuilt Rust tools
+- **WHEN** the final runtime container is started as user `dev`
+- **THEN** `rtk --version` and `fd --version` SHALL report the pinned release versions
+
+#### Scenario: Configuring rtk integration
+- **WHEN** the prebuilt `rtk` executable is assembled into the image
+- **THEN** the existing `rtk init -g --agent pi` integration SHALL be applied
+- **AND** telemetry SHALL remain disabled
+- **AND** generated integration files SHALL be owned by `dev`
+
+#### Scenario: Runtime network isolation
+- **WHEN** the final runtime stage is assembled
+- **THEN** it SHALL copy the verified `rtk` and `fd` executables from artifact stages
+- **AND** SHALL NOT download or install either release from the network
 
 ### Requirement: Run as a configurable dev user
 The system SHALL create and use a `dev` user whose UID and GID can be aligned with the host.

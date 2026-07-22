@@ -3,7 +3,7 @@
 set -eu
 IMAGE="${1:-pi-cli-pi:latest}"
 
-docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
+docker run --rm -e CHOWN_WORK_ON_START=0 -e RTK_EXPECTED_VERSION="${RTK_EXPECTED_VERSION:-0.43.0}" -e FD_EXPECTED_VERSION="${FD_EXPECTED_VERSION:-10.4.2}" "$IMAGE" bash -c '
   set -eu
   test "$(id -un)" = dev
 
@@ -47,6 +47,15 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
     }
   done
   echo "rust components ok"
+
+  echo "=== prebuilt version checks ==="
+  rtk_version=$(rtk --version 2>&1) || { echo "FAILED: rtk --version" >&2; exit 1; }
+  expected_rtk="${RTK_EXPECTED_VERSION:-0.43.0}"
+  echo "$rtk_version" | grep -qF "$expected_rtk" || { echo "VERSION MISMATCH: rtk expected $expected_rtk, got: $rtk_version" >&2; exit 1; }
+  fd_version=$(fd --version 2>&1) || { echo "FAILED: fd --version" >&2; exit 1; }
+  expected_fd="${FD_EXPECTED_VERSION:-10.4.2}"
+  echo "$fd_version" | grep -qF "$expected_fd" || { echo "VERSION MISMATCH: fd expected $expected_fd, got: $fd_version" >&2; exit 1; }
+  echo "prebuilt versions ok"
 
   echo "=== ownership checks ==="
   required_paths="/home/dev/.pi /home/dev/.local /home/dev/.rustup /home/dev/.cargo/bin /home/dev/mcp /home/dev/work /home/dev/.npm-global"

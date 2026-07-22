@@ -44,6 +44,34 @@ RUN chmod +x /tmp/setup-dev-user.sh \
 # Python is installed explicitly by uv in the toolchain stage.
 
 # -----------------------------------------------------------------------------
+# Independently pinned prebuilt Rust tools
+# -----------------------------------------------------------------------------
+FROM base AS rtk-prebuilt
+
+ARG RTK_VERSION=v0.43.0
+ARG RTK_SHA256=eb571d784b3269521722ebe2f0dc2409e89da6bd70bf097ddb21e9d4b3b240b9
+RUN URL="https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk_amd64.deb" \
+    && curl -fsSL -o /tmp/rtk.deb "$URL" \
+    && ACTUAL=$(sha256sum /tmp/rtk.deb | cut -d' ' -f1) \
+    && if [ "$ACTUAL" != "${RTK_SHA256}" ]; then echo "SHA256 mismatch: expected ${RTK_SHA256}, got $ACTUAL" >&2; exit 1; fi \
+    && dpkg-deb -x /tmp/rtk.deb /tmp/rtk-extract \
+    && install -m 755 /tmp/rtk-extract/usr/bin/rtk /usr/local/bin/rtk \
+    && rm -rf /tmp/rtk.deb /tmp/rtk-extract
+
+FROM base AS fd-prebuilt
+
+ARG FD_VERSION=v10.4.2
+ARG FD_SHA256=0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b
+RUN VERSION_NO_V="${FD_VERSION#v}" \
+    && URL="https://github.com/sharkdp/fd/releases/download/${FD_VERSION}/fd_${VERSION_NO_V}_amd64.deb" \
+    && curl -fsSL -o /tmp/fd.deb "$URL" \
+    && ACTUAL=$(sha256sum /tmp/fd.deb | cut -d' ' -f1) \
+    && if [ "$ACTUAL" != "${FD_SHA256}" ]; then echo "SHA256 mismatch: expected ${FD_SHA256}, got $ACTUAL" >&2; exit 1; fi \
+    && dpkg-deb -x /tmp/fd.deb /tmp/fd-extract \
+    && install -m 755 /tmp/fd-extract/usr/bin/fd /usr/local/bin/fd \
+    && rm -rf /tmp/fd.deb /tmp/fd-extract
+
+# -----------------------------------------------------------------------------
 # Builder-only OS packages and stable toolchain setup
 # -----------------------------------------------------------------------------
 FROM base AS toolchain
@@ -77,13 +105,7 @@ COPY --chown=dev:dev docker/mcp /home/dev/mcp
 COPY --chown=dev:dev docker/setup-mcp-yarn.sh /home/dev/setup-mcp-yarn.sh
 RUN bash /home/dev/setup-mcp-yarn.sh
 
-RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/registry,uid=${DEV_UID},gid=${DEV_GID} \
-    --mount=type=cache,id=cargo-git-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/git,uid=${DEV_UID},gid=${DEV_GID} \
-    --mount=type=cache,id=cargo-target-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/target,uid=${DEV_UID},gid=${DEV_GID} \
-    CARGO_TARGET_DIR=/home/dev/.cargo/target cargo install --git https://github.com/rtk-ai/rtk \
-    && rtk init -g --agent pi \
-    && rtk telemetry disable \
-    && CARGO_TARGET_DIR=/home/dev/.cargo/target cargo install fd-find
+# rtk and fd are now prebuilt in independent stages above.
 
 # -----------------------------------------------------------------------------
 # Independently versioned Node tool prefixes
@@ -132,6 +154,11 @@ RUN chown dev:dev \
     && install -d -o dev -g dev /home/dev/work \
     && install -d -o dev -g dev /home/dev/.npm-global \
     && install -d -o dev -g dev /home/dev/.npm-global/bin
+
+COPY --from=rtk-prebuilt /usr/local/bin/rtk /usr/local/bin/rtk
+COPY --from=fd-prebuilt /usr/local/bin/fd /usr/local/bin/fd
+RUN runuser -u dev -- rtk init -g --agent pi \
+    && runuser -u dev -- rtk telemetry disable
 
 COPY docker/zsh/zshrc.fragment /tmp/zshrc.fragment
 COPY docker/setup-zsh.sh /tmp/setup-zsh.sh
