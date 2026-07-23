@@ -34,13 +34,13 @@ This stage exposes deterministic defaults and controlled overrides without integ
 
 This stage consumes inventory provider metadata but is independent of build integration and can proceed in parallel with Stage 2 after Stage 1A.
 
-- [ ] 3.1 **RED:** Add deterministic adapter-level tests for npm, GitHub Releases, PyPI, uv-managed Python, Rust stable channel, Docker Registry, and immutable git refs, plus coordinator tests that do not depend on provider transport details
-- [ ] 3.2 **RED:** Add tests for stable-only filtering, current/outdated/skipped/unavailable/incomplete states, Docker digest refresh classification, git revision updates, strict mode, and fail-on-outdated exit codes
-- [ ] 3.3 **RED:** Add `--suggest` tests requiring candidate version, URL, and digest output while hashing the working tree before/after to prove non-mutation
-- [ ] 3.4 **GREEN:** Implement provider adapters and best-effort `check-updates` with table/JSON output, filters, optional tokens/cache TTL, strict mode, and fail-on-outdated behavior
-- [ ] 3.5 **GREEN:** Implement architecture/checksum applicability checks and non-mutating `check-updates --suggest`
-- [ ] 3.6 **INTROSPECT:** Inspect representative provider reports and suggestions, including incomplete releases that must not be presented as directly applicable
-- [ ] 3.7 **VALIDATE:** Run decomposed provider-adapter and update-coordinator tests offline with injected fake transports and confirm ordinary inventory commands make zero provider requests
+- [x] 3.1 **RED:** Add deterministic adapter-level tests for npm, GitHub Releases, PyPI, uv-managed Python, Rust stable channel, Docker Registry, and immutable git refs, plus coordinator tests that do not depend on provider transport details
+- [x] 3.2 **RED:** Add tests for stable-only filtering, current/outdated/skipped/unavailable/incomplete states, Docker digest refresh classification, git revision updates, strict mode, and fail-on-outdated exit codes
+- [x] 3.3 **RED:** Add `--suggest` tests requiring candidate version, URL, and digest output while hashing the working tree before/after to prove non-mutation
+- [x] 3.4 **GREEN:** Implement provider adapters and best-effort `check-updates` with table/JSON output, filters, optional tokens/cache TTL, strict mode, and fail-on-outdated behavior
+- [x] 3.5 **GREEN:** Implement architecture/checksum applicability checks and non-mutating `check-updates --suggest`
+- [x] 3.6 **INTROSPECT:** Inspect representative provider reports and suggestions, including incomplete releases that must not be presented as directly applicable
+- [x] 3.7 **VALIDATE:** Run decomposed provider-adapter and update-coordinator tests offline with injected fake transports and confirm ordinary inventory commands make zero provider requests
 
 ## 4. Build argument rendering and orchestration — depends on Stage 2, no Docker daemon
 

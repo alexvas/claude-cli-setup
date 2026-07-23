@@ -36,3 +36,15 @@ class UnsupportedOverrideError(EffectiveConfigError):
 
 class OverrideValidationError(EffectiveConfigError):
     """Override value does not satisfy the entry's policy."""
+
+
+class UpdateError(VersionConfigError):
+    """Base for update-discovery errors."""
+
+
+class ProviderUnavailableError(UpdateError):
+    """Provider cannot be reached or returned malformed data."""
+
+
+class UnknownFilterError(VersionConfigError):
+    """One or more --only filters matched nothing."""

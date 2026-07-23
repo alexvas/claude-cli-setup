@@ -265,7 +265,113 @@ class Stages:
 
 
 @dataclass(frozen=True)
+class CacheConfig:
+    """Validated ``[cache]`` section from versions.toml."""
+    dir: str | None = None
+    """Custom cache directory path."""
+    ttl: int | None = None
+    """Default TTL in seconds (positive integer)."""
+
+
+@dataclass(frozen=True)
 class Inventory:
     schema: int
     stages: Stages
     runtime_pi_extensions: Mapping[str, PiExtensionEntry]
+    cache: CacheConfig | None = None
+
+
+# ---------------------------------------------------------------------------
+# Update discovery types (Stage 3)
+# ---------------------------------------------------------------------------
+
+from enum import Enum
+
+
+class UpdateStatus(str, Enum):
+    CURRENT = "current"
+    OUTDATED = "outdated"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+    INCOMPLETE = "incomplete"
+
+
+class UpdateKind(str, Enum):
+    VERSION = "version"
+    DIGEST_REFRESH = "digest-refresh"
+    REVISION = "revision"
+
+
+@dataclass(frozen=True)
+class CandidateArtifact:
+    platform: str
+    name: str
+    url: str
+    sha256: str | None
+
+
+@dataclass(frozen=True)
+class UpdateCandidate:
+    value: str
+    kind: UpdateKind
+    artifacts: Mapping[str, CandidateArtifact]
+    digest: str | None = None
+    metadata: Mapping[str, str] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    path: str
+    provider: str
+    current: str
+    candidate: str | None
+    status: UpdateStatus
+    kind: UpdateKind
+    applicable: bool
+    reason: str | None
+    artifacts: Mapping[str, CandidateArtifact]
+    digest: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a deterministic JSON-serializable dict."""
+        import json
+        result: dict[str, object] = {
+            "applicable": self.applicable,
+            "candidate": self.candidate,
+            "current": self.current,
+            "kind": self.kind.value,
+            "path": self.path,
+            "provider": self.provider,
+            "reason": self.reason,
+            "status": self.status.value,
+        }
+        if self.digest is not None:
+            result["digest"] = self.digest
+        # artifacts: plain dict of platform → {url, sha256}
+        if self.artifacts:
+            result["artifacts"] = {
+                p: {"url": a.url, "sha256": a.sha256}
+                for p, a in sorted(self.artifacts.items())
+            }
+        return result
+
+
+@dataclass(frozen=True)
+class UpdateTarget:
+    """A single entry ready for update discovery."""
+    path: str
+    current: str
+    source: object  # SourceMetadata subclass
+    update: object  # UpdateMetadata subclass
+    artifacts: Mapping[str, ArtifactEntry]
+    override: Optional[OverridePolicy] = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))

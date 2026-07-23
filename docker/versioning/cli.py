@@ -21,8 +21,10 @@ from .effective import (
 from .errors import (
     InventoryError,
     OverrideValidationError,
+    UnknownFilterError,
     UnknownPathError,
     UnsupportedOverrideError,
+    UpdateError,
     VersionConfigError,
 )
 import tomllib
@@ -34,6 +36,8 @@ EXIT_INVALID = 3
 EXIT_UNKNOWN_PATH = 4
 EXIT_UNSUPPORTED_OVERRIDE = 5
 EXIT_OVERRIDE_POLICY = 6
+EXIT_PROVIDER_FAILURE = 7
+EXIT_OUTDATED = 8
 
 
 def _parse_overrides(raw: Sequence[str]) -> dict[str, str]:
@@ -186,7 +190,244 @@ def build_parser() -> argparse.ArgumentParser:
         "env", parents=[common], help="Emit effective environment variables"
     )
 
+    # check-updates (separate common args — overrides are not relevant here)
+    updates_common = argparse.ArgumentParser(add_help=False)
+    updates_common.add_argument(
+        "--inventory",
+        default=None,
+        metavar="PATH",
+        help="Path to versions.toml (default: versions.toml in repo root)",
+    )
+    updates_common.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output in JSON format",
+    )
+
+    updates_p = sub.add_parser(
+        "check-updates",
+        parents=[updates_common],
+        help="Check configured providers for updates",
+    )
+    updates_p.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        dest="only",
+        metavar="FILTER",
+        help="Provider name or inventory path (repeatable)",
+    )
+    updates_p.add_argument(
+        "--include-prerelease",
+        action="store_true",
+        default=False,
+        dest="include_prerelease",
+        help="Include prerelease versions in provider queries",
+    )
+    updates_p.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Treat provider failures as errors (exit 7)",
+    )
+    updates_p.add_argument(
+        "--fail-on-outdated",
+        action="store_true",
+        default=False,
+        dest="fail_on_outdated",
+        help="Exit with code 8 when any applicable update is found",
+    )
+    updates_p.add_argument(
+        "--suggest",
+        action="store_true",
+        default=False,
+        help="Include non-mutating TOML suggestions in output",
+    )
+    updates_p.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Cache TTL in seconds (persists to disk across invocations)",
+    )
+    updates_p.add_argument(
+        "--cache-dir",
+        default=None,
+        metavar="PATH",
+        dest="cache_dir",
+        help="Disk cache directory (default: $XDG_CACHE_HOME/pi-cli/versioning)",
+    )
+    updates_p.add_argument(
+        "--no-cache",
+        action="store_true",
+        default=False,
+        dest="no_cache",
+        help="Disable HTTP cache",
+    )
+
     return parser
+
+
+def _resolve_transports(args: argparse.Namespace):
+    """Build production HTTP / git transports for *args*."""
+    from .providers.base import HttpTransport, GitRefTransport
+
+    class _ProductionHttp(HttpTransport):
+        def request(self, method, url, *, headers=(), nocache=False):
+            import urllib.request
+            import urllib.error
+            req = urllib.request.Request(url, method=method, headers=dict(headers))
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    body = resp.read()
+                    return type("HttpResponse", (), {
+                        "status": resp.status,
+                        "headers": dict(resp.headers),
+                        "body": body,
+                    })()
+            except urllib.error.HTTPError as e:
+                body = e.read() if hasattr(e, "read") else b""
+                return type("HttpResponse", (), {
+                    "status": e.code,
+                    "headers": dict(e.headers) if hasattr(e, "headers") else {},
+                    "body": body,
+                })()
+            except OSError as e:
+                # SocketTimeout, ConnectionError, etc. — treat as
+                # provider unavailable rather than crashing the CLI.
+                return type("HttpResponse", (), {
+                    "status": 503,
+                    "headers": {},
+                    "body": f"timeout_or_connection_error: {e}".encode(),
+                })()
+
+    class _ProductionGit(GitRefTransport):
+        def resolve_ref(self, repository, ref):
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["git", "ls-remote", repository, ref],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(result.stderr.strip())
+                line = result.stdout.strip().split("\n")[0]
+                return line.split()[0]
+            except FileNotFoundError:
+                raise RuntimeError("git executable not found")
+
+    from .cache import CachingHttpTransport, DiskCache, _default_cache_dir
+    from .model import CacheConfig
+    http = _ProductionHttp()
+    no_cache: bool = getattr(args, "no_cache", False)
+    if not no_cache:
+        cache_ttl: int | None = getattr(args, "cache_ttl", None)
+        cache_dir: str | None = getattr(args, "cache_dir", None)
+
+        # Read [cache] section from validated inventory
+        inv_cache: CacheConfig | None = getattr(args, "_inventory_cache", None)
+        if inv_cache is not None:
+            if cache_dir is None and inv_cache.dir is not None:
+                cache_dir = inv_cache.dir
+            if cache_ttl is None and inv_cache.ttl is not None:
+                cache_ttl = inv_cache.ttl
+
+        # In --suggest mode, never create or write to a disk cache.
+        # The guarantee is that --suggest mutates nothing on the
+        # filesystem, including the cache directory — even when
+        # [cache].dir or --cache-dir points inside the working tree.
+        suggest_mode: bool = getattr(args, "suggest", False)
+        if not suggest_mode:
+            if cache_dir is not None:
+                disk = DiskCache(Path(cache_dir), ttl=cache_ttl)
+            else:
+                disk = DiskCache(_default_cache_dir(), ttl=cache_ttl) if cache_ttl is not None else None
+            http = CachingHttpTransport(http, ttl=cache_ttl, disk_cache=disk)
+        else:
+            disk = None
+            # In-memory only — reads from cache directory would
+            # themselves be non-mutating, but for simplicity and to
+            # avoid any edge case we omit the disk tier entirely.
+            http = CachingHttpTransport(http, ttl=cache_ttl, disk_cache=disk)
+    return http, _ProductionGit()
+
+
+def _resolve_tokens() -> dict[str, str]:
+    """Collect provider tokens from environment variables."""
+    import os as _os
+    tokens: dict[str, str] = {}
+    for var in ("GITHUB_TOKEN", "NPM_TOKEN", "PYPI_TOKEN", "DOCKER_REGISTRY_TOKEN"):
+        val = _os.environ.get(var)
+        if val:
+            tokens[var] = val
+    return tokens
+
+
+def _cmd_check_updates(
+    args: argparse.Namespace,
+    inventory: object,
+) -> int:
+    """Run check-updates with provider results."""
+    from .updates import (
+        _DEFAULT_PROVIDERS,
+        check_updates,
+        render_table,
+        render_json,
+        render_suggestions,
+        render_suggestions_json,
+    )
+    from .providers.base import ProviderContext
+    from .model import CacheConfig
+
+    # Pass validated cache config from inventory to transport layer
+    args._inventory_cache = getattr(inventory, "cache", None)
+
+    http, git = _resolve_transports(args)
+    tokens = _resolve_tokens()
+
+    context = ProviderContext(
+        http=http,
+        git=git,
+        include_prerelease=args.include_prerelease,
+        tokens=tokens,
+    )
+
+    only = tuple(args.only) if hasattr(args, "only") else ()
+
+    results = check_updates(
+        inventory,
+        context=context,
+        only=only,
+    )
+
+    # Output
+    if args.json:
+        if args.suggest:
+            output = render_suggestions_json(results)
+        else:
+            output = render_json(results)
+        print(output)
+    else:
+        table = render_table(results)
+        print(table)
+        if args.suggest:
+            print()
+            print("# Suggested updates:")
+            print(render_suggestions(results) or "(none)")
+
+    # Exit code logic
+    strict = getattr(args, "strict", False)
+    fail_on_outdated = getattr(args, "fail_on_outdated", False)
+
+    if strict and any(r.status.value == "unavailable" for r in results):
+        return EXIT_PROVIDER_FAILURE
+    if fail_on_outdated and any(
+        r.status.value == "outdated" and r.applicable for r in results
+    ):
+        return EXIT_OUTDATED
+
+    return EXIT_OK
 
 
 def _resolve_default_inventory() -> Path:
@@ -220,7 +461,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: cannot read inventory: {exc}", file=sys.stderr)
         return EXIT_INVALID
 
-    # Parse overrides
+    # check-updates uses its own path (no overrides or effective config)
+    if args.command == "check-updates":
+        try:
+            return _cmd_check_updates(args, inventory)
+        except UnknownFilterError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        except VersionConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+
+    # Parse overrides (for validate, get, env commands)
     try:
         overrides_raw = _parse_overrides(args.overrides)
     except ValueError as exc:

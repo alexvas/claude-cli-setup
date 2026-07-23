@@ -575,6 +575,56 @@ scheme = "semver"
         finally:
             path.unlink()
 
+    # ------------------------------------------------------------------
+    # Cache config validation
+    # ------------------------------------------------------------------
+
+    def test_no_cache_section_yields_none(self):
+        """Without [cache], inventory.cache is None."""
+        inv = load_inventory(FIXTURES / "valid-minimal.toml")
+        self.assertIsNone(inv.cache)
+
+    def test_cache_with_dir_and_ttl(self):
+        toml = _minimal_toml() + '\n[cache]\ndir = "/tmp/my-cache"\nttl = 7200\n'
+        path = _write_toml(toml)
+        try:
+            inv = load_inventory(path)
+            self.assertIsNotNone(inv.cache)
+            self.assertEqual(inv.cache.dir, "/tmp/my-cache")  # type: ignore[union-attr]
+            self.assertEqual(inv.cache.ttl, 7200)  # type: ignore[union-attr]
+        finally:
+            path.unlink()
+
+    def test_cache_dir_must_be_string(self):
+        toml = _minimal_toml() + '\n[cache]\ndir = 42\n'
+        path = _write_toml(toml)
+        try:
+            with self.assertRaises(InventoryError) as ctx:
+                load_inventory(path)
+            self.assertIn("cache.dir", str(ctx.exception))
+        finally:
+            path.unlink()
+
+    def test_cache_ttl_must_be_positive_int(self):
+        toml = _minimal_toml() + '\n[cache]\nttl = 0\n'
+        path = _write_toml(toml)
+        try:
+            with self.assertRaises(InventoryError) as ctx:
+                load_inventory(path)
+            self.assertIn("cache.ttl", str(ctx.exception))
+        finally:
+            path.unlink()
+
+    def test_cache_rejects_unknown_key(self):
+        toml = _minimal_toml() + '\n[cache]\nunknown = true\n'
+        path = _write_toml(toml)
+        try:
+            with self.assertRaises(InventoryError) as ctx:
+                load_inventory(path)
+            self.assertIn("unknown", str(ctx.exception))
+        finally:
+            path.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

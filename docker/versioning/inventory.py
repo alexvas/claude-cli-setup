@@ -21,6 +21,7 @@ from .constraints import (
 from .model import (
     ArtifactEntry,
     BaseStage,
+    CacheConfig,
     DockerRegistrySource,
     DockerRegistryUpdate,
     FdPrebuiltStage,
@@ -396,25 +397,36 @@ _register(("runtime", "pi-extensions", "__ANY__", "source"), "type", "package")
 _register(("runtime", "pi-extensions", "__ANY__", "update"), "provider", "stable_only")
 
 
-def _check_unknown_keys(table: Mapping[str, object], path: tuple[str, ...]) -> None:
+def _check_unknown_keys(table: Mapping[str, object], path: tuple[str, ...], *, allowed: set[str] | None = None) -> None:
     """Raise InventoryError if *table* contains keys not in the known set for *path*.
 
     The special key ``__ANY__`` in the registry matches any last component,
     which supports dynamic tables like pi-extensions.
+
+    If *allowed* is given it serves as an explicit override — the registry
+    lookup is skipped entirely.
     """
-    allowed = _KNOWN_KEYS.get(path)
-    if allowed is None:
+    if allowed is not None:
+        for key in table:
+            if key not in allowed:
+                raise InventoryError(
+                    f"{_dot(path + (key,))}: unknown key {key!r}"
+                )
+        return
+
+    registry = _KNOWN_KEYS.get(path)
+    if registry is None:
         # Try ancestor with __ANY__ wildcard in the last component
         for depth in range(len(path), 0, -1):
             candidate = path[:depth - 1] + ("__ANY__",) + path[depth:]
-            allowed = _KNOWN_KEYS.get(candidate)
-            if allowed is not None:
+            registry = _KNOWN_KEYS.get(candidate)
+            if registry is not None:
                 break
-    if allowed is None:
+    if registry is None:
         return  # No rule → skip (top-level or genuinely dynamic)
 
     for key in table:
-        if key not in allowed:
+        if key not in registry:
             raise InventoryError(
                 f"{_dot(path + (key,))}: unknown key {key!r}"
             )
@@ -708,7 +720,8 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
         raise InventoryError(f"schema: unsupported version {schema}, only 1 is supported")
 
     # --- top-level unknown keys ---
-    _check_unknown_keys(raw, ())
+    known_top = {"schema", "stages", "runtime", "cache"}
+    _check_unknown_keys(raw, (), allowed=known_top)
 
     # --- base ---
     _check_unknown_keys(r.tbl(("stages",)), ("stages",))
@@ -911,7 +924,38 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
             ),
         ),
         runtime_pi_extensions=MappingProxyType(extensions),
+        cache=_load_cache_config(raw),
     )
+
+
+# ---------------------------------------------------------------------------
+# Cache config loader
+# ---------------------------------------------------------------------------
+
+def _load_cache_config(raw: Mapping[str, object]) -> CacheConfig | None:
+    """Parse and validate the optional ``[cache]`` section."""
+    cache_raw = raw.get("cache")
+    if cache_raw is None:
+        return None
+    if not isinstance(cache_raw, dict):
+        raise InventoryError("cache: must be a table")
+
+    cache_dir: str | None = None
+    cache_ttl: int | None = None
+
+    for key, val in cache_raw.items():
+        if key == "dir":
+            if not isinstance(val, str):
+                raise InventoryError("cache.dir: must be a string")
+            cache_dir = val
+        elif key == "ttl":
+            if not isinstance(val, int) or val <= 0:
+                raise InventoryError("cache.ttl: must be a positive integer")
+            cache_ttl = val
+        else:
+            raise InventoryError(f"cache: unknown key {key!r}")
+
+    return CacheConfig(dir=cache_dir, ttl=cache_ttl)
 
 
 # ---------------------------------------------------------------------------

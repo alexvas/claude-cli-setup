@@ -397,5 +397,27 @@ class TestShellEscape(unittest.TestCase):
         )
 
 
+class TestCliCheckUpdates(unittest.TestCase):
+    """CLI argument-parsing smoke tests.  Full pipeline coverage is in
+    ``test_version_check_updates.py`` with injected offline transports."""
+
+    def test_check_updates_help(self):
+        proc = _run("check-updates", "--help")
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("check-updates", proc.stdout)
+
+    def test_check_updates_invalid_inventory(self):
+        proc = _run("check-updates", "--inventory", "/nonexistent.toml")
+        self.assertEqual(proc.returncode, 3)
+
+    def test_check_updates_unknown_only_filter(self):
+        """Unknown --only filters must produce exit 2 (usage error)
+        with the filter name and known paths/providers listed."""
+        proc = _run("check-updates", "--only", "nonexistent-xyz")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("nonexistent-xyz", proc.stderr)
+        self.assertIn("Known paths", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -239,7 +239,6 @@ Values are single-quote-escaped with internal `'` handled via `'\''`:
 
 - **Shell-safe env output**: output lines are ``export NAME='value'`` form; ``eval "$(python3 docker/versions.py env)"`` produces exported variables visible to child processes (``docker compose build``, ``sh -c ...``); embedded single quotes in values are correctly escaped (e.g., ``it's`` becomes ``'it'\''s'``)
 - **Duplicate override rejection**: `--override PATH=VALUE` repeated with the same `PATH` is a usage error (exit 2), not silently accepted
-
 - **NODE_BASE_IMAGE**: derived from `node.source.registry`/`repository` + `tag` + `digest` (e.g., `docker.io/library/node:24-trixie-slim@sha256:...`), not hardcoded `node:` prefix
 - **Error handling**: `tomllib.TOMLDecodeError` and `OSError` caught explicitly; no broad `except Exception` that would mask programming defects
 
@@ -254,3 +253,333 @@ Values are single-quote-escaped with internal `'` handled via `'\''`:
 - **compileall**: clean
 - **openspec validate --strict**: valid
 - **Deterministic ordering**: repeated runs produce byte-identical output
+
+# Stage 3 Verification: Update discovery, caching, and security
+
+**Date:** 2026-07-25 (updated)
+
+## Test Suite
+
+```
+Ran 430 tests in 3.608s       (main suite, fully offline)
+Ran 65 tests in 0.004s        (provider adapters)
+OK
+```
+
+Total: **495 tests** (430 + 65).  180 new tests since Stage 2 (495 − 315).
+
+### Main suite (430)
+
+| File | Tests | Notes |
+|---|---|---|
+| `tests/test_version_cache.py` | 40 | Disk + memory cache, auth isolation, permissions, corrupt-entry resilience, case-insensitive headers, Accept representation isolation, nocache bypass, read-only mode |
+| `tests/test_version_check_updates.py` | 23 | Offline check-updates CLI |
+| `tests/test_version_constraints.py` | 63 | Constraint semantics |
+| `tests/test_version_effective.py` | 38 | Effective configuration |
+| `tests/test_version_inventory.py` | 61 | Inventory loading / validation (+5 cache config validation) |
+| `tests/test_version_stage1a.py` | 109 | Stage 1A contracts |
+| `tests/test_version_updates.py` | 16 | Coordinator + suggestions |
+| `tests/test_version_versions.py` | 28 | SemanticVersion parsing |
+| `tests/test_versions_cli.py` | 52 | Subprocess CLI smoke |
+
+### Provider suite (65)
+
+| File | Tests | Notes |
+|---|---|---|
+| `tests/versioning/providers/test_docker_registry.py` | 3 | Docker Registry bearer-token |
+| `tests/versioning/providers/test_git.py` | 4 | Git ref resolution |
+| `tests/versioning/providers/test_github.py` | 21 | GitHub Releases + SHA256SUMS + companion files + asset digest + downgrade + prefixed digest normalisation |
+| `tests/versioning/providers/test_npm.py` | 12 | npm registry + downgrade prevention |
+| `tests/versioning/providers/test_pypi.py` | 8 | PyPI JSON API + downgrade prevention |
+| `tests/versioning/providers/test_rust.py` | 11 | Rust stable channel + metadata + tightened regex + downgrade |
+| `tests/versioning/providers/test_uv_python.py` | 6 | uv python-build-standalone + downgrade prevention |
+
+## Provider Matrix
+
+| Provider | Fake tests | Status |
+|---|---|---|
+| npm | 12 | ✓ (+1 downgrade prevention) |
+| pypi | 8 | ✓ (+1 downgrade prevention) |
+| github-release | 21 | ✓ (+1 downgrade, +3 companion files, +3 asset digest, +3 SHA256SUMS, +3 prefixed digest) |
+| rust-channel | 11 | ✓ (+1 downgrade, +3 tightened regex rejection) |
+| docker-registry | 3 | ✓ |
+| git-ref | 4 | ✓ |
+| uv-python | 6 | ✓ (+1 downgrade prevention) |
+
+## Checksum Resolution Priority (GitHub)
+
+| Priority | Source | Function |
+|---|---|---|
+| 0. Asset digest | ``digest`` / ``sha256`` / ``content_sha256`` / ``checksum`` / ``hash`` field on matched asset (bare hex or ``sha256:<hex>`` / ``sha256=<hex>`` normalised) | ``_normalise_digest()`` → ``_extract_asset_digest()`` |
+| 1. Companion file | `<asset>.sha256` / `.sha256sum` / `.sha256sum.txt` | `_resolve_asset_companion_checksum()` |
+| 2. SHA256SUMS file | Release-level checksum asset download + parse | `_resolve_checksums()` |
+| 3. Body text | `sha256:` tokens and checksum-line heuristics | `_extract_checksum_for_asset()` |
+
+## Status Matrix
+
+| Status | Test coverage |
+|---|---|
+| current | ✓ |
+| outdated | ✓ |
+| skipped | ✓ |
+| unavailable | ✓ |
+| incomplete | ✓ (implicit via coordinator classification) |
+
+## Update Kinds
+
+| Kind | Test coverage |
+|---|---|
+| version | ✓ |
+| digest-refresh | ✓ |
+| revision | ✓ |
+
+## Exit Codes (added)
+
+| Code | Meaning | Tested |
+|---|---|---|
+| 7 | Provider failure in --strict mode | ✓ (offline, injected fake transports) |
+| 8 | Applicable update found in --fail-on-outdated | ✓ (offline, injected fake transports) |
+
+## Files Created
+
+| File | Lines | Purpose |
+|---|---|---|
+| `docker/versioning/versions.py` | ~200 | SemanticVersion parsing and ordering |
+| `docker/versioning/cache.py` | ~370 | Two-tier cache, auth-scoped keys, owner-only permissions, case-insensitive headers, representation-aware keys, nocache bypass, read-only mode |
+| `docker/versioning/providers/__init__.py` | ~5 | Package init |
+| `docker/versioning/providers/base.py` | ~100 | Transport protocols, ProviderContext, ProviderResult |
+| `docker/versioning/providers/npm.py` | ~110 | npm registry provider |
+| `docker/versioning/providers/pypi.py` | ~120 | PyPI provider |
+| `docker/versioning/providers/github.py` | ~320 | GitHub Releases + checksum resolution pipeline |
+| `docker/versioning/providers/rust.py` | ~110 | Rust stable channel provider + tightened regex |
+| `docker/versioning/providers/docker_registry.py` | ~110 | Docker Registry provider |
+| `docker/versioning/providers/git.py` | ~50 | Git ref provider |
+| `docker/versioning/providers/uv_python.py` | ~100 | uv-managed Python provider |
+| `docker/versioning/updates.py` | ~440 | Coordinator, targets, suggestions, reports |
+| `tests/versioning/__init__.py` | ~1 | Test package init |
+| `tests/versioning/support/__init__.py` | ~1 | Support package init |
+| `tests/versioning/support/fake_http.py` | ~60 | Fake HTTP transport |
+| `tests/versioning/support/fake_git.py` | ~35 | Fake Git transport |
+| `tests/versioning/support/inventory_builder.py` | ~80 | Inventory builder for coordinator tests |
+| `tests/versioning/support/fixtures/versions/valid-minimal.toml` | ~15 | Minimal valid TOML fixture |
+| `tests/versioning/providers/test_npm.py` | ~145 | npm provider tests (injected transports) |
+| `tests/versioning/providers/test_pypi.py` | ~100 | PyPI provider tests |
+| `tests/versioning/providers/test_github.py` | ~280 | GitHub provider tests |
+| `tests/versioning/providers/test_rust.py` | ~120 | Rust provider tests |
+| `tests/versioning/providers/test_docker_registry.py` | ~85 | Docker Registry tests |
+| `tests/versioning/providers/test_git.py` | ~60 | Git provider tests |
+| `tests/versioning/providers/test_uv_python.py` | ~85 | uv-python provider tests |
+| `tests/test_version_versions.py` | ~130 | SemanticVersion tests |
+| `tests/test_version_updates.py` | ~400 | Coordinator + suggestion tests |
+| `tests/test_version_cache.py` | ~620 | Cache + auth + permissions + corrupt-entry + case-insensitive + Accept + nocache + read-only tests |
+| `tests/test_version_check_updates.py` | ~550 | Offline check-updates CLI tests |
+
+## Files Modified
+
+| File | Change |
+|---|---|
+| `docker/versioning/model.py` | +CacheConfig, UpdateStatus, UpdateKind, UpdateCandidate, UpdateResult, UpdateTarget |
+| `docker/versioning/errors.py` | +UpdateError, ProviderUnavailableError, UnknownFilterError |
+| `docker/versioning/inventory.py` | +CacheConfig validation (`_load_cache_config`), +`cache` to known top-level keys |
+| `docker/versioning/cli.py` | +check-updates, +EXIT_PROVIDER_FAILURE(7), +EXIT_OUTDATED(8), +--cache-dir, +--cache-ttl, `_resolve_transports`/`_resolve_tokens` |
+| `docker/versions.toml` | +`[cache]` section (defaults for dir + ttl) |
+| `tests/test_versions_cli.py` | −7 network-dependent subprocess tests; 52 arg-parsing smoke tests |
+
+## Security Properties
+
+### Auth-scoped cache keys
+
+`DiskCache` and `CachingHttpTransport` derive a non-secret scope from the ``Authorization``
+header (**case-insensitive** per RFC 7230 § 3.2):
+- No auth → scope ``"public"``
+- With auth → scope ``"auth:" + sha256(token)[:16]``
+
+Authenticated responses are never served to unauthenticated callers or callers with a
+different token.  A lowercase ``authorization`` header is correctly recognised as authed
+instead of being treated as public.  The ``Authorization`` header is stripped from stored
+payloads so it cannot leak via disk.
+
+### Representation-aware cache keys
+
+Cache keys incorporate the ``Accept`` header so that different media-type requests
+for the same URL do not collide:
+- Absent or ``*/*`` Accept → ``"wildcard"`` (neutral token)
+- Specific type(s) → ``"accept:" + sha256(normalised)[:16]``
+- Comma-separated media ranges are alphabetically sorted for stable, order-independent keys
+
+### Private file permissions
+
+| Artifact | Mode |
+|---|---|
+| Cache files | ``0600`` |
+| Cache directories — target and any missing ancestors | ``0700`` |
+| Pre-existing parent directories | **Never chmod-ed** |
+| Pre-existing **target** directory with permissive permissions | **Clamped to ``0700``** |
+| Re-write of existing file | Clamps to ``0600`` |
+
+### Credential-bearing request bypass (nocache)
+
+Requests to Docker Registry bearer-token endpoints (``/v2/`` probe and
+``{realm}?service=…&scope=…``) are made with ``nocache=True``.  The
+``CachingHttpTransport`` skips both memory and disk tiers — neither
+writing token-bearing responses to disk nor reading stale tokens from
+a previous invocation.  ``HttpTransport.request()`` accepts ``nocache:
+bool = False`` as a keyword-only argument; all implementations (cache,
+fake, production) handle it transparently.
+
+### Corrupt entry resilience
+
+`DiskCache.get()` catches `KeyError`, `TypeError`, `JSONDecodeError`, `OSError`, `FileNotFoundError` — returns `None` instead of crashing.
+
+### Verification
+
+- ``test_authenticated_cache_not_served_to_public``: token-scoped response invisible without token
+- ``test_different_tokens_are_isolated``: two tokens → independent cache entries
+- ``test_authorization_stripped_from_stored_response``: no ``Authorization`` on disk
+- ``test_lowercase_authorization_header_not_public``: lowercase ``authorization`` recognised as authed
+- ``test_lowercase_authorization_isolated_from_mixed_case``: casing difference shares same scope
+- ``test_different_accept_types_are_isolated``: JSON vs HTML → separate cache entries
+- ``test_no_accept_and_wildcard_are_equivalent``: absent Accept and ``*/*`` share entry
+- ``test_lowercase_accept_header_recognised``: lowercase ``accept`` detected as representation
+- ``test_accept_sorted_normalisation``: ``a, b`` and ``b, a`` produce identical key
+- ``test_cache_file_is_owner_only``: ``0600``
+- ``test_cache_dir_is_owner_only``: ``0700``
+- ``test_permissions_survive_second_write``: re-write clamps loose permissions
+- ``test_existing_target_dir_clamped_to_0700``: pre-existing insecure dir clamped
+- ``test_pre_existing_parent_not_chmodded``: parent with ``0755`` untouched by cache writes
+- 4 corrupt-entry tests: missing keys, wrong types, truncated JSON, empty files
+- ``test_read_only_disk_cache_writes_are_noop``: read-only mode never writes
+- ``test_nocache_bypasses_both_read_and_write``: nocache skips all tiers
+- ``test_nocache_does_not_read_existing_cache``: nocache ignores populated cache
+
+## Cache Architecture
+
+| Tier | Lookup order | Purpose |
+|---|---|---|
+| In-memory | 1st (fast) | Within a single invocation |
+| Disk | 2nd (persistent) | Across CLI invocations via `$XDG_CACHE_HOME/pi-cli/versioning/` |
+
+- `CachingHttpTransport(ttl=N)` auto-creates `DiskCache` at default location
+- `--cache-dir PATH` CLI flag overrides directory
+- `[cache]` section in `versions.toml` sets defaults (`dir`, `ttl`)
+- Precedence: CLI `--cache-dir` > `[cache].dir` > XDG default
+- `--no-cache` bypasses all caching
+- Atomic writes via `os.replace()` (write to `.tmp` then rename)
+
+## Centralized Cache Configuration
+
+`[cache]` is a fully typed, strictly validated section in `versions.toml`:
+
+```toml
+[cache]
+dir = "/path/to/cache"   # optional string
+ttl = 3600               # optional positive int
+```
+
+- `CacheConfig` frozen dataclass in `model.py`
+- `_load_cache_config()` validates types, rejects unknown keys, enforces `ttl > 0`
+- Flows through `Inventory.cache` (typed pipeline, no second `tomllib.load()`)
+- 5 validation tests: no-section → None, valid dir+ttl, dir-not-string, ttl≤0, unknown-key
+
+## Downgrade Prevention
+
+All five value providers compare upstream maximum against selected version using typed comparison:
+
+| Provider | Comparison type | Action when upstream max < current |
+|---|---|---|
+| npm | `SemanticVersion` | Returns CURRENT |
+| PyPI | `SemanticVersion` | Returns CURRENT |
+| GitHub | `_parse_tag_semver(tag, prefix)` | Returns CURRENT |
+| Rust | `NumericVersion` | Returns CURRENT |
+| uv-python | `NumericVersion` | Returns CURRENT |
+
+Parse failures fall through gracefully to original string comparison.
+
+## Rust Version Extraction (tightened)
+
+Regex: `^((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:\s+\([^)]*\))?$`
+
+| Input | Accepted? |
+|---|---|
+| `1.97.1` | ✓ |
+| `1.97.1 (abcdef01 2025-06-01)` | ✓ |
+| `1.97.1garbage` | ✗ no whitespace separator |
+| `1.97.1-rc1` | ✗ dash suffix |
+| `1.97` | ✗ two components |
+
+## Key Architecture Decisions
+
+- Providers receive injected transports (never call urllib/git directly in tests)
+- Fake transports fail on unexpected requests — no fallback to real network
+- Production transports created only during explicit `check-updates` execution
+- `validate`, `get`, `env`, and import paths make zero provider requests (9 tests)
+- npm URLs are percent-encoded for scoped packages (`@scope/pkg` → `@scope%2Fpkg`)
+- GitHub release candidate filename matching uses deterministic basename substitution
+- GitHub checksum resolution: asset digest → companion file → SHA256SUMS → body text
+- Docker digest refresh is distinct from version update (`UpdateKind.DIGEST_REFRESH`)
+- Git revision updates are never compared as semantic versions (`UpdateKind.REVISION`)
+- `SemanticVersion`: build metadata excluded from equality/hash per semver.org
+- Rust `pkg.rust.version` may include `(hash date)` suffix; only `X.Y.Z` prefix extracted
+- `render_suggestions()` emits valid TOML (`[path]` table headers, parseable by `tomllib`)
+- Disk cache: auth-scoped keys (case-insensitive), ``0600``/``0700`` permissions (target always clamped, pre-existing parents untouched), corrupt-entry resilience, representation-aware keys via ``Accept`` header, nocache bypass for credential-bearing endpoints, read-only mode
+- ``UnknownFilterError``: raised when ``--only`` filter(s) match no target path or provider; lists known paths and providers in the error message
+- ``HttpTransport.request(nocache=True)`` added to protocol; Docker Registry token requests use it to prevent token persistence
+- Production HTTP transport uses ``urlopen(req, timeout=30)`` — hung providers surface as unavailable instead of blocking indefinitely
+- `[cache]` section validated through typed `CacheConfig` → `Inventory.cache` pipeline
+- Coordinator propagates provider exceptions without halting remaining targets
+- Suggestions rendered only for OUTDATED + applicable results
+- `--only` filter validates inputs — unknown filters raise `UnknownFilterError` (exit 2) with known paths and providers listed
+
+## Import Graph Verification
+
+- Provider adapters: no imports from CLI, updates, or `docker/versions.py`
+- Domain modules (effective, inventory, constraints, model): no network calls at import time
+- `validate`/`get`/`env` + module imports: zero provider requests confirmed (9 tests)
+- `compileall`: clean
+- `openspec validate --strict`: valid
+- Direct script vs package import: byte-identical
+
+## Non-Mutation Evidence
+
+- `check-updates --suggest` does NOT edit `versions.toml` (byte-for-byte comparison)
+- `git status --porcelain` identical before/after `--suggest`
+- `git diff` identical before/after `--suggest`
+- ``os.listdir(repo)`` identical before/after ``--suggest`` — no cache files, no new files
+- In suggest mode, ``_resolve_transports()`` passes ``disk_cache=None`` — disk tier disabled regardless of ``[cache].dir`` or ``--cache-dir``
+- No write calls in coordinator or provider code
+- Inventory object immutable after loading
+- Artifact suggestions contain candidate version, URL, and SHA-256 checksum
+
+## Stage 3 Repair Rounds
+
+1. **Rust metadata parsing** — `pkg.rust.version` may include `(hash date)` suffix; only `X.Y.Z` prefix extracted
+2. **GitHub SHA256SUMS asset download** — `_resolve_checksums()` downloads and parses checksum files; authoritative over body text
+3. **Valid TOML suggestions** — `[path]` table headers instead of `# comments`; validates with `tomllib`
+4. **Offline check-updates tests** — 7 network subprocess tests → 23 offline tests with injected transports
+5. **Non-mutation evidence** — `versions.toml` byte-for-byte + `git status` + `git diff` before/after `--suggest`
+6. **Zero-request coverage** — 9 tests: `validate`, `get`×2, `env`×2, 5 module imports
+7. **Downgrade prevention** — all 5 value providers compare candidate vs current with typed precedence
+8. **GitHub companion checksums** — `<asset>.sha256` / `.sha256sum` companion files (3 tests)
+9. **Disk cache persistence** — `DiskCache` cross-invocation via JSON files at XDG cache path (8 tests)
+10. **Rust regex tightened** — rejects `1.97.1garbage`, `1.97.1-rc1`; only X.Y.Z or X.Y.Z (hash date) (3 tests)
+11. **Centralized TOML cache config** — `[cache]` with typed `CacheConfig` model, no second parse (5 tests)
+12. **Auth-scoped cache keys** — token-derived scope prevents cross-token leakage (3 tests)
+13. **Private file permissions** — `0600` files, `0700` dirs, re-write clamps (3 tests)
+14. **Corrupt entry resilience** — missing keys, wrong types, truncated JSON, empty files → None (4 tests)
+15. **GitHub asset digest field** — ``_extract_asset_digest()`` checks ``digest``/``sha256``/``checksum`` fields on asset dict (3 tests)
+16. **Safe ``_ensure_dir``** — only chmods directories actually created, **plus** always clamps the target directory to ``0700`` even if it pre-existed; pre-existing parents (e.g. ``/tmp``) are never altered (2 tests)
+17. **Case-insensitive Authorization** — lowercase ``authorization`` header recognised as authed; same token with different casing shares scope (2 tests)
+18. **Representation-aware cache keys** — ``Accept`` header incorporated into cache key; different media types fully isolated; comma-separated ranges sorted for stable keys (4 tests)
+19. **Genuinely case-insensitive header lookup** — ``_casefold_get()`` iterates all Mapping keys with ``casefold()`` instead of checking only two casings (replaced 2 tests with subTest-parameterised)
+20. **Prefixed asset digest normalisation** — ``sha256:<hex>`` / ``sha256=<hex>`` / ``SHA256:<hex>`` formats recognised and normalised to bare hex; whitespace-tolerant (3 tests)
+21. **--suggest non-mutation** — disk cache entirely disabled in suggest mode via ``disk_cache=None``; ``DiskCache.read_only`` flag as defense-in-depth; repo file-list snapshot in non-mutation test (1 test)
+22. **Docker token endpoint nocache** — bearer-token endpoint requests bypass cache; ``HttpTransport.request(nocache=True)`` skips memory+disk tiers (3 tests)
+23. **Unknown --only filter rejection** — ``UnknownFilterError`` raised for filters matching nothing; lists known paths and providers; exit 2 (usage), not 3 (2 tests: unit + subprocess)
+24. **Production HTTP timeout** — ``urlopen(req, timeout=30)`` prevents hung providers from blocking CLI indefinitely; OSError caught as 503
+
+## Real `versions.toml` Verification
+
+- Production inventory loads with all 7 stage entries + 3 pi extensions
+- `python3 docker/versions.py validate` → `valid`
+- Byte stability: repeated `env` runs produce identical output
+- `[cache]` section accepted as known top-level key
