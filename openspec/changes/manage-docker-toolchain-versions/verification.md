@@ -156,3 +156,101 @@ Production inventory loads with all 7 stage entries + 3 pi extensions:
 - No Docker/network in tests: ✓
 - All errors contain dot-paths: ✓
 - Sanitized env (`env -i`): ✓ 228 tests OK
+
+# Stage 2 Verification: Effective configuration CLI
+
+**Date:** 2026-07-23
+
+## Test Suite
+
+```
+Ran 315 tests in 3.196s
+OK
+```
+87 new tests (315 - 228 Stage 1+1A):
+- `tests/test_versions_cli.py`: 49 subprocess tests
+- `tests/test_version_effective.py`: 38 domain tests
+
+| Category | Tests | Status |
+|---|---|---|
+| CLI: Validate | 7 | ✓ |
+| CLI: Get (scalar, container, negative) | 15 | ✓ |
+| CLI: Env (text, JSON, ordering, round-trip) | 9 | ✓ |
+| CLI: Override (positive + negative) | 12 | ✓ |
+| CLI: Shell escape unit tests | 6 | ✓ |
+| Effective: Default selection | 7 | ✓ |
+| Effective: Immutability | 9 | ✓ |
+| Effective: Override policy | 7 | ✓ |
+| Effective: Serialization | 8 | ✓ |
+| Effective: Environment mapping | 7 | ✓ |
+
+## Files Created
+
+| File | Lines | Purpose |
+|---|---|---|
+| `docker/versioning/effective.py` | ~260 | Override application, deterministic serialization, env mapping |
+| `docker/versioning/cli.py` | ~210 | argparse CLI, exit-code mapping, shell escaping |
+| `tests/test_versions_cli.py` | ~400 | Subprocess-level CLI tests + shell escape unit tests |
+| `tests/test_version_effective.py` | ~370 | Domain-level effective config tests |
+
+## Files Modified
+
+| File | Change |
+|---|---|
+| `docker/versioning/errors.py` | +4 exception types (EffectiveConfigError, UnknownPathError, UnsupportedOverrideError, OverrideValidationError) |
+| `docker/versions.py` | +`if __name__ == "__main__"` with `main()` delegation |
+| `tests/test_version_stage1a.py` | `test_direct_script_execution` now passes `validate` argument |
+
+## CLI Exit Codes
+
+| Code | Meaning | Trigger |
+|---|---|---|
+| 0 | Success | validate, get, env with valid input |
+| 2 | CLI usage/arguments | malformed override token, duplicate override path |
+| 3 | Invalid inventory | bad TOML, missing file, unreadable file |
+| 4 | Unknown get path | typo, missing field, `__class__` |
+| 5 | Unsupported override | path not in SUPPORTED_OVERRIDES |
+| 6 | Override policy violation | wrong format, constraint mismatch, prerelease |
+
+## Supported Overrides
+
+Currently only:
+```
+stages.toolchain.python.version
+```
+
+## Env Output Contract
+
+Text-format `env` emits `export NAME='value'` lines, safe for direct shell evaluation:
+
+```sh
+eval "$(python3 docker/versions.py env)"
+docker compose build          # sees all exported variables
+sh -c 'echo $PYTHON_VERSION'  # 3.14.6
+sh -c 'echo $RUST_COMPONENTS' # rustfmt clippy
+```
+
+Values are single-quote-escaped with internal `'` handled via `'\''`:
+- `hello` → `'hello'`
+- `rustfmt clippy` → `'rustfmt clippy'`
+- `it's` → `'it'\''s'`
+
+## Key Design Decisions
+
+- **Shell-safe env output**: output lines are ``export NAME='value'`` form; ``eval "$(python3 docker/versions.py env)"`` produces exported variables visible to child processes (``docker compose build``, ``sh -c ...``); embedded single quotes in values are correctly escaped (e.g., ``it's`` becomes ``'it'\''s'``)
+- **Duplicate override rejection**: `--override PATH=VALUE` repeated with the same `PATH` is a usage error (exit 2), not silently accepted
+
+- **NODE_BASE_IMAGE**: derived from `node.source.registry`/`repository` + `tag` + `digest` (e.g., `docker.io/library/node:24-trixie-slim@sha256:...`), not hardcoded `node:` prefix
+- **Error handling**: `tomllib.TOMLDecodeError` and `OSError` caught explicitly; no broad `except Exception` that would mask programming defects
+
+## Verification Evidence
+
+- **Direct script vs package import**: byte-identical stdout/stderr
+- **Default Python**: exactly `3.14.6` in all outputs
+- **Python override `3.14.7`**: get → `3.14.7`, env → `PYTHON_VERSION=3.14.7`, effective JSON → only `3.14.6`→`3.14.7` differs
+- **Source unchanged after override**: `load_inventory` returns original `3.14.6`
+- **versions.toml unchanged**: SHA-256 identical before/after
+- **No Docker, no network**: all tests pass with sanitized env
+- **compileall**: clean
+- **openspec validate --strict**: valid
+- **Deterministic ordering**: repeated runs produce byte-identical output

@@ -20,3 +20,19 @@ class VersionSyntaxError(VersionConfigError):
 
 class ConstraintSyntaxError(VersionConfigError):
     """Constraint string cannot be parsed or is contradictory."""
+
+
+class EffectiveConfigError(VersionConfigError):
+    """Base for effective-configuration errors."""
+
+
+class UnknownPathError(EffectiveConfigError):
+    """Requested path does not exist in the configuration."""
+
+
+class UnsupportedOverrideError(EffectiveConfigError):
+    """Override requested for a non-overrideable or unsupported path."""
+
+
+class OverrideValidationError(EffectiveConfigError):
+    """Override value does not satisfy the entry's policy."""

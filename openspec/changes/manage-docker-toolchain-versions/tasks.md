@@ -23,12 +23,12 @@ This corrective stage applies the complete-entry contract adopted after the init
 
 This stage exposes deterministic defaults and controlled overrides without integrating any build system.
 
-- [ ] 2.1 **RED:** Add subprocess-level CLI tests for `validate`, `get`, and `env`, including text/JSON output, unknown paths, malformed overrides, and actionable exit codes
-- [ ] 2.2 **RED:** Add tests proving a supported override changes both emitted build arguments and effective inventory while an ordinary invocation keeps the exact selected default
-- [ ] 2.3 **GREEN:** Implement `docker/versions.py validate`, `get`, and `env` over one validated effective configuration
-- [ ] 2.4 **GREEN:** Implement supported override application and deterministic serialization of the effective inventory
-- [ ] 2.5 **INTROSPECT:** Compare default and Python-override effective inventories field-by-field with emitted environment values and inspect stable ordering/diagnostics
-- [ ] 2.6 **VALIDATE:** Run CLI tests under a sanitized environment and confirm identical input produces byte-identical local output without Docker or network access
+- [x] 2.1 **RED:** Add subprocess-level CLI tests for `validate`, `get`, and `env`, including text/JSON output, unknown paths, malformed overrides, and actionable exit codes
+- [x] 2.2 **RED:** Add tests proving a supported override changes both emitted build arguments and effective inventory while an ordinary invocation keeps the exact selected default
+- [x] 2.3 **GREEN:** Implement `docker/versions.py validate`, `get`, and `env` over one validated effective configuration
+- [x] 2.4 **GREEN:** Implement supported override application and deterministic serialization of the effective inventory
+- [x] 2.5 **INTROSPECT:** Compare default and Python-override effective inventories field-by-field with emitted environment values and inspect stable ordering/diagnostics
+- [x] 2.6 **VALIDATE:** Run CLI tests under a sanitized environment and confirm identical input produces byte-identical local output without Docker or network access
 
 ## 3. Update discovery and non-mutating suggestions — depends on Stage 1A, no Docker
 

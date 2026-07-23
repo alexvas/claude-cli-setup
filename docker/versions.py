@@ -110,3 +110,11 @@ else:
         UvPythonSource,
         UvPythonUpdate,
     )
+
+if __package__:
+    from .versioning.cli import main
+else:
+    from versioning.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

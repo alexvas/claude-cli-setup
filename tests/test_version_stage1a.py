@@ -666,7 +666,7 @@ class TestImportBoundary(unittest.TestCase):
     def test_direct_script_execution(self):
         import subprocess
         result = subprocess.run(
-            [sys.executable, str(_THIS_DIR.parent / "docker" / "versions.py")],
+            [sys.executable, str(_THIS_DIR.parent / "docker" / "versions.py"), "validate"],
             capture_output=True,
             text=True,
         )
