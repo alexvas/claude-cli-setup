@@ -583,3 +583,212 @@ Regex: `^((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:\s+\([^)]*\
 - `python3 docker/versions.py validate` → `valid`
 - Byte stability: repeated `env` runs produce identical output
 - `[cache]` section accepted as known top-level key
+
+---
+
+# Stage 4 Verification: Build argument rendering, orchestration, and safety hardening
+
+**Date:** 2026-07-25 (updated 2026-07-25)
+
+## Test Suite
+
+```
+Ran 481 tests in ~4s            (test_version*.py, fully offline)
+Ran 11 tests  in 0.05s          (test_build_wrapper_versions.py)
+Ran 65 tests  in 0.004s         (provider adapters)
+OK
+```
+
+Total: **557 tests** (481 + 11 + 65).  62 new tests in Stage 4 (33 initial + 29 from safety hardening).
+
+### New test files
+
+| File | Tests | Purpose |
+|---|---|---|
+| `tests/test_version_rendering.py` | 28 | Build argument rendering, TOML generation+round-trip, compose_command, output-path validation |
+| `tests/test_version_orchestration.py` | 14 | Mocked compose subprocess orchestration + unsafe-path rejection |
+| `tests/test_build_wrapper_versions.py` | 11 | build_wrapper.py version resolution, env merge, canonical override parsing, exception safety |
+
+### Existing test file deltas
+
+| File | Before | After | Δ | Reason |
+|---|---|---|---|---|
+| `tests/test_version_rendering.py` | — | 28 | +28 | New: rendering + path validation + round-trip |
+| `tests/test_version_orchestration.py` | — | 14 | +14 | New: orchestration + path rejection via CLI |
+| `tests/test_build_wrapper_versions.py` | — | 11 | +11 | New: integration + parse reuse + env merge + traceback safety |
+
+## Files Created
+
+| File | Lines | Purpose |
+|---|---|---|
+| `docker/versioning/rendering.py` | ~380 | Build environment rendering (`render_build_environment`, `effective_environment`), TOML serialization (scalars-before-tables), compose_command, `_validate_inventory_output`, `EffectiveInventoryOutputError` |
+| `tests/test_version_rendering.py` | ~370 | Rendering unit tests + output-path validation + round-trip |
+| `tests/test_version_orchestration.py` | ~330 | Mocked compose orchestration + CLI-level path rejection |
+| `tests/test_build_wrapper_versions.py` | ~360 | build_wrapper integration + parse reuse + env merge + traceback safety |
+
+## Files Modified
+
+| File | Change |
+|---|---|
+| `docker/versioning/effective.py` | Removed `effective_environment()` — moved to `rendering.py` to break the `effective ↔ rendering` import cycle |
+| `docker/versioning/cli.py` | +`compose` subcommand, +`_cmd_compose()`, `_cmd_env` now writes effective inventory + includes `EFFECTIVE_VERSIONS_FILE` + passes `--platform`, +`--effective-inventory-output` + `--platform` on both `env` and `compose`, catches `EffectiveInventoryOutputError` → exit 2 |
+| `docker/build_wrapper.py` | +`resolve_build_inputs()` (writes effective inventory, uses canonical `_parse_overrides`, specific exception catches — no `except Exception`), +`--inventory`/`--override`/`--platform`, merge order `{**merged, **version_env, **updates}` |
+| `.gitignore` | +`.docker-generated/` |
+
+## Build Environment → Inventory Trace
+
+| Environment Variable | Inventory Path |
+|---|---|
+| `NODE_BASE_IMAGE` | `stages.base.node.{source.registry,source.repository,tag,digest}` |
+| `RUST_VERSION` | `stages.toolchain.rust.version` |
+| `RUST_PROFILE` | `stages.toolchain.rust.profile` |
+| `RUST_COMPONENTS` | `stages.toolchain.rust.components` (space-joined) |
+| `UV_VERSION` | `stages.toolchain.uv.version` |
+| `UV_URL` | `stages.toolchain.uv.artifacts.linux-amd64.url` |
+| `UV_SHA256` | `stages.toolchain.uv.artifacts.linux-amd64.sha256` |
+| `PYTHON_VERSION` | `stages.toolchain.python.version` |
+| `TY_VERSION` | `stages.toolchain.ty.version` |
+| `RTK_VERSION` | `stages.rtk-prebuilt.rtk.version` |
+| `RTK_URL` | `stages.rtk-prebuilt.rtk.artifacts.linux-amd64.url` |
+| `RTK_SHA256` | `stages.rtk-prebuilt.rtk.artifacts.linux-amd64.sha256` |
+| `FD_VERSION` | `stages.fd-prebuilt.fd.version` |
+| `FD_URL` | `stages.fd-prebuilt.fd.artifacts.linux-amd64.url` |
+| `FD_SHA256` | `stages.fd-prebuilt.fd.artifacts.linux-amd64.sha256` |
+| `PI_VERSION` | `stages.pi-tools.pi.version` |
+| `OPENSPEC_VERSION` | `stages.openspec-tools.openspec.version` |
+| `OH_MY_ZSH_VERSION` | `stages.runtime.oh-my-zsh.revision` |
+| `PI_*_VERSION` | `runtime.pi-extensions.<name>.version` (sorted by name) |
+| `EFFECTIVE_VERSIONS_FILE` | Generated path (default: `.docker-generated/versions.toml`) |
+
+## Override Isolation
+
+Python override (`--override stages.toolchain.python.version=3.14.7`):
+- Only `PYTHON_VERSION` changes from `3.14.6` to `3.14.7`
+- All other 20+ variables unchanged
+- Effective inventory TOML also reflects the override
+
+## Safety Hardening (post-initial Stage 4)
+
+### 1. Effective inventory actually written by `build_wrapper.py`
+
+**Problem:** `resolve_build_inputs()` exported `EFFECTIVE_VERSIONS_FILE` in the environment but never wrote the file.  Docker builds received a nonexistent build input.
+
+**Fix:** `resolve_build_inputs()` calls `write_effective_inventory()` before returning.
+- `test_writes_effective_inventory_to_disk` — verifies `.docker-generated/versions.toml` exists after resolution
+
+### 2. Operational environment values preserved
+
+**Problem:** The merge ``{**version_env, **updates}`` dropped all operational values from ``.env`` (API keys, custom configuration).
+
+**Fix:** Merge order ``{**merged, **version_env, **updates}`` — ``.env`` values flow through, version keys override only same-named entries, diagnostic ``HOST_GATEWAY_IP`` wins last.
+- `test_operational_env_values_preserved_in_compose_env` — verifies ``CUSTOM_API_KEY`` survives, ``PYTHON_VERSION`` overridden, ``HOST_GATEWAY_IP`` from diagnosis wins
+
+### 3. `--effective-inventory-output` path validation
+
+**Problem:** The output path was unvalidated — absolute paths, ``../`` traversal, and `versions.toml` overwrite were all accepted.
+
+**Fix:** `_validate_inventory_output(repo_root, relative_path)` in `rendering.py` rejects:
+
+| Attack vector | Rejection |
+|---|---|
+| Absolute path (``/etc/hacked.toml``) | ``EffectiveInventoryOutputError`` |
+| Traversal (``../../../etc/hacked.toml``) | ``EffectiveInventoryOutputError`` |
+| Overwrite source (``versions.toml``) | ``EffectiveInventoryOutputError`` |
+| Symlink escape (leaf) | ``EffectiveInventoryOutputError`` |
+| Symlink escape (intermediate directory) | ``EffectiveInventoryOutputError`` |
+
+Called from `write_effective_inventory(effective, destination, repo_root=…, output_path=…)`.  Both entry points (``versions.py compose`` → exit 2, ``build_wrapper.py build`` → exit 2) reject unsafe paths.
+
+Tests:
+- 5 unit tests in ``TestEffectiveInventoryOutputValidation`` (valid, absolute, traversal, versions.toml, symlink)
+- 3 subprocess tests in ``TestComposeOrchestration`` (absolute, traversal, versions.toml → exit 2)
+
+### 4. Canonical override parser reused in `build_wrapper.py`
+
+**Problem:** `cmd_build()` had an ad-hoc override parser that silently accepted duplicate paths with last-value-wins and could expose uncaught inventory exceptions as tracebacks.
+
+**Fix:** `cmd_build()` now imports ``_parse_overrides`` from ``docker.versioning.cli`` (same parser used by ``versions.py``).  Duplicate paths → exit 2.  All `VersionConfigError` exceptions caught → clean error message, no traceback.
+
+Tests:
+- `test_duplicate_override_rejected_not_last_value_wins` — exit 2, no compose run
+- `test_invalid_inventory_caught_not_traceback` — stderr contains ``error:``, no ``Traceback``
+
+### 5. TOML serializer: scalars-before-tables ordering + full round-trip
+
+**Problem:** The serializer processed keys alphabetically.  After writing a `[runtime.pi-extensions.pi-read]` header, the next key (`schema`) was emitted as `schema = 1` — absorbed into the preceding table instead of the top level.  The generated file failed `load_inventory()` with `schema: missing required top-level key`.
+
+**Fix:** `_write_dict` splits keys into three groups — scalars, nested dicts (table headers), arrays — and writes each group in order.  Scalars (`schema = 1`) always appear before any `[header]`.  Additionally:
+- Inline tables omit ``None`` values (TOML has no null literal — ``ttl = ""`` was rejected as non-integer)
+- All-``None`` inline tables are omitted entirely
+
+Tests:
+- `test_full_load_inventory_round_trip` — writes effective inventory, reloads with `load_inventory()`, verifies `schema` at top level and version values preserved.  Passes against both minimal fixture and production `versions.toml`.
+
+### 6. Broad `except Exception` removed from `build_wrapper.py`
+
+**Problem:** `cmd_build()` caught ``except Exception`` around ``resolve_build_inputs()`` — programming defects (`AttributeError`, `TypeError`, `NameError`) were silently converted to ``error: …`` with exit 3 instead of producing a traceback.
+
+**Fix:** Replaced with five specific catches in MRO order:
+
+| Exception | Exit | Scope |
+|---|---|---|
+| `VersionConfigError` | 3 | Inventory validation, override policy, effective config |
+| `tomllib.TOMLDecodeError` | 3 | Malformed TOML in inventory file |
+| `EffectiveInventoryOutputError` | 2 | Unsafe effective inventory output path |
+| `FileNotFoundError` | 3 | Missing inventory file |
+| `OSError` | 3 | Filesystem errors (permissions, disk full) |
+
+`EffectiveInventoryOutputError` extends ``ValueError`` but is caught explicitly (not via a broad ``except ValueError``) so unrelated ``ValueError`` subclasses propagate as tracebacks.
+
+### 7. `env` command now writes effective inventory for downstream Compose
+
+**Problem:** ``versions.py env`` excluded ``EFFECTIVE_VERSIONS_FILE`` and never wrote the generated effective inventory.  ``eval "$(python3 docker/versions.py env)" && docker compose …`` was missing the required build input, breaking the low-level Compose contract.
+
+**Fix:** ``_cmd_env`` now mirrors ``_cmd_compose``: writes effective inventory to disk and includes ``EFFECTIVE_VERSIONS_FILE`` in the output.  Both commands use the same ``render_build_environment()`` function.  ``--effective-inventory-output`` argument added to ``env`` subcommand.
+
+Tests:
+- ``test_writes_effective_inventory_file`` — verifies ``.docker-generated/versions.toml`` exists after ``env``
+- ``test_effective_versions_file_env_var`` — ``EFFECTIVE_VERSIONS_FILE`` present and points to default path
+- ``test_effective_inventory_output_override`` — ``--effective-inventory-output`` changes the path
+- ``test_generated_inventory_is_loadable`` — generated TOML passes ``load_inventory()`` round-trip
+- ``test_override_writes_effective_inventory`` — ``--override`` reflects in both env output and generated file
+- ``test_shell_roundtrip_includes_effective_versions_file`` — ``eval "$(env)" && test -f "$EFFECTIVE_VERSIONS_FILE"`` succeeds
+
+## Key Architecture Decisions
+
+- **Single renderer**: `env`, `compose`, and `build_wrapper.py` all use `rendering.render_build_environment()`
+- **No duplicate mapping**: `build_wrapper.py` has no hardcoded version constants or parallel version table
+- **TOML generation**: `write_effective_inventory()` writes atomic TOML via `tempfile.mkstemp()` + `os.replace()`
+- **TOML ordering**: scalars before tables — ``schema = 1`` before ``[stages]``; inline tables omit ``None`` values
+- **Compose command**: `versions.py compose -- build pi` writes effective inventory, renders environment, runs `docker compose`
+- **Exit code propagation**: `subprocess.run(check=False)` returns Compose exit code verbatim
+- **Priority**: `.env` operational values < resolved version values (same-name keys only) < diagnostic updates (HOST_GATEWAY_IP)
+- **`.docker-generated/`**: generated effective inventory path, gitignored
+- **Output path safety**: relative-only, no traversal, no symlink escapes, no `versions.toml` overwrite — validated at the single write entry point
+- **Canonical parsing**: `_parse_overrides` reused; duplicate paths, empty keys, whitespace all produce consistent exit 2 in both ``versions.py`` and ``build_wrapper.py``
+- **Exception safety**: `build_wrapper.py` catches only expected errors (VersionConfigError, TOMLDecodeError, EffectiveInventoryOutputError, FileNotFoundError, OSError — no `except Exception`); programming defects propagate as uncaught tracebacks
+- **Acyclic modules**: `effective.py` → `errors.py` (no rendering import); `rendering.py` → `effective` + `errors` (one-way); cycle `effective ↔ rendering` broken
+
+## Stage 4 Repair Rounds
+
+1. **Effective inventory written** — `resolve_build_inputs` now writes `.docker-generated/versions.toml` before Compose
+2. **Operational env preserved** — merge order `{**merged, **version_env, **updates}` instead of `{**version_env, **updates}`
+3. **Output-path validation** — `_validate_inventory_output` rejects absolute, traversal, versions.toml, symlinks (8 tests)
+4. **Canonical override parsing** — `build_wrapper.py` reuses `_parse_overrides`; duplicate rejection + exception safety (2 tests)
+5. **TOML scalars-before-tables ordering** — `schema = 1` at top level; inline table `None`-omission; full `load_inventory()` round-trip (1 test)
+6. **Broad `except Exception` removed** — 5 specific catches (VersionConfigError, TOMLDecodeError, EffectiveInventoryOutputError, FileNotFoundError, OSError); programming defects propagate
+7. **`env` now writes effective inventory** — `EFFECTIVE_VERSIONS_FILE` included in output; ``eval "$(env)" && docker compose`` matches canonical ``compose`` contract (6 tests)
+8. **Dependency cycle broken** — `effective_environment` moved from `effective.py` to `rendering.py`; `EffectiveConfigError` imported from `errors.py`; `effective.py` no longer imports `rendering`
+9. **Explicit `EffectiveInventoryOutputError` catch** — `build_wrapper.py` catches the specific exception class instead of broad `ValueError`; unrelated `ValueError` subclasses propagate as tracebacks
+10. **`--platform` on `env`** — `env --platform linux-arm64` produces platform-specific artifact URLs matching `compose`/`build_wrapper` (3 tests)
+
+## Verification Evidence
+
+- **All 557 tests pass** with sanitized environment (`env -i`)
+- **No Docker daemon** contacted — all compose tests mock `subprocess.run`
+- **No network** — all rendering and build_wrapper tests use in-memory inventory
+- **Full round-trip** — generated effective inventory loads via `load_inventory()` without errors
+- **compileall**: clean
+- **git diff --check**: clean
+- **openspec validate --strict**: valid
+- **Low-level Compose parity**: `eval "$(env)" && docker compose …` now works identically to `compose …`

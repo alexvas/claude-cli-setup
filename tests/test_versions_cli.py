@@ -194,7 +194,25 @@ class TestCliEnv(unittest.TestCase):
         "PI_VERSION", "OPENSPEC_VERSION",
         "OH_MY_ZSH_VERSION",
         "PI_READ_VERSION", "PI_CODEX_USAGE_VERSION", "PI_PROXY_VERSION",
+        "EFFECTIVE_VERSIONS_FILE",
     })
+
+    _GENERATED_DIR = _REPO_ROOT / ".docker-generated"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._cleanup_generated()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._cleanup_generated()
+
+    @staticmethod
+    def _cleanup_generated():
+        import shutil
+        generated = _REPO_ROOT / ".docker-generated"
+        if generated.exists():
+            shutil.rmtree(generated)
 
     def test_text_output_format(self):
         result = _run("env")
@@ -271,6 +289,95 @@ class TestCliEnv(unittest.TestCase):
                 self.assertIn("'rustfmt clippy'", line)
                 return
         self.fail("RUST_COMPONENTS not found in env output")
+
+    def test_writes_effective_inventory_file(self):
+        """env writes .docker-generated/versions.toml to disk."""
+        result = _run("env")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = self._GENERATED_DIR / "versions.toml"
+        self.assertTrue(generated.exists(),
+                        f"Expected {generated} to exist after env")
+
+    def test_effective_versions_file_env_var(self):
+        """EFFECTIVE_VERSIONS_FILE is present and points to the generated path."""
+        result = _run("env", "--json")
+        data = json.loads(result.stdout)
+        self.assertEqual(
+            data["EFFECTIVE_VERSIONS_FILE"],
+            ".docker-generated/versions.toml",
+        )
+
+    def test_effective_inventory_output_override(self):
+        """--effective-inventory-output changes the generated file path."""
+        result = _run(
+            "env", "--json",
+            "--effective-inventory-output", ".docker-generated/custom.toml",
+        )
+        data = json.loads(result.stdout)
+        self.assertEqual(data["EFFECTIVE_VERSIONS_FILE"], ".docker-generated/custom.toml")
+
+    def test_generated_inventory_is_loadable(self):
+        """The generated TOML loads as a valid effective inventory."""
+        from docker.versioning.inventory import load_inventory
+        result = _run("env")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = self._GENERATED_DIR / "versions.toml"
+        inv = load_inventory(generated)
+        self.assertEqual(inv.schema, 1)
+        self.assertEqual(inv.stages.toolchain.python.version, "3.14.6")
+
+    def test_override_writes_effective_inventory(self):
+        """env --override writes the overridden value into the generated file."""
+        from docker.versioning.inventory import load_inventory
+        result = _run(
+            "env", "--json",
+            "--override", "stages.toolchain.python.version=3.14.7",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["PYTHON_VERSION"], "3.14.7")
+        # The generated file must also reflect the override
+        generated = self._GENERATED_DIR / "versions.toml"
+        inv = load_inventory(generated)
+        self.assertEqual(inv.stages.toolchain.python.version, "3.14.7")
+
+    def test_shell_roundtrip_includes_effective_versions_file(self):
+        """eval "$(env)" exports EFFECTIVE_VERSIONS_FILE for downstream compose."""
+        import subprocess as sp
+        result = _run("env")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        r = sp.run(
+            ["sh", "-c",
+             "eval \"$1\"\n"
+             + 'test "$EFFECTIVE_VERSIONS_FILE" = ".docker-generated/versions.toml"\n'
+             + 'test -f "$EFFECTIVE_VERSIONS_FILE"\n'
+             + 'echo "OK"',
+             "_", result.stdout],
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO_ROOT),
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"stderr: {r.stderr}\nstdout: {r.stdout}")
+        self.assertIn("OK", r.stdout)
+
+    def test_platform_default_is_linux_amd64(self):
+        """Default platform produces linux-amd64 artifact URLs."""
+        result = _run("env", "--json")
+        data = json.loads(result.stdout)
+        self.assertIn("x86_64-unknown-linux-gnu", data["UV_URL"])
+
+    def test_platform_flag_accepted(self):
+        """--platform linux-amd64 produces same result as default."""
+        result_default = _run("env", "--json")
+        result_explicit = _run("env", "--json", "--platform", "linux-amd64")
+        self.assertEqual(result_default.stdout, result_explicit.stdout)
+
+    def test_unknown_platform_exits_with_error(self):
+        """--platform nonexistent-os exits with config error."""
+        result = _run("env", "--platform", "nonexistent-os")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("error", result.stderr.lower())
 
 
 # ---------------------------------------------------------------------------

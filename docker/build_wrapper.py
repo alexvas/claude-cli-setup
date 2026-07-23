@@ -3,10 +3,14 @@
 Prepare Docker host reachability (rootless/rootful), probe via ephemeral host
 HTTP server, then build the Pi image.
 
+Version resolution is delegated to ``docker.versioning.rendering`` — the
+wrapper does not maintain its own mapping of selected values.
+
 Usage:
   python3 docker/build_wrapper.py diagnose
   python3 docker/build_wrapper.py apply [--yes]
   python3 docker/build_wrapper.py build [--yes] [--skip-override]
+         [--inventory PATH] [--override PATH=VALUE] [--platform PLATFORM]
 """
 
 from __future__ import annotations
@@ -24,11 +28,55 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+# Lazy imports for version resolution — only loaded during build, not diagnose/apply
+_versioning_imports: dict[str, object] = {}
+
 ROOT = Path(__file__).resolve().parent.parent
 DOCKER_DIR = Path(__file__).resolve().parent
 PROBE_IMAGE = os.environ.get("BUILD_WRAPPER_PROBE_IMAGE", "alpine:3.20")
 OVERRIDE_SRC = DOCKER_DIR / "rootless-docker.override.conf"
 OVERRIDE_DEST = Path.home() / ".config/systemd/user/docker.service.d/override.conf"
+
+
+def resolve_build_inputs(
+    inventory_path: Path | None = None,
+    overrides: dict[str, str] | None = None,
+    *,
+    platform: str = "linux-amd64",
+    inventory_output: str = ".docker-generated/versions.toml",
+) -> dict[str, str]:
+    """Resolve version build arguments from ``versions.toml``.
+
+    Delegates to ``docker.versioning.rendering`` so that
+    ``build_wrapper.py`` and ``versions.py compose`` produce identical
+    build environments.
+    """
+    from docker.versioning.inventory import load_inventory
+    from docker.versioning.effective import apply_overrides
+    from docker.versioning.rendering import (
+        render_build_environment,
+        write_effective_inventory,
+    )
+
+    if inventory_path is None:
+        inventory_path = ROOT / "versions.toml"
+    inv = load_inventory(inventory_path)
+    eff = apply_overrides(inv, overrides or {})
+
+    # Write the effective inventory so that the Docker build input
+    # (EFFECTIVE_VERSIONS_FILE) actually exists.
+    write_effective_inventory(
+        eff,
+        ROOT / inventory_output,
+        repo_root=ROOT,
+        output_path=inventory_output,
+    )
+
+    return dict(render_build_environment(
+        eff,
+        platform=platform,
+        inventory_output=inventory_output,
+    ))
 
 
 class HostProbeServer:
@@ -375,6 +423,51 @@ def cmd_build(args: argparse.Namespace) -> int:
     dotenv = load_dotenv(env_path)
     merged = merge_env(dotenv)
 
+    # Resolve version environment from versions.toml (not .env).
+    # This is the single authoritative source — no duplicate mapping.
+    # Reuse the canonical override parser so that duplicate paths,
+    # whitespace, and empty tokens are rejected consistently.
+    inventory_path = getattr(args, "inventory", None)
+    if inventory_path:
+        inventory_path = Path(inventory_path)
+    overrides_raw: list[str] = getattr(args, "overrides", []) or []
+    platform = getattr(args, "platform", "linux-amd64")
+
+    from docker.versioning.cli import _parse_overrides
+    import tomllib
+    from docker.versioning.errors import VersionConfigError
+    from docker.versioning.rendering import EffectiveInventoryOutputError
+
+    try:
+        overrides = _parse_overrides(overrides_raw)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        version_env = resolve_build_inputs(
+            inventory_path=inventory_path,
+            overrides=overrides or None,
+            platform=platform,
+        )
+    except VersionConfigError as exc:
+        # Inventory validation, override policy, effective config
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except tomllib.TOMLDecodeError as exc:
+        print(f"error: invalid TOML in inventory: {exc}", file=sys.stderr)
+        return 3
+    except EffectiveInventoryOutputError as exc:
+        # Unsafe --effective-inventory-output path
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except FileNotFoundError as exc:
+        print(f"error: inventory not found: {exc}", file=sys.stderr)
+        return 3
+    except OSError as exc:
+        print(f"error: cannot read inventory: {exc}", file=sys.stderr)
+        return 3
+
     if docker_rootless() and not override_matches() and not args.skip_override:
         print("Rootless Docker without port-forward override.")
         if args.yes:
@@ -404,7 +497,10 @@ def cmd_build(args: argparse.Namespace) -> int:
             print(f"Created {env_path} from .env.example")
     update_env_file(env_path, updates, remove_keys=["SOCKS_HOST"])
 
-    env_extra = {**updates, **{k: v for k, v in merged.items() if k not in updates}}
+    # Combine: operational values from .env (merged) first,
+    # then validated version values override only conflicting
+    # version keys, then diagnostic updates (HOST_GATEWAY_IP) last.
+    env_extra = {**merged, **version_env, **updates}
     compose_build(env_extra, ["pi"])
     print("\nPi build finished.")
     return 0
@@ -437,6 +533,26 @@ def main() -> int:
     p_build = sub.add_parser("build", help="Probe, update .env, build images")
     add_yes_arg(p_build)
     p_build.add_argument("--skip-override", action="store_true", help="Do not offer rootless override")
+    p_build.add_argument(
+        "--inventory",
+        default=None,
+        metavar="PATH",
+        help="Path to versions.toml (default: versions.toml in repo root)",
+    )
+    p_build.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        dest="overrides",
+        metavar="PATH=VALUE",
+        help="Override a version value (repeatable)",
+    )
+    p_build.add_argument(
+        "--platform",
+        default="linux-amd64",
+        metavar="PLATFORM",
+        help="Target platform (default: linux-amd64)",
+    )
 
     args = parser.parse_args()
     args.yes = effective_yes(args)

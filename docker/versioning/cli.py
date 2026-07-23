@@ -13,10 +13,13 @@ from typing import Mapping, Optional, Sequence
 from .effective import (
     EffectiveConfiguration,
     apply_overrides,
-    effective_environment,
     get_path,
     serialize_effective_inventory,
     to_plain_data,
+)
+from .rendering import (
+    compose_command,
+    render_build_environment,
 )
 from .errors import (
     InventoryError,
@@ -112,13 +115,111 @@ def _cmd_env(
     args: argparse.Namespace,
     effective: EffectiveConfiguration,
 ) -> int:
-    env = effective_environment(effective)
+    """Write effective inventory and emit full build environment.
+
+    Mirrors the Compose contract: the generated effective inventory is
+    written to disk and ``EFFECTIVE_VERSIONS_FILE`` is included in the
+    output so that ``eval "$(python3 docker/versions.py env)" && docker
+    compose …`` works identically to ``versions.py compose``.
+    """
+    from pathlib import Path
+    from .rendering import (
+        EffectiveInventoryOutputError,
+        write_effective_inventory,
+    )
+
+    inventory_output = getattr(
+        args, "effective_inventory_output",
+        ".docker-generated/versions.toml",
+    )
+    platform = getattr(args, "platform", "linux-amd64")
+    repo_root = Path(__file__).parent.parent.parent
+    try:
+        write_effective_inventory(
+            effective,
+            repo_root / inventory_output,
+            repo_root=repo_root,
+            output_path=inventory_output,
+        )
+    except EffectiveInventoryOutputError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    env = render_build_environment(effective, platform=platform, inventory_output=inventory_output)
     if args.json:
         print(_json_dumps(to_plain_data(env)))
     else:
         for name in sorted(env):
             print(f"export {name}={_shell_escape(env[name])}")
     return EXIT_OK
+
+
+def _cmd_compose(
+    args: argparse.Namespace,
+    effective: EffectiveConfiguration,
+) -> int:
+    """Write effective inventory, render build environment, run compose."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from .rendering import (
+        compose_command,
+        EffectiveInventoryOutputError,
+        write_effective_inventory,
+    )
+
+    platform = getattr(args, "platform", "linux-amd64")
+    inventory_output = getattr(
+        args, "effective_inventory_output",
+        ".docker-generated/versions.toml",
+    )
+
+    # Strip leading '--' if argparse.REMAINDER preserved it
+    compose_args: list[str] = list(getattr(args, "compose_args", []) or [])
+    if compose_args and compose_args[0] == "--":
+        compose_args = compose_args[1:]
+
+    # 1. Write generated effective inventory
+    repo_root = Path(__file__).parent.parent.parent
+    try:
+        write_effective_inventory(
+            effective,
+            repo_root / inventory_output,
+            repo_root=repo_root,
+            output_path=inventory_output,
+        )
+    except EffectiveInventoryOutputError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    # 2. Render build environment
+    env_vars = render_build_environment(
+        effective,
+        platform=platform,
+        inventory_output=inventory_output,
+    )
+
+    # 3. Merge with os.environ (resolved values take priority)
+    process_env = os.environ.copy()
+    process_env.update(env_vars)
+
+    # 4. Run docker compose
+    cmd = compose_command(compose_args)
+    try:
+        proc = subprocess.run(
+            list(cmd),
+            cwd=str(repo_root),
+            env=process_env,
+            check=False,
+        )
+        return proc.returncode
+    except FileNotFoundError:
+        print(
+            f"error: docker not found — is Docker installed and on PATH?",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def _json_dumps(value: object) -> str:
@@ -186,8 +287,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # env
-    sub.add_parser(
+    env_p = sub.add_parser(
         "env", parents=[common], help="Emit effective environment variables"
+    )
+    env_p.add_argument(
+        "--platform",
+        default="linux-amd64",
+        metavar="PLATFORM",
+        help="Target platform for artifact selection (default: linux-amd64)",
+    )
+    env_p.add_argument(
+        "--effective-inventory-output",
+        default=".docker-generated/versions.toml",
+        metavar="PATH",
+        help="Path for generated effective inventory (default: .docker-generated/versions.toml)",
+    )
+
+    # compose
+    compose_p = sub.add_parser(
+        "compose",
+        parents=[common],
+        help="Render build args and run docker compose",
+    )
+    compose_p.add_argument(
+        "--platform",
+        default="linux-amd64",
+        metavar="PLATFORM",
+        help="Target platform for artifact selection (default: linux-amd64)",
+    )
+    compose_p.add_argument(
+        "--effective-inventory-output",
+        default=".docker-generated/versions.toml",
+        metavar="PATH",
+        help="Path for generated effective inventory (default: .docker-generated/versions.toml)",
+    )
+    compose_p.add_argument(
+        "compose_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments for docker compose (after --)",
     )
 
     # check-updates (separate common args — overrides are not relevant here)
@@ -497,6 +634,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _cmd_get(args, effective)
         elif args.command == "env":
             return _cmd_env(args, effective)
+        elif args.command == "compose":
+            return _cmd_compose(args, effective)
     except UnknownPathError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_UNKNOWN_PATH

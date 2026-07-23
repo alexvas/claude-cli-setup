@@ -46,13 +46,13 @@ This stage consumes inventory provider metadata but is independent of build inte
 
 This stage defines the boundary between effective configuration and Compose/build-wrapper execution. Tests mock process execution; a Docker daemon is not required.
 
-- [ ] 4.1 **RED:** Add tests for required Compose argument rendering, `NODE_BASE_IMAGE=<tag>@<digest>`, effective-inventory build input, argument quoting, and missing-value failures
-- [ ] 4.2 **RED:** Add mocked-subprocess tests proving the canonical `compose` command and `docker/build_wrapper.py` receive the same validated values and propagate failures
-- [ ] 4.3 **GREEN:** Implement canonical `versions.py compose` process orchestration and low-level environment export
-- [ ] 4.4 **GREEN:** Integrate `docker/build_wrapper.py` with the resolver without maintaining a second mapping of selected values
-- [ ] 4.5 **GREEN:** Generate the effective inventory input that the Docker build will copy into the runtime image
-- [ ] 4.6 **INTROSPECT:** Inspect rendered commands/environments for default and override builds and map each argument to one inventory path
-- [ ] 4.7 **VALIDATE:** Run orchestration tests with mocked Docker/Compose executables and confirm no Docker daemon or network is contacted
+- [x] 4.1 **RED:** Add tests for required Compose argument rendering, `NODE_BASE_IMAGE=<tag>@<digest>`, effective-inventory build input, argument quoting, and missing-value failures
+- [x] 4.2 **RED:** Add mocked-subprocess tests proving the canonical `compose` command and `docker/build_wrapper.py` receive the same validated values and propagate failures
+- [x] 4.3 **GREEN:** Implement canonical `versions.py compose` process orchestration and low-level environment export
+- [x] 4.4 **GREEN:** Integrate `docker/build_wrapper.py` with the resolver without maintaining a second mapping of selected values
+- [x] 4.5 **GREEN:** Generate the effective inventory input that the Docker build will copy into the runtime image
+- [x] 4.6 **INTROSPECT:** Inspect rendered commands/environments for default and override builds and map each argument to one inventory path
+- [x] 4.7 **VALIDATE:** Run orchestration tests with mocked Docker/Compose executables and confirm no Docker daemon or network is contacted
 
 ## 5. Migrate semantic source files — depends on Stage 4, no Docker daemon
 

@@ -13,11 +13,11 @@ from docker.versioning.effective import (
     EffectiveConfiguration,
 
     apply_overrides,
-    effective_environment,
     get_path,
     serialize_effective_inventory,
     to_plain_data,
 )
+from docker.versioning.rendering import effective_environment
 from docker.versioning.errors import (
     OverrideValidationError,
     UnknownPathError,
