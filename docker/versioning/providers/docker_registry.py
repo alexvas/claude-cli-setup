@@ -20,6 +20,23 @@ _DOCKER_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _AUTH_REALM_RE = re.compile(r'realm="([^"]+)"')
 _AUTH_SERVICE_RE = re.compile(r'service="([^"]+)"')
 
+# Docker Hub hostname aliases normalized to the canonical Registry API endpoint.
+_DOCKER_HUB_ALIASES: dict[str, str] = {
+    "docker.io": "registry-1.docker.io",
+    "index.docker.io": "registry-1.docker.io",
+}
+
+
+def _header_case_insensitive(
+    headers: "Mapping[str, str]", name: str
+) -> str | None:
+    """Look up an HTTP header name case-insensitively."""
+    name_lower = name.lower()
+    for key, val in headers.items():
+        if key.lower() == name_lower:
+            return val
+    return None
+
 
 class DockerRegistryProvider:
     name = "docker-registry"
@@ -55,11 +72,14 @@ class DockerRegistryProvider:
         repository = source.repository
         tag = target.current
 
+        # Normalize Docker Hub aliases to the canonical Registry API endpoint.
+        api_registry = _normalize_registry(registry)
+
         # Acquire a bearer token if the registry requires authentication.
         # Docker Hub issues 401 with WWW-Authenticate for anonymous pulls.
-        bearer = self._acquire_token(registry, repository, context)
+        bearer = self._acquire_token(api_registry, repository, context)
 
-        manifest_url = f"https://{registry}/v2/{repository}/manifests/{tag}"
+        manifest_url = f"https://{api_registry}/v2/{repository}/manifests/{tag}"
         headers = {
             "Accept": (
                 "application/vnd.docker.distribution.manifest.v2+json, "
@@ -90,7 +110,7 @@ class DockerRegistryProvider:
                 )
             )
 
-        upstream_digest = resp.headers.get("Docker-Content-Digest")
+        upstream_digest = _header_case_insensitive(resp.headers, "Docker-Content-Digest")
         if not upstream_digest:
             return ProviderResult(
                 unavailable_reason=(
@@ -148,7 +168,7 @@ class DockerRegistryProvider:
         if resp.status != 401:
             return None
 
-        www_auth = resp.headers.get("WWW-Authenticate", "")
+        www_auth = _header_case_insensitive(resp.headers, "WWW-Authenticate") or ""
         realm = _extract_www_auth_param(www_auth, "realm")
         service = _extract_www_auth_param(www_auth, "service")
         scopes = _extract_www_auth_param(www_auth, "scope")
@@ -177,6 +197,14 @@ class DockerRegistryProvider:
 
         token = data.get("token") or data.get("access_token")
         return token if isinstance(token, str) else None
+
+
+def _normalize_registry(registry: str) -> str:
+    """Normalize known Docker Hub aliases to the canonical Registry API host.
+
+    Non-Docker-Hub hostnames are returned unchanged.
+    """
+    return _DOCKER_HUB_ALIASES.get(registry, registry)
 
 
 def _extract_www_auth_param(header: str, key: str) -> str | None:

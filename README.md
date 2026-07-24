@@ -2,112 +2,24 @@
 
 # Pi Docker runtime
 
-Изолированная Docker-среда для запуска π coding agent и инструментов разработки.
+Изолированное Docker-окружение для Pi и инструментов разработки. Выбранные версии всех входов, кроме Debian, хранятся в `versions.toml`; не дублируйте их в README, `.env`, Dockerfile или Compose.
 
 ## Требования
 
 - Docker Engine 24+ с BuildKit
-- Docker Compose v2 (`docker compose`)
+- Docker Compose v2
+- Python 3 на хосте
 
-## Состав
+## 1. Сборка окружения
 
-| Файл | Назначение |
-|------|------------|
-| `Dockerfile` | Multi-stage образ Pi и инструментов |
-| `docker-compose.yml` | Compose-сервис `pi` |
-| `docker/compose.proj2.yml`, `docker/compose.proj3.yml` | Дополнительные mounts проектов |
-| `docker/build_wrapper.py` | Диагностика host gateway и сборка |
-| `launch-pi.py` | TUI-выбор проектов и запуск контейнера |
-| `.env.example` | Шаблон конфигурации |
-
-В образ входят `pi`, OpenSpec, Rust, `uv`, `ty`, `rtk`, `fd`, Yarn Berry, MCP, git, zsh, vim, jq, ripgrep и другие инструменты. Контейнер работает от пользователя `dev`; `DEV_UID`/`DEV_GID` должны соответствовать владельцу файлов на хосте.
-
-## Настройка
-
-```bash
-cp .env.example .env
-```
-
-Задайте в `.env`:
-
-- `PROJECT_PATH_1` — обязательный путь к первому проекту;
-- `PROJECT_PATH_2`, `PROJECT_PATH_3` — дополнительные проекты;
-- `COMPOSE_FILE` — базовый compose и необходимые fragments;
-- `HOST_GATEWAY_IP` — адрес хоста для rootless Docker, обычно задаётся wrapper;
-- `DEV_UID`, `DEV_GID` — UID/GID пользователя `dev`.
-
-Параметры `SOCKS_PORT`, `SOCKS_HOST` и `EXTERNAL_IP` больше не используются для сборки и удалены из поддерживаемого интерфейса. Доступ к host services во время работы контейнера обеспечивается через `host.docker.internal`.
-
-Проверьте итоговую конфигурацию (вывод может содержать секреты):
-
-```bash
-./docker/versions.py compose config
-```
-
-## Управление версиями
-
-`versions.toml` — единственный поддерживаемый источник выбранных версий,
-ревизий, URL и digest для non-Debian инструментов. Не задавайте эти значения в
-`.env`, Dockerfile или Compose. Перед сборкой можно выполнить локальную проверку:
+Проверьте конфигурацию версий и соберите сервис `pi`:
 
 ```bash
 ./docker/versions.py validate
-```
-
-Canonical build всегда запускается через `./docker/versions.py compose`.
-Для низкоуровневой интеграции команда ниже печатает shell-safe `export`-строки;
-их можно загрузить в текущий shell перед ручным вызовом Compose:
-
-```bash
-./docker/versions.py env
-```
-
-Допустимые overrides передаются явно в resolver:
-
-```bash
-./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
-```
-
-Политика override хранится отдельно от выбранной версии в `versions.toml`.
-Грамматика ограничена операторами `==, >, >=, <, <=` над полными числовыми
-версиями `X.Y.Z`; clauses через запятую означают AND. Wildcards, OR, неполные
-версии и prerelease запрещены, если policy явно не разрешает их.
-
-Проверка обновлений выполняется только по явной команде и не участвует в
-обычных build, launch, validate или runtime setup:
-
-```bash
-./docker/versions.py check-updates
-./docker/versions.py check-updates --only stages.toolchain.python --json
-./docker/versions.py check-updates --suggest
-./docker/versions.py check-updates --strict
-./docker/versions.py check-updates --fail-on-outdated
-```
-
-Обычный режим best-effort сообщает недоступные providers, но не делает сборку
-зависимой от них. `--strict` превращает provider failures в ошибку;
-`--fail-on-outdated` нужен для policy checks. `--suggest` — **non-mutating**:
-он печатает reviewable candidate values, URL и опубликованные checksums, но не
-редактирует репозиторий. Переносите предложение в `versions.toml` вручную,
-проверяйте upstream release/checksum, запускайте `validate`, тесты и canonical
-build, затем проверяйте effective inventory в образе.
-
-Границы воспроизводимости: inventory фиксирует non-Debian inputs, но не
-замораживает Debian repositories, BuildKit metadata и не гарантирует
-byte-identical OCI image. Установка prebuilt `rtk`/`fd` остаётся в области
-завершённого изменения `split-rtk-fd-prebuilt`, а установка npm-расширений в
-смонтированный Pi home — `pin-pi-read-npm`; общий inventory не меняет ownership
-этих workflows.
-
-## Сборка
-
-Rootful Docker:
-
-```bash
 ./docker/versions.py compose build pi
 ```
 
-Rootless Docker:
+Для сборки не нужны путь проекта и `.env`. Диагностика host gateway для rootless Docker:
 
 ```bash
 python3 docker/build_wrapper.py diagnose
@@ -115,105 +27,135 @@ python3 docker/build_wrapper.py apply -y
 python3 docker/build_wrapper.py build -y
 ```
 
-Wrapper записывает обнаруженный `HOST_GATEWAY_IP` в `.env`, сохраняет runtime mapping и собирает именно сервис `pi`.
-
-Образ предоставляет прямые исполняемые файлы `python` и `python3` для настроенного CPython под управлением uv из любого каталога. Они не запускают `uv run` и не синхронизируют окружение проекта. Отдельных команд `pip` и `pip3` нет; устанавливайте пакеты явно, например `uv pip install --python "$(command -v python3)" <package>`.
-
-Версию Python можно явно переопределить при сборке:
+`./docker/versions.py env` печатает безопасные для shell разрешённые входы сборки. Явное переопределение Python:
 
 ```bash
 ./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
-Для полного rebuild:
+Ограничения поддерживают только `==, >, >=, <, <=` и полные версии `X.Y.Z`. Шаблоны, неполные версии, OR и prerelease запрещены, если политика явно не разрешает их. Конфигурация версий фиксирует проверенные входы, кроме Debian, но репозитории Debian и метаданные BuildKit не гарантируют побайтово одинаковый OCI-образ.
+
+## 2. Запуск окружения
+
+Откройте интерактивный выбор проектов:
 
 ```bash
-./docker/versions.py compose build --no-cache pi
+./launch-pi.py
 ```
 
-### Проверка кеширования BuildKit
+Основной проект становится рабочим каталогом контейнера и монтируется 1:1 по тому же абсолютному пути. Можно выбрать до двух дополнительных 1:1-монтирований. Хостовый `~/.pi` монтируется в `/home/dev/.pi`. Корень дерева TUI можно задать через `BASE_PROJECT_DIR` в `.env` или `--base-project-dir`.
 
-Используйте обычный вывод прогресса, чтобы отличать кешированные шаги от выполненных:
+Низкоуровневый запуск доступен при заданном `PROJECT_PATH_1`:
 
 ```bash
-./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
-./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
+./docker/versions.py compose run --rm pi
 ```
 
-Вторая сборка должна использовать кеш. Для тестирования инвалидации кеша —
-измените версию в ``versions.toml`` (например, Pi или OpenSpec),
-пересоберите и откатите правку:
+## 3. Обновление компонентов окружения
+
+### Обновление Pi после релиза
+
+1. Проверьте только Pi и запросите предложение:
+
+   ```bash
+   ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
+   ```
+
+2. `--suggest` работает в режиме **non-mutating**: проверьте upstream-релиз и вручную внесите принятое значение и связанные метаданные в `stages.pi-tools.pi` файла `versions.toml`.
+3. Проверьте конфигурацию версий и diff:
+
+   ```bash
+   ./docker/versions.py validate
+   git diff -- versions.toml
+   ```
+
+4. Пересоберите и проверьте runtime-образ:
+
+   ```bash
+   ./docker/versions.py compose build pi
+   ./docker/verify-runtime.sh pi-cli-pi:latest
+   ```
+
+### Жизненный цикл компонентов
+
+| Категория | Примеры | Место установки / владелец | Источник обновления |
+|---|---|---|---|
+| Base image | Базовый Node | OCI-слои образа | Docker registry в `versions.toml` |
+| Toolchain | Rust, uv, Python, ty | Пути builder/образа | Rust channel, GitHub, uv, PyPI |
+| Node CLIs | Pi, OpenSpec | Глобальные инструменты образа | npm |
+| Prebuilt binaries | rtk, fd | Runtime-бинарники образа | GitHub releases и checksums |
+| Shell runtime | Oh My Zsh | Содержимое `/home/dev` в образе | Git revision |
+| Pi extensions | pi-read, usage, proxy, регистрация rtk | Хостовое состояние `/home/dev/.pi` | npm-метаданные `runtime.pi-extensions` |
+| Debian packages | Системные утилиты и библиотеки | Системные пути образа | APT; вне поиска обновлений `versions.toml` |
+
+Для другого управляемого компонента найдите путь параметра в конфигурации, выполните `check-updates --only <path> --suggest`, вручную проверьте и примените изменение, затем запустите validate, просмотр diff, сборку и проверку. Для `runtime.pi-extensions` сборка обновляет итоговую конфигурацию версий образа, но не смонтированное состояние; обновите его в разделе «Обслуживание».
+
+### Опции проверки обновлений
+
+Чтобы проверить все управляемые компоненты, запустите команду без дополнительных опций:
 
 ```bash
-./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
+./docker/versions.py check-updates
 ```
 
-Сборка с изменённым Pi должна пересобрать только установку Pi (сохраняя кеш
-OpenSpec). Сборка с изменённым OpenSpec инвалидирует слой OpenSpec,
-но сохраняет кеш установки Pi.
-Проверка runtime-инструментов от имени `dev`:
+Она выводит сводный список компонентов и для каждого указывает, доступно ли обновление.
+
+- **Интерактивный просмотр:** `--only <provider-or-path>` сужает поиск, `--suggest` добавляет non-mutating TOML-предложения.
+- **Автоматизация и policy:** `--json` выдаёт машинный формат, `--strict` завершает работу при ошибке provider, `--fail-on-outdated` — при найденном обновлении.
+- **Расширенный поиск и cache:** `--include-prerelease` включает prerelease; `--cache-ttl`, `--cache-dir` и `--no-cache` управляют HTTP-кэшем поиска.
+
+Обычные сборка, validate, запуск и установка расширений никогда не ищут обновления.
+
+## Обслуживание
+
+### Проверка образа
 
 ```bash
 ./docker/verify-runtime.sh pi-cli-pi:latest
 ```
 
-### Установка расширений Pi и регистрация rtk
+### Обновление смонтированных Pi extensions
 
-Расширения Pi и интеграция rtk устанавливаются не в образ, а в смонтированную
-хостовую директорию `/home/dev/.pi` через защищённый скрипт. После первого
-запуска контейнера выполните:
+После изменения `runtime.pi-extensions` запустите контейнер с нужным Pi home и защищённый идемпотентный установщик:
 
 ```bash
 ./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
-Скрипт устанавливает закреплённые версии `@arcanemachine/pi-read`,
-`@llblab/pi-codex-usage`, `pi-proxy` и регистрирует
-`rtk` для Pi. Повторный запуск безопасен — установка идемпотентна.
-Без смонтированной `/home/dev/.pi` скрипт завершится с ошибкой.
+### Исправление владельца и прав на хосте
 
-Кеш BuildKit можно освобождать командой `docker builder prune`; используйте
-`-af` только для полного сброса кеша.
+При использовании rootless Docker ошибка `EACCES` может возникнуть в двух случаях:
 
-## Запуск
+1. Агент внутри контейнера не может изменить файл, созданный пользователем на хосте.
+2. Пользователь на хосте не может изменить или прочитать файл, созданный внутри контейнера.
+
+Чтобы предоставить обеим сторонам необходимые права, назначьте владельцем целевого каталога пользователя и группу `docker-dev`, а затем разрешите владельцу и группе чтение и запись:
 
 ```bash
-./docker/versions.py compose run --rm pi
-
-./docker/versions.py compose run --rm pi pi --version
-./docker/versions.py compose run --rm pi bash -lc 'openspec --help'
-./docker/verify-runtime.sh pi-cli-pi:latest
-python3 launch-pi.py
+sudo chown -R <docker-dev>:<docker-dev> /path/you-intend-to-own
+chmod -R ug+rwX /path/you-intend-to-own
 ```
 
-`launch-pi.py` позволяет выбрать до трёх проектов и запускает `docker compose run ... pi`. Дополнительные проекты подключаются fragments из `docker/`.
+В конфигурации rootless Docker пользователю и группе `docker-dev`, как правило, соответствуют UID/GID `100999`. Пользователя хоста также необходимо добавить в группу `docker-dev`:
 
-## Shell prompt
+```bash
+sudo usermod -aG <docker-dev> "$USER"
+```
 
-Единственный поддерживаемый prompt-файл — `/home/dev/.pi-zsh-prompt`. Другие prompt-файлы не загружаются.
+Перед выполнением команд проверьте фактические UID/GID и ограничьте рекурсивное изменение прав только каталогом, которым намерены владеть.
 
-## Очистка Docker storage
+### Очистка Docker storage и кэша
 
-Старые имена prompt могут находиться в слоях старых rootless Docker images. Не удаляйте файлы вручную из `~/.local/share/docker/containerd/`. Сначала проверьте использование:
+Сначала проверьте использование, затем удаляйте только одноразовый build cache:
 
 ```bash
 docker system df -v
-```
-
-Затем при необходимости очистите build cache или неиспользуемые образы:
-
-```bash
 docker builder prune
-# более агрессивно:
-# docker builder prune -af
-# docker image prune -a
 ```
 
-Не используйте `--volumes`, если не проверили, что volumes не содержат нужные данные.
+Используйте `docker builder prune -af` или `docker image prune -a` только для намеренного полного сброса. Не добавляйте `--volumes`, пока не убедитесь, что все данные одноразовые.
 
 ## Устранение неполадок
 
-- **Нет host gateway** — запустите `python3 docker/build_wrapper.py diagnose`, для rootless при необходимости `apply -y`.
-- **Нет дополнительного проекта** — задайте `PROJECT_PATH_2`/`PROJECT_PATH_3` и добавьте соответствующий fragment в `COMPOSE_FILE`.
-- **EACCES** — `CHOWN_WORK_ON_START` исправляет права на смонтированных путях `PROJECT_PATH_*` и `/home/dev/.pi` (`mountpoint -q`). Проверьте `DEV_UID`/`DEV_GID` или установите `CHOWN_WORK_ON_START=0` и исправьте права вручную. Проверка прав образа: `./docker/verify-runtime.sh pi-cli-pi:latest`.
-- **Неожиданные старые имена** — обновите wrapper и README; сервис и команды имеют имя `pi`.
+- **EACCES в смонтированном проекте или Pi home:** сравните владельца на хосте с runtime UID/GID. Разрешите `CHOWN_WORK_ON_START=1` исправить реальные mount points либо отключите его и примените узкую процедуру из «Обслуживания».
+- **Provider обновлений недоступен:** повторите позже или проверьте кэш; включайте `--strict`, только если доступность provider обязательна.
