@@ -13,7 +13,7 @@ def main(argv=None) -> int:
     root = repo_root(__file__)
     p = argparse.ArgumentParser()
     p.add_argument("--image", default="pi-cli-pi:latest")
-    p.add_argument("--inventory", type=Path, default=Path(".docker-generated/versions.toml"))
+    p.add_argument("--inventory", type=Path, default=Path(".docker-generated/docker-constructor.toml"))
     p.add_argument("--pi-home", type=Path)
     p.add_argument(
         "--skip-extension-install", action="store_true",
@@ -49,12 +49,12 @@ openspec --version
 rtk --version
 fd --version
 git -C /home/dev/.oh-my-zsh rev-parse HEAD
-stat -c '%U:%G %a %n' /usr/local/share/pi-cli/versions.toml /usr/local/lib/pi-cli/docker/versions.py
+stat -c '%U:%G %a %n' /usr/local/share/pi-cli/docker-constructor.toml /usr/local/lib/pi-cli/docker/versions.py
 """
         ev.run("runtime-matrix", ["docker", "run", "--rm", "-e", "CHOWN_WORK_ON_START=0",
                                   args.image, "bash", "-c", command], cwd=root, timeout=900)
         ev.run("image-inventory", ["docker", "run", "--rm", "-e", "CHOWN_WORK_ON_START=0",
-                                         args.image, "cat", "/usr/local/share/pi-cli/versions.toml"], cwd=root)
+                                         args.image, "cat", "/usr/local/share/pi-cli/docker-constructor.toml"], cwd=root)
         ev.add_file("host_inventory", root / args.inventory)
         ok = True
         return 0

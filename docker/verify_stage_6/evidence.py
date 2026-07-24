@@ -151,7 +151,7 @@ def repo_root(script_file: str) -> Path:
     """Find the repository root from a script nested under docker/."""
     current = Path(script_file).resolve().parent
     for candidate in (current, *current.parents):
-        if (candidate / "versions.toml").is_file() and (candidate / "docker").is_dir():
+        if (candidate / "docker-constructor.toml").is_file() and (candidate / "docker").is_dir():
             return candidate
     raise EvidenceRunError(f"cannot locate repository root from {script_file}")
 

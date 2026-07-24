@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Define one authoritative declarative structural schema
-The project SHALL define the structural contract of `versions.toml` in one immutable standard-library Python schema registry. The registry SHALL describe required and optional fields, primitive and container types, constants, enums, string patterns, closed tables, dynamic maps, tagged variants, model factories, and attached named semantic rules without embedding selected dependency values.
+The project SHALL define the structural contract of `docker-constructor.toml` in one immutable standard-library Python schema registry. The registry SHALL describe required and optional fields, primitive and container types, constants, enums, string patterns, closed tables, dynamic maps, tagged variants, model factories, and attached named semantic rules without embedding selected dependency values.
 
 #### Scenario: Inspecting an inventory entry definition
 - **WHEN** a maintainer inspects the declarative definition for a versioned entry
@@ -16,13 +16,13 @@ The project SHALL define the structural contract of `versions.toml` in one immut
 #### Scenario: Keeping selected values outside the schema
 - **WHEN** the declarative registry or generated schema is inspected
 - **THEN** it SHALL define formats and relationships only
-- **AND** selected versions, revisions, artifact URLs, and digests SHALL remain sourced exclusively from `versions.toml`
+- **AND** selected versions, revisions, artifact URLs, and digests SHALL remain sourced exclusively from `docker-constructor.toml`
 
 ### Requirement: Interpret the schema generically into typed inventory values
 The resolver SHALL use a generic standard-library interpreter to validate parsed TOML against the registry and construct the established frozen typed inventory model. Ordinary structural validation SHALL not contain entry-specific path branches or a second allowed-key registry.
 
 #### Scenario: Loading the production inventory
-- **WHEN** the resolver loads the repository `versions.toml`
+- **WHEN** the resolver loads the repository `docker-constructor.toml`
 - **THEN** the generic interpreter SHALL validate its structure and produce the same public typed inventory values as the established inventory contract
 - **AND** resulting collections and models SHALL preserve immutability
 

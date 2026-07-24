@@ -121,7 +121,7 @@ stable_only = true
 
 
 def _write_fixture(td: str) -> str:
-    p = os.path.join(td, "versions.toml")
+    p = os.path.join(td, "docker-constructor.toml")
     with open(p, "w") as f:
         f.write(_FIXTURE_TOML)
     return p
@@ -195,14 +195,14 @@ def _make_run_side_effect(inv: dict):
         # --- stat ---
         if "stat -c" in cmd_str:
             path = cmd_args[cmd_args.index("-c") + 2]
-            if "versions.toml" in path:
+            if "docker-constructor.toml" in path:
                 return subprocess.CompletedProcess(cmd_args, 0, stdout="root:root 444\n", stderr="")
             if "versions.py" in path:
                 return subprocess.CompletedProcess(cmd_args, 0, stdout="root:root\n", stderr="")
             return subprocess.CompletedProcess(cmd_args, 0, stdout="dev:dev 755\n", stderr="")
 
         # --- writability checks ---
-        if "test -w /usr/local/share/pi-cli/versions.toml" in cmd_str:
+        if "test -w /usr/local/share/pi-cli/docker-constructor.toml" in cmd_str:
             return subprocess.CompletedProcess(cmd_args, 0, stdout="OK\n", stderr="")
         if "test -w /usr/local/lib/pi-cli/docker/versions.py" in cmd_str:
             return subprocess.CompletedProcess(cmd_args, 0, stdout="OK\n", stderr="")
@@ -400,7 +400,7 @@ class TestVerifyVersionedImage(unittest.TestCase):
 
             def _side(cmd_args, **kwargs):
                 cmd_str = " ".join(cmd_args)
-                if "stat -c" in cmd_str and "versions.toml" in cmd_str:
+                if "stat -c" in cmd_str and "docker-constructor.toml" in cmd_str:
                     return subprocess.CompletedProcess(cmd_args, 0, stdout="dev:dev 644\n", stderr="")
                 return _make_run_side_effect(_fixture_dict())(cmd_args, **kwargs)
 

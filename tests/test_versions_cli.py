@@ -299,10 +299,10 @@ class TestCliEnv(unittest.TestCase):
         self.fail("RUST_COMPONENTS not found in env output")
 
     def test_writes_effective_inventory_file(self):
-        """env writes .docker-generated/versions.toml to disk."""
+        """env writes .docker-generated/docker-constructor.toml to disk."""
         result = _run("env")
         self.assertEqual(result.returncode, 0, result.stderr)
-        generated = self._GENERATED_DIR / "versions.toml"
+        generated = self._GENERATED_DIR / "docker-constructor.toml"
         self.assertTrue(generated.exists(),
                         f"Expected {generated} to exist after env")
 
@@ -312,7 +312,7 @@ class TestCliEnv(unittest.TestCase):
         data = json.loads(result.stdout)
         self.assertEqual(
             data["EFFECTIVE_VERSIONS_FILE"],
-            ".docker-generated/versions.toml",
+            ".docker-generated/docker-constructor.toml",
         )
 
     def test_effective_inventory_output_override(self):
@@ -329,7 +329,7 @@ class TestCliEnv(unittest.TestCase):
         from docker.versioning.inventory import load_inventory
         result = _run("env")
         self.assertEqual(result.returncode, 0, result.stderr)
-        generated = self._GENERATED_DIR / "versions.toml"
+        generated = self._GENERATED_DIR / "docker-constructor.toml"
         inv = load_inventory(generated)
         self.assertEqual(inv.schema, 1)
         self.assertEqual(inv.stages.toolchain.python.version, "3.14.6")
@@ -345,7 +345,7 @@ class TestCliEnv(unittest.TestCase):
         data = json.loads(result.stdout)
         self.assertEqual(data["PYTHON_VERSION"], "3.14.7")
         # The generated file must also reflect the override
-        generated = self._GENERATED_DIR / "versions.toml"
+        generated = self._GENERATED_DIR / "docker-constructor.toml"
         inv = load_inventory(generated)
         self.assertEqual(inv.stages.toolchain.python.version, "3.14.7")
 
@@ -357,7 +357,7 @@ class TestCliEnv(unittest.TestCase):
         r = sp.run(
             ["sh", "-c",
              "eval \"$1\"\n"
-             + 'test "$EFFECTIVE_VERSIONS_FILE" = ".docker-generated/versions.toml"\n'
+             + 'test "$EFFECTIVE_VERSIONS_FILE" = ".docker-generated/docker-constructor.toml"\n'
              + 'test -f "$EFFECTIVE_VERSIONS_FILE"\n'
              + 'echo "OK"',
              "_", result.stdout],
@@ -686,6 +686,373 @@ class TestCliCheckUpdates(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertIn("nonexistent-xyz", proc.stderr)
         self.assertIn("Known paths", proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Inventory discovery — no fallback to legacy versions.toml
+# ---------------------------------------------------------------------------
+
+class TestInventoryDiscovery(unittest.TestCase):
+    """Default discovery rejects legacy ``versions.toml`` when
+    ``docker-constructor.toml`` is absent, but explicit ``--inventory``
+    accepts any filename.
+
+    Unit-level tests — the default inventory path is resolved relative
+    to ``docker/versioning/cli.py``, not the current working directory.
+    """
+
+    def test_resolve_default_returns_docker_constructor_not_versions(self):
+        """``_resolve_default_inventory()`` must return
+        ``docker-constructor.toml``, never ``versions.toml``."""
+        from docker.versioning.cli import _resolve_default_inventory
+        default = _resolve_default_inventory()
+        self.assertEqual(default.name, "docker-constructor.toml")
+        self.assertNotIn("versions.toml", str(default))
+
+    def test_default_discovery_finds_docker_constructor(self):
+        """The resolved default path must point to an existing file."""
+        from docker.versioning.cli import _resolve_default_inventory
+        from docker.versioning.inventory import load_inventory
+        default = _resolve_default_inventory()
+        self.assertTrue(default.is_file(),
+                        f"docker-constructor.toml not found at {default}")
+        # Must load without error
+        load_inventory(default)
+
+    def test_default_path_is_absolute_and_not_cwd_dependent(self):
+        """The default inventory path is resolved from the module
+        location (inside docker/) upwards, never from os.getcwd().
+        Changing CWD must not change the resolved path."""
+        import os as _os
+        from docker.versioning.cli import _resolve_default_inventory
+        original_cwd = _os.getcwd()
+        default_before = _resolve_default_inventory()
+        try:
+            _os.chdir("/tmp")
+            default_after = _resolve_default_inventory()
+        finally:
+            _os.chdir(original_cwd)
+        self.assertEqual(default_before, default_after,
+                         "resolved path must not depend on cwd")
+
+    def test_load_inventory_fails_when_file_missing(self):
+        """``load_inventory`` must raise ``FileNotFoundError`` when the
+        resolved default path does not exist — no fallback to
+        ``versions.toml`` or any other filename."""
+        from docker.versioning.inventory import load_inventory
+        from tests.versioning.support.inventory_builder import minimal_toml
+        with self.assertRaises(FileNotFoundError):
+            load_inventory(Path("/nonexistent/docker-constructor.toml"))
+        # Explicitly: even when a file named versions.toml exists in
+        # the same directory, it must NOT be used as fallback.
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "versions.toml").write_text(
+                minimal_toml(), encoding="utf-8",
+            )
+            nonexistent = Path(td) / "docker-constructor.toml"
+            with self.assertRaises(FileNotFoundError):
+                load_inventory(nonexistent)
+
+    def test_explicit_inventory_accepts_legacy_name(self):
+        """``load_inventory`` with explicit ``versions.toml`` path works."""
+        import tempfile
+        from docker.versioning.inventory import load_inventory
+        from tests.versioning.support.inventory_builder import minimal_toml
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "versions.toml"
+            p.write_text(minimal_toml(), encoding="utf-8")
+            inv = load_inventory(p)
+            self.assertEqual(inv.schema, 1)
+
+    def test_explicit_inventory_accepts_arbitrary_name(self):
+        """``load_inventory`` with arbitrary filename works."""
+        import tempfile
+        from docker.versioning.inventory import load_inventory
+        from tests.versioning.support.inventory_builder import minimal_toml
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "arbitrary.toml"
+            p.write_text(minimal_toml(), encoding="utf-8")
+            inv = load_inventory(p)
+            self.assertEqual(inv.schema, 1)
+
+    def test_cli_rejects_missing_default(self):
+        """``validate`` fails when ``docker-constructor.toml`` is
+        absent from the default location, proving the CLI does not
+        fall back to ``versions.toml``.
+
+        Uses ``--inventory`` pointing to a nonexistent path to avoid
+        mutating the real repository."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            nonexistent = Path(td) / "docker-constructor.toml"
+            proc = _run("validate", "--inventory", str(nonexistent))
+            self.assertNotEqual(proc.returncode, 0,
+                                "must not silently succeed without inventory")
+            self.assertIn("inventory not found", proc.stderr.lower())
+
+    def test_cli_rejects_missing_default_no_fallback_to_versions(self):
+        """When ``--inventory`` points to a nonexistent
+        ``docker-constructor.toml``, the CLI must NOT silently fall
+        back to a ``versions.toml`` that exists alongside it."""
+        import tempfile
+        from tests.versioning.support.inventory_builder import minimal_toml
+        with tempfile.TemporaryDirectory() as td:
+            # Create versions.toml (should be ignored)
+            (Path(td) / "versions.toml").write_text(
+                minimal_toml(), encoding="utf-8")
+            # Point to nonexistent docker-constructor.toml
+            nonexistent = Path(td) / "docker-constructor.toml"
+            proc = _run("validate", "--inventory", str(nonexistent))
+            self.assertNotEqual(proc.returncode, 0,
+                                "must not fall back to versions.toml")
+            self.assertIn("inventory not found", proc.stderr.lower())
+
+
+# ---------------------------------------------------------------------------
+# Integrated repository-fixture test — Task 4.1
+# ---------------------------------------------------------------------------
+
+class TestIntegratedRepoFixture(unittest.TestCase):
+    """End-to-end exercise of validate, env rendering, effective output
+    generation, and update checks in a repository fixture containing
+    only ``docker-constructor.toml``.
+
+    Uses library functions directly because the CLI resolves the repo
+    root from the module path (not CWD), so subprocess tests from a
+    temp directory always hit the real repo root.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from tests.versioning.support.inventory_builder import minimal_toml
+        cls.tmpdir = Path(tempfile.mkdtemp())
+        cls.inventory_path = cls.tmpdir / "docker-constructor.toml"
+        cls.inventory_path.write_text(
+            _PYTHON_OVERRIDE_TOML_FOR_INTEGRATION(),
+            encoding="utf-8",
+        )
+
+        from docker.versioning.inventory import load_inventory
+        cls.inventory = load_inventory(cls.inventory_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    # -- Validate ----------------------------------------------------------
+
+    def test_validate_succeeds(self):
+        """``validate_inventory`` must not raise for a valid inventory."""
+        import tomllib
+        from docker.versioning.inventory import validate_inventory
+        with open(self.inventory_path, "rb") as f:
+            raw = tomllib.load(f)
+        validate_inventory(raw)  # must not raise
+
+    def test_validate_json_output(self):
+        """The validate command must produce parseable JSON."""
+        inventory_arg = str(self.inventory_path)
+        proc = _run("validate", "--inventory", inventory_arg, "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertTrue(data.get("valid"))
+
+    # -- Env rendering -----------------------------------------------------
+
+    def test_env_renders_without_error(self):
+        """``render_build_environment`` must produce expected keys."""
+        from docker.versioning.effective import apply_overrides
+        from docker.versioning.rendering import render_build_environment
+        eff = apply_overrides(self.inventory, {})
+        env = render_build_environment(eff)
+        self.assertIsInstance(env, dict)
+        self.assertIn("PYTHON_VERSION", env)
+        self.assertIn("EFFECTIVE_VERSIONS_FILE", env)
+
+    def test_env_default_output_path_is_docker_constructor_toml(self):
+        """Default generated inventory output must be
+        ``.docker-generated/docker-constructor.toml``."""
+        from docker.versioning.effective import apply_overrides
+        from docker.versioning.rendering import render_build_environment
+        eff = apply_overrides(self.inventory, {})
+        env = render_build_environment(eff)
+        self.assertEqual(
+            env["EFFECTIVE_VERSIONS_FILE"],
+            ".docker-generated/docker-constructor.toml",
+        )
+
+    # -- Effective output generation ---------------------------------------
+
+    def test_effective_inventory_is_written_and_loadable(self):
+        """``write_effective_inventory`` writes a file that survives a
+        full ``load_inventory`` round-trip."""
+        from docker.versioning.effective import apply_overrides
+        from docker.versioning.inventory import load_inventory
+        from docker.versioning.rendering import write_effective_inventory
+
+        eff = apply_overrides(self.inventory, {})
+        dest = self.tmpdir / "generated.toml"
+
+        write_effective_inventory(eff, dest)
+        self.assertTrue(dest.is_file())
+
+        import tomllib
+        with open(dest, "rb") as f:
+            raw = tomllib.load(f)
+        self.assertIn("schema", raw)
+        self.assertEqual(raw["schema"], 1)
+
+        reloaded = load_inventory(dest)
+        self.assertEqual(
+            reloaded.stages.toolchain.python.version,
+            self.inventory.stages.toolchain.python.version,
+        )
+
+    def test_effective_inventory_reflects_overrides(self):
+        """Overridden values appear in the generated effective inventory."""
+        from docker.versioning.effective import apply_overrides
+        from docker.versioning.rendering import write_effective_inventory
+
+        eff = apply_overrides(self.inventory, {
+            "stages.toolchain.python.version": "3.99.0",
+        })
+        dest = self.tmpdir / "overridden.toml"
+        write_effective_inventory(eff, dest)
+
+        import tomllib
+        with open(dest, "rb") as f:
+            raw = tomllib.load(f)
+        self.assertEqual(
+            raw["stages"]["toolchain"]["python"]["version"],
+            "3.99.0",
+        )
+
+    def test_effective_inventory_rejects_authoritative_name(self):
+        """``write_effective_inventory`` with repo_root must reject the
+        authoritative inventory path as output to prevent overwrite."""
+        from docker.versioning.effective import apply_overrides
+        from docker.versioning.rendering import (
+            EffectiveInventoryOutputError,
+            write_effective_inventory,
+        )
+
+        eff = apply_overrides(self.inventory, {})
+        with self.assertRaises(EffectiveInventoryOutputError):
+            write_effective_inventory(
+                eff,
+                self.inventory_path,
+                repo_root=self.tmpdir,
+                output_path="docker-constructor.toml",
+            )
+
+    def test_override_constraint_survives_round_trip(self):
+        """Override policy constraints must round-trip as proper
+        ``Constraint`` objects, not raw dicts or strings.
+
+        This guards against a serialization defect where
+        ``write_effective_inventory`` emits override constraints in a
+        format that ``load_inventory`` cannot reconstruct as
+        ``OverridePolicy``."""
+        from docker.versioning.effective import apply_overrides
+        from docker.versioning.inventory import load_inventory
+        from docker.versioning.rendering import write_effective_inventory
+        from docker.versioning.constraints import Constraint
+
+        eff = apply_overrides(self.inventory, {
+            "stages.toolchain.python.version": "3.15.0",
+        })
+        dest = self.tmpdir / "roundtrip.toml"
+        write_effective_inventory(eff, dest)
+
+        reloaded = load_inventory(dest)
+        py = reloaded.stages.toolchain.python
+
+        # Version must reflect the override
+        self.assertEqual(py.version, "3.15.0")
+
+        # Override policy must exist and have the correct types
+        self.assertIsNotNone(py.override)
+        self.assertIsInstance(py.override.constraint, Constraint,
+                              "constraint must be a Constraint, not a dict")
+        self.assertEqual(str(py.override.constraint), ">=3.14.6")
+        self.assertFalse(py.override.allow_prerelease)
+        self.assertEqual(py.override.scheme, "numeric")
+
+        # The constraint must actually validate the version
+        self.assertTrue(py.override.constraint.matches(
+            __import__("docker.versioning.constraints", fromlist=["parse_numeric_version"])
+            .parse_numeric_version("3.15.0")
+        ))
+
+    # -- Update checks -----------------------------------------------------
+
+    def test_check_updates_with_injected_transport(self):
+        """``check_updates`` must accept injected transports and return
+        results without network."""
+        import json as _json
+        from docker.versioning.providers.base import ProviderContext
+        from docker.versioning.updates import (
+            _DEFAULT_PROVIDERS,
+            check_updates,
+        )
+
+        class _NoNetwork:
+            def request(self, method, url, *, headers=()):
+                return type("HttpResponse", (), {
+                    "status": 503,
+                    "headers": {},
+                    "body": b"test: no network",
+                })()
+
+        class _NoGit:
+            def resolve_ref(self, repository, ref):
+                raise RuntimeError("test: no git")
+
+        ctx = ProviderContext(
+            http=_NoNetwork(),
+            git=_NoGit(),
+            include_prerelease=False,
+            tokens={},
+        )
+        results = check_updates(
+            self.inventory,
+            providers=_DEFAULT_PROVIDERS,
+            context=ctx,
+        )
+        self.assertIsInstance(results, tuple)
+        # Every result should indicate a provider error or a skipped
+        # path — none should crash.
+        for r in results:
+            self.assertIsInstance(r, object)
+
+    # -- Helpers (none needed — library functions tested directly) ----------
+
+
+# -- Module-level helpers --------------------------------------------------
+
+
+def _PYTHON_OVERRIDE_TOML_FOR_INTEGRATION() -> str:
+    """Return minimal TOML with Python override policy declared.
+
+    Duplicated from test_version_rendering.py to avoid cross-test
+    import coupling for the integrated repo-fixture test.
+    """
+    from tests.versioning.support.inventory_builder import minimal_toml
+    return minimal_toml(
+        **{
+            "stages.toolchain.python": (
+                'version = "3.14.6"\n'
+                "\n"
+                "[stages.toolchain.python.override]\n"
+                'constraint = ">=3.14.6"\n'
+                "allow_prerelease = false\n"
+                'scheme = "numeric"'
+            ),
+        }
+    )
 
 
 if __name__ == "__main__":

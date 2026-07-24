@@ -450,7 +450,7 @@ def render_suggestions(
 
     Only entries with ``status == OUTDATED and applicable == True`` are included.
     Values are placed under their owning ``[path]`` table so the output is
-    copy-pasteable into ``versions.toml``.
+    copy-pasteable into ``docker-constructor.toml``.
     """
     lines: list[str] = []
     for r in results:

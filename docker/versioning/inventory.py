@@ -741,7 +741,7 @@ def _validate_required_platforms(
 # ---------------------------------------------------------------------------
 
 def load_inventory(versions_path: Path) -> Inventory:
-    """Load and validate a versions.toml inventory file."""
+    """Load and validate a docker-constructor.toml inventory file."""
     with versions_path.open("rb") as stream:
         raw = tomllib.load(stream)
     return validate_inventory(raw)

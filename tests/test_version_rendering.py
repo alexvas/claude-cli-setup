@@ -194,7 +194,7 @@ class TestRenderBuildEnvironment(unittest.TestCase):
         env = render_build_environment(self.effective)
         self.assertIn("EFFECTIVE_VERSIONS_FILE", env)
         self.assertEqual(env["EFFECTIVE_VERSIONS_FILE"],
-                         ".docker-generated/versions.toml")
+                         ".docker-generated/docker-constructor.toml")
 
     def test_custom_inventory_output_path(self):
         env = render_build_environment(
@@ -317,12 +317,12 @@ class TestEffectiveInventoryOutputValidation(unittest.TestCase):
         self.tmpdir = Path(tempfile.mkdtemp())
         self.repo = self.tmpdir / "repo"
         self.repo.mkdir()
-        (self.repo / "versions.toml").write_text(
+        (self.repo / "docker-constructor.toml").write_text(
             minimal_toml(), encoding="utf-8",
         )
         from docker.versioning.inventory import load_inventory
         from docker.versioning.effective import apply_overrides
-        inv = load_inventory(self.repo / "versions.toml")
+        inv = load_inventory(self.repo / "docker-constructor.toml")
         self.effective = apply_overrides(inv, {})
 
     def tearDown(self):
@@ -330,11 +330,11 @@ class TestEffectiveInventoryOutputValidation(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_valid_relative_path_inside_repo(self):
-        dest = self.repo / ".docker-generated" / "versions.toml"
+        dest = self.repo / ".docker-generated" / "docker-constructor.toml"
         write_effective_inventory(
             self.effective, dest,
             repo_root=self.repo,
-            output_path=".docker-generated/versions.toml",
+            output_path=".docker-generated/docker-constructor.toml",
         )
         self.assertTrue(dest.is_file())
 
@@ -356,12 +356,12 @@ class TestEffectiveInventoryOutputValidation(unittest.TestCase):
             )
         self.assertIn("..", str(ctx.exception))
 
-    def test_versions_toml_rejected(self):
+    def test_docker_constructor_toml_rejected(self):
         with self.assertRaises(EffectiveInventoryOutputError) as ctx:
             write_effective_inventory(
-                self.effective, self.repo / "versions.toml",
+                self.effective, self.repo / "docker-constructor.toml",
                 repo_root=self.repo,
-                output_path="versions.toml",
+                output_path="docker-constructor.toml",
             )
         self.assertIn("authoritative", str(ctx.exception).lower())
 
@@ -370,13 +370,13 @@ class TestEffectiveInventoryOutputValidation(unittest.TestCase):
         outside = self.tmpdir / "outside.toml"
         outside.write_text("# bad", encoding="utf-8")
         (self.repo / ".docker-generated").mkdir(exist_ok=True)
-        link_target = self.repo / ".docker-generated" / "versions.toml"
+        link_target = self.repo / ".docker-generated" / "docker-constructor.toml"
         link_target.symlink_to(outside.resolve())
         with self.assertRaises(EffectiveInventoryOutputError) as ctx:
             write_effective_inventory(
                 self.effective, link_target,
                 repo_root=self.repo,
-                output_path=".docker-generated/versions.toml",
+                output_path=".docker-generated/docker-constructor.toml",
             )
         self.assertIn("symlink", str(ctx.exception).lower())
 

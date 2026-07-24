@@ -130,7 +130,7 @@ def _cmd_env(
 
     inventory_output = getattr(
         args, "effective_inventory_output",
-        ".docker-generated/versions.toml",
+        ".docker-generated/docker-constructor.toml",
     )
     platform = getattr(args, "platform", "linux-amd64")
     repo_root = Path(__file__).parent.parent.parent
@@ -172,7 +172,7 @@ def _cmd_compose(
     platform = getattr(args, "platform", "linux-amd64")
     inventory_output = getattr(
         args, "effective_inventory_output",
-        ".docker-generated/versions.toml",
+        ".docker-generated/docker-constructor.toml",
     )
 
     # Strip leading '--' if argparse.REMAINDER preserved it
@@ -306,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--inventory",
         default=None,
         metavar="PATH",
-        help="Path to versions.toml (default: versions.toml in repo root)",
+        help="Path to docker-constructor.toml (default: docker-constructor.toml in repo root)",
     )
     common.add_argument(
         "--override",
@@ -324,7 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # validate
-    sub.add_parser("validate", parents=[common], help="Validate versions.toml")
+    sub.add_parser("validate", parents=[common], help="Validate docker-constructor.toml")
 
     # get
     get_p = sub.add_parser(
@@ -347,9 +347,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     env_p.add_argument(
         "--effective-inventory-output",
-        default=".docker-generated/versions.toml",
+        default=".docker-generated/docker-constructor.toml",
         metavar="PATH",
-        help="Path for generated effective inventory (default: .docker-generated/versions.toml)",
+        help="Path for generated effective inventory (default: .docker-generated/docker-constructor.toml)",
     )
 
     # compose
@@ -366,9 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compose_p.add_argument(
         "--effective-inventory-output",
-        default=".docker-generated/versions.toml",
+        default=".docker-generated/docker-constructor.toml",
         metavar="PATH",
-        help="Path for generated effective inventory (default: .docker-generated/versions.toml)",
+        help="Path for generated effective inventory (default: .docker-generated/docker-constructor.toml)",
     )
     compose_p.add_argument(
         "compose_args",
@@ -382,7 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--inventory",
         default=None,
         metavar="PATH",
-        help="Path to versions.toml (default: versions.toml in repo root)",
+        help="Path to docker-constructor.toml (default: docker-constructor.toml in repo root)",
     )
     updates_common.add_argument(
         "--json",
@@ -462,7 +462,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         dest="inventory_path",
-        help="Path to versions.toml (default: versions.toml in repo root)",
+        help="Path to docker-constructor.toml (default: docker-constructor.toml in repo root)",
     )
 
     return parser
@@ -477,7 +477,7 @@ def _cmd_extensions(args: argparse.Namespace) -> int:
     if args.inventory_path:
         inv_path = _Path(args.inventory_path)
     else:
-        inv_path = _Path(__file__).parent.parent.parent / "versions.toml"
+        inv_path = _Path(__file__).parent.parent.parent / "docker-constructor.toml"
     inv = load_inventory(inv_path)
     result: dict[str, dict[str, str]] = {}
     for name, entry in sorted(inv.runtime_pi_extensions.items()):
@@ -651,8 +651,8 @@ def _cmd_check_updates(
 
 
 def _resolve_default_inventory() -> Path:
-    """Find versions.toml in the repo root (parent of docker/)."""
-    return Path(__file__).parent.parent.parent / "versions.toml"
+    """Find docker-constructor.toml in the repo root (parent of docker/)."""
+    return Path(__file__).parent.parent.parent / "docker-constructor.toml"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

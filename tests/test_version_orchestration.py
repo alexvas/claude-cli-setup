@@ -118,7 +118,7 @@ class TestComposeOrchestration(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def _inventory_output(self) -> Path:
-        return self.tmpdir / ".docker-generated" / "versions.toml"
+        return self.tmpdir / ".docker-generated" / "docker-constructor.toml"
 
     def _run_compose(self, *compose_args: str, **extra_args: str) -> int:
         """Invoke ``main()`` with ``compose`` arguments; return exit code."""
@@ -379,7 +379,7 @@ class TestComposeOrchestration(unittest.TestCase):
             "versions.py",
             "compose",
             "--inventory", str(self.toml_path),
-            "--effective-inventory-output", "versions.toml",
+            "--effective-inventory-output", "docker-constructor.toml",
             "--",
             "build", "pi",
         ]

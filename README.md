@@ -2,7 +2,7 @@
 
 # Pi Docker runtime
 
-Изолированное Docker-окружение для Pi и инструментов разработки. Выбранные версии всех входов, кроме Debian, хранятся в `versions.toml`; не дублируйте их в README, `.env`, Dockerfile или Compose.
+Изолированное Docker-окружение для Pi и инструментов разработки. Выбранные версии всех входов, кроме Debian, хранятся в `docker-constructor.toml`; не дублируйте их в README, `.env`, Dockerfile или Compose.
 
 ## Требования
 
@@ -61,12 +61,12 @@ python3 docker/build_wrapper.py build -y
    ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` работает в режиме **non-mutating**: проверьте upstream-релиз и вручную внесите принятое значение и связанные метаданные в `stages.pi-tools.pi` файла `versions.toml`.
+2. `--suggest` работает в режиме **non-mutating**: проверьте upstream-релиз и вручную внесите принятое значение и связанные метаданные в `stages.pi-tools.pi` файла `docker-constructor.toml`.
 3. Проверьте конфигурацию версий и diff:
 
    ```bash
    ./docker/versions.py validate
-   git diff -- versions.toml
+   git diff -- docker-constructor.toml
    ```
 
 4. Пересоберите и проверьте runtime-образ:
@@ -80,13 +80,13 @@ python3 docker/build_wrapper.py build -y
 
 | Категория | Примеры | Место установки / владелец | Источник обновления |
 |---|---|---|---|
-| Base image | Базовый Node | OCI-слои образа | Docker registry в `versions.toml` |
+| Base image | Базовый Node | OCI-слои образа | Docker registry в `docker-constructor.toml` |
 | Toolchain | Rust, uv, Python, ty | Пути builder/образа | Rust channel, GitHub, uv, PyPI |
 | Node CLIs | Pi, OpenSpec | Глобальные инструменты образа | npm |
 | Prebuilt binaries | rtk, fd | Runtime-бинарники образа | GitHub releases и checksums |
 | Shell runtime | Oh My Zsh | Содержимое `/home/dev` в образе | Git revision |
 | Pi extensions | pi-read, usage, proxy, регистрация rtk | Хостовое состояние `/home/dev/.pi` | npm-метаданные `runtime.pi-extensions` |
-| Debian packages | Системные утилиты и библиотеки | Системные пути образа | APT; вне поиска обновлений `versions.toml` |
+| Debian packages | Системные утилиты и библиотеки | Системные пути образа | APT; вне поиска обновлений `docker-constructor.toml` |
 
 Для другого управляемого компонента найдите путь параметра в конфигурации, выполните `check-updates --only <path> --suggest`, вручную проверьте и примените изменение, затем запустите validate, просмотр diff, сборку и проверку. Для `runtime.pi-extensions` сборка обновляет итоговую конфигурацию версий образа, но не смонтированное состояние; обновите его в разделе «Обслуживание».
 

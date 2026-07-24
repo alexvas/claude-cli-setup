@@ -291,7 +291,7 @@ class Stages:
 
 @dataclass(frozen=True)
 class CacheConfig:
-    """Validated ``[cache]`` section from versions.toml."""
+    """Validated ``[cache]`` section from docker-constructor.toml."""
     dir: str | None = None
     """Custom cache directory path."""
     ttl: int | None = None

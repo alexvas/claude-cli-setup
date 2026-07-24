@@ -40,7 +40,7 @@ class TestVersionDocumentation(unittest.TestCase):
         required = (
             "stages.pi-tools.pi", "./docker/versions.py check-updates",
             "--only stages.pi-tools.pi", "--suggest", "non-mutating",
-            "versions.toml", "./docker/versions.py validate", "git diff -- versions.toml",
+            "docker-constructor.toml", "./docker/versions.py validate", "git diff -- docker-constructor.toml",
             "./docker/versions.py compose build pi", "./docker/verify-runtime.sh",
         )
         for name, text in self._documents():
@@ -68,7 +68,7 @@ class TestVersionDocumentation(unittest.TestCase):
             with self.subTest(readme=name):
                 for token in required:
                     self.assertIn(token, text)
-                self.assertRegex(text, re.compile(r"Debian.*versions\.toml", re.I | re.S))
+                self.assertRegex(text, re.compile(r"Debian.*docker-constructor\.toml", re.I | re.S))
 
     def test_commands_and_safe_maintenance_guidance(self):
         required = (
@@ -85,7 +85,7 @@ class TestVersionDocumentation(unittest.TestCase):
                     self.assertIn(token, text)
 
     def test_no_selected_versions_or_removed_development_notes(self):
-        inventory = (ROOT / "versions.toml").read_text(encoding="utf-8")
+        inventory = (ROOT / "docker-constructor.toml").read_text(encoding="utf-8")
         selected = set(re.findall(r'^(?:version|revision)\s*=\s*"([^"]+)"', inventory, re.M))
         forbidden_phrases = ("BuildKit cache verification", "Проверка кеширования BuildKit", "BuildKit 缓存验证")
         for name, text in self._documents():

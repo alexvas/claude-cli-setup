@@ -521,7 +521,7 @@ class TestSuggestNonMutation(unittest.TestCase):
                        "Suggest must contain artifact SHA-256")
 
     def test_suggest_does_not_mutate_working_tree(self):
-        """--suggest must leave ``versions.toml`` and the working tree
+        """--suggest must leave ``docker-constructor.toml`` and the working tree
         byte-identical to before."""
 
         class _OutdatedNpm(HttpTransport):
@@ -544,14 +544,14 @@ class TestSuggestNonMutation(unittest.TestCase):
         self.addCleanup(cleanup)
 
         _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        versions_toml = os.path.join(_repo, "versions.toml")
+        docker_constructor_toml = os.path.join(_repo, "docker-constructor.toml")
 
-        # Snapshot: versions.toml content
+        # Snapshot: docker-constructor.toml content
         try:
-            with open(versions_toml, "rb") as f:
+            with open(docker_constructor_toml, "rb") as f:
                 toml_before = f.read()
         except FileNotFoundError:
-            self.skipTest("versions.toml not found at repo root")
+            self.skipTest("docker-constructor.toml not found at repo root")
 
         # Snapshot: git status (if available in the current environment)
         import subprocess
@@ -575,11 +575,11 @@ class TestSuggestNonMutation(unittest.TestCase):
         )
         self.assertEqual(code, EXIT_OK)
 
-        # versions.toml must be unmodified
-        with open(versions_toml, "rb") as f:
+        # docker-constructor.toml must be unmodified
+        with open(docker_constructor_toml, "rb") as f:
             toml_after = f.read()
         self.assertEqual(toml_before, toml_after,
-                         "--suggest modified versions.toml")
+                         "--suggest modified docker-constructor.toml")
 
         # No cache files must appear in the repo root even when
         # [cache].dir or --cache-dir points inside the working tree.

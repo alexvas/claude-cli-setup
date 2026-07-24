@@ -15,7 +15,7 @@ Usage::
 
     python3 docker/verify_versioned_image.py \\
         --image pi-cli-pi:latest \\
-        --inventory .docker-generated/versions.toml
+        --inventory .docker-generated/docker-constructor.toml
 
 Optional::
 
@@ -40,7 +40,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--image", required=True, help="Docker image tag to verify")
     p.add_argument(
         "--inventory", required=True,
-        help="Path to host-side effective inventory TOML (e.g. .docker-generated/versions.toml)",
+        help="Path to host-side effective inventory TOML (e.g. .docker-generated/docker-constructor.toml)",
     )
     p.add_argument(
         "--pi-home", default=None,
@@ -106,7 +106,7 @@ def _normalize_version(v: str) -> str:
 
 _IMAGE_INV_SNIPPET = (
     "import json,tomllib;"
-    "f=open('/usr/local/share/pi-cli/versions.toml','rb');"
+    "f=open('/usr/local/share/pi-cli/docker-constructor.toml','rb');"
     "d=tomllib.load(f);"
     "f.close();"
     "print(json.dumps(d,sort_keys=True))"
@@ -189,7 +189,7 @@ def _check_inventory_ownership(image: str) -> int:
     mismatches = 0
     proc = _docker_run(
         image, "stat", "-c", "%U:%G %a",
-        "/usr/local/share/pi-cli/versions.toml",
+        "/usr/local/share/pi-cli/docker-constructor.toml",
     )
     if proc.returncode != 0:
         _fail(f"failed to stat image inventory (exit {proc.returncode}):\n{proc.stderr}")
@@ -197,7 +197,7 @@ def _check_inventory_ownership(image: str) -> int:
     expected = "root:root 444"
     if owner_mode != expected:
         print(
-            f"MISMATCH /usr/local/share/pi-cli/versions.toml ownership: "
+            f"MISMATCH /usr/local/share/pi-cli/docker-constructor.toml ownership: "
             f"expected {expected!r} got {owner_mode!r}"
         )
         mismatches += 1
@@ -205,10 +205,10 @@ def _check_inventory_ownership(image: str) -> int:
     # dev cannot write
     proc = _docker_run(
         image, "bash", "-c",
-        "test -w /usr/local/share/pi-cli/versions.toml && echo WRITABLE || echo OK",
+        "test -w /usr/local/share/pi-cli/docker-constructor.toml && echo WRITABLE || echo OK",
     )
     if "WRITABLE" in proc.stdout:
-        print("FAIL: dev can write /usr/local/share/pi-cli/versions.toml")
+        print("FAIL: dev can write /usr/local/share/pi-cli/docker-constructor.toml")
         mismatches += 1
 
     # Runtime helper is root-owned and not dev-writable

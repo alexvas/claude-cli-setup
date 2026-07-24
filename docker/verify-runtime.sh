@@ -5,7 +5,7 @@ IMAGE="${1:-pi-cli-pi:latest}"
 
 docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
   set -eu
-  INVENTORY="/usr/local/share/pi-cli/versions.toml"
+  INVENTORY="/usr/local/share/pi-cli/docker-constructor.toml"
   HELPER="/usr/local/lib/pi-cli/docker/versions.py"
 
   test "$(id -un)" = dev

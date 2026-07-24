@@ -15,7 +15,7 @@ def main(argv=None) -> int:
     root = repo_root(__file__)
     p = argparse.ArgumentParser()
     p.add_argument("--image", default="pi-cli-pi:latest")
-    p.add_argument("--inventory", type=Path, default=Path(".docker-generated/versions.toml"))
+    p.add_argument("--inventory", type=Path, default=Path(".docker-generated/docker-constructor.toml"))
     p.add_argument(
         "--bad-checksum-inventory", type=Path,
         default=Path("docker/verify_stage_6/inputs/bad-rtk-sha256.toml"),

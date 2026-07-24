@@ -14,7 +14,7 @@ def main(argv=None) -> int:
     root = repo_root(__file__)
     p = argparse.ArgumentParser()
     p.add_argument("--image", default="pi-cli-pi:latest")
-    p.add_argument("--inventory", type=Path, default=Path(".docker-generated/versions.toml"))
+    p.add_argument("--inventory", type=Path, default=Path(".docker-generated/docker-constructor.toml"))
     p.add_argument("--output-dir", type=Path, default=Path("/tmp/pi-stage6/6.2"))
     p.add_argument("--skip-build", action="store_true")
     p.add_argument("--dry-run", action="store_true")

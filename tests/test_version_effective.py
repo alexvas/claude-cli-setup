@@ -26,11 +26,11 @@ from docker.versioning.errors import (
 from docker.versioning.inventory import load_inventory
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_VERSIONS_TOML = _REPO_ROOT / "versions.toml"
+_INVENTORY_TOML = _REPO_ROOT / "docker-constructor.toml"
 
 
 def _default_inventory():
-    return load_inventory(_VERSIONS_TOML)
+    return load_inventory(_INVENTORY_TOML)
 
 
 # ---------------------------------------------------------------------------

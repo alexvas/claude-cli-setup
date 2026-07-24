@@ -2,7 +2,7 @@
 set -eu
 
 PI_HOME="/home/dev/.pi"
-INVENTORY="/usr/local/share/pi-cli/versions.toml"
+INVENTORY="/usr/local/share/pi-cli/docker-constructor.toml"
 HELPER="/usr/local/lib/pi-cli/docker/versions.py"
 
 # Guard: refuse to write to image-layer .pi

@@ -224,8 +224,8 @@ class TestRuntimeInventoryContracts(unittest.TestCase):
 
     def test_effective_inventory_copied_to_runtime(self):
         """Dockerfile copies EFFECTIVE_VERSIONS_FILE to
-        /usr/local/share/pi-cli/versions.toml."""
-        self.assertIn("/usr/local/share/pi-cli/versions.toml", self.content,
+        /usr/local/share/pi-cli/docker-constructor.toml."""
+        self.assertIn("/usr/local/share/pi-cli/docker-constructor.toml", self.content,
                       "Dockerfile must COPY effective inventory to runtime path")
 
     def test_effective_inventory_root_owned(self):

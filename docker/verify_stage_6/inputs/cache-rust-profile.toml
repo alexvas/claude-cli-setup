@@ -1,4 +1,4 @@
-# versions.toml — Reviewed source of default versions, revisions, URLs,
+# docker-constructor.toml — Reviewed source of default versions, revisions, URLs,
 # digests, platform artifacts, and update metadata for the pi-cli Docker image.
 #
 # Stages mirror Dockerfile build-graph nodes.

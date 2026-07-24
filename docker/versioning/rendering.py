@@ -19,7 +19,7 @@ def render_build_environment(
     effective: EffectiveConfiguration,
     *,
     platform: str = "linux-amd64",
-    inventory_output: str = ".docker-generated/versions.toml",
+    inventory_output: str = ".docker-generated/docker-constructor.toml",
 ) -> Mapping[str, str]:
     """Return a deterministic mapping of build-argument names to string values.
 
@@ -128,7 +128,7 @@ def write_effective_inventory(
     When *repo_root* and *output_path* are provided, the path is validated:
 
     * Must be a relative path inside *repo_root*
-    * Must not be the authoritative ``versions.toml``
+    * Must not be the authoritative ``docker-constructor.toml``
     * Must not contain ``..`` traversal or absolute paths
     * Must not resolve to a symlink pointing outside *repo_root*
 
@@ -163,7 +163,7 @@ def _validate_inventory_output(
     Rejects:
     * Absolute paths
     * ``..`` traversal
-    * The authoritative ``versions.toml``
+    * The authoritative ``docker-constructor.toml``
     * Symlink escapes (resolved real path outside repo_root)
     """
     repo_root = repo_root.resolve()
@@ -182,11 +182,11 @@ def _validate_inventory_output(
             f"{relative_path!r} contains '..'"
         )
 
-    # Reject versions.toml (exact match only, not prefixed)
+    # Reject docker-constructor.toml (exact match only, not prefixed)
     norm = Path(relative_path).as_posix()
-    if norm in ("versions.toml", "./versions.toml"):
+    if norm in ("docker-constructor.toml", "./docker-constructor.toml"):
         raise EffectiveInventoryOutputError(
-            "Effective inventory output cannot be versions.toml "
+            "Effective inventory output cannot be docker-constructor.toml "
             "(the authoritative source)"
         )
 

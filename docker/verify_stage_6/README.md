@@ -26,7 +26,7 @@ Task 6.5 does not require a Pi home.
 - `inputs/python-3.14.5.toml`: isolated experimental default/policy used by
   task 6.3 to build the available `3.14.6` as an override and by task 6.5 as
   the Python toolchain cache-invalidation case. It is not the normative
-  project policy and must not replace `/versions.toml`.
+  project policy and must not replace `/docker-constructor.toml`.
 - `inputs/bad-rtk-sha256.toml`: structurally valid wrong checksum for Docker
   rejection testing.
 - `inputs/bad-node-digest.toml`: structurally valid wrong base digest.

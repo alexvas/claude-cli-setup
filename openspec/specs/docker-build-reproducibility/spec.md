@@ -6,13 +6,13 @@ Define reviewed non-Debian version inventory, reproducible effective build confi
 ## Requirements
 
 ### Requirement: Use a central version inventory
-The project SHALL maintain `versions.toml` as the reviewed source of default non-Debian tool versions, immutable revisions, artifact URLs, platform digests, and update-provider metadata. Every independently selected version or revision SHALL be represented by a complete typed entry with explicit source and update metadata. Effective Docker build arguments and runtime inventory SHALL be derived from the same validated configuration.
+The project SHALL maintain `docker-constructor.toml` as the reviewed source of default non-Debian tool versions, immutable revisions, artifact URLs, platform digests, and update-provider metadata. Every independently selected version or revision SHALL be represented by a complete typed entry with explicit source and update metadata. Effective Docker build arguments and runtime inventory SHALL be derived from the same validated configuration.
 
 The target dependency and configuration graph SHALL remain:
 
 ```mermaid
 graph TD
-    INV[(versions.toml<br/>reviewed source of truth)] --> CLI[docker/versions.py<br/>validate · env · compose · check-updates]
+    INV[(docker-constructor.toml<br/>reviewed source of truth)] --> CLI[docker/versions.py<br/>validate · env · compose · check-updates]
     CLI --> B[base<br/>Node tag + manifest digest]
     CLI --> T[toolchain<br/>pinned Rust/rustup + uv + Python + ty]
     CLI --> R[rtk-prebuilt<br/>release + platform SHA-256]
@@ -59,12 +59,12 @@ graph TD
 
 #### Scenario: Building with default selections
 - **WHEN** the canonical Compose build command runs without overrides
-- **THEN** it SHALL pass values derived from `versions.toml` to the Docker build
+- **THEN** it SHALL pass values derived from `docker-constructor.toml` to the Docker build
 - **AND** SHALL make the same effective values inspectable in the runtime image
 
 #### Scenario: Building with a supported override
 - **WHEN** a supported override such as a stable Python `X.Y.Z >= 3.14.6` is requested
-- **THEN** the resolver SHALL validate it against the entry's `override.constraint` and `allow_prerelease` policy from `versions.toml`
+- **THEN** the resolver SHALL validate it against the entry's `override.constraint` and `allow_prerelease` policy from `docker-constructor.toml`
 - **AND** SHALL apply it to the effective configuration
 - **AND** the runtime inventory SHALL report the effective value rather than the default
 
@@ -86,7 +86,7 @@ Overrideable entries SHALL keep an exact default `version` separate from an `ove
 - **AND** SHALL NOT resolve the newest version matching `override.constraint`
 
 ### Requirement: Prohibit duplicated version defaults
-`versions.toml` SHALL be the only source of selected default versions, revisions, artifact URLs, and digests. Dockerfile, Compose, runtime verification, extension setup, environment templates, and documentation SHALL NOT define independent concrete fallback values.
+`docker-constructor.toml` SHALL be the only source of selected default versions, revisions, artifact URLs, and digests. Dockerfile, Compose, runtime verification, extension setup, environment templates, and documentation SHALL NOT define independent concrete fallback values.
 
 #### Scenario: Resolving a canonical Compose build
 - **WHEN** `python3 docker/versions.py compose` launches a build
@@ -226,7 +226,7 @@ The version helper SHALL provide `check-updates --suggest` output containing rev
 #### Scenario: Printing an applicable suggestion
 - **WHEN** a newer applicable release has a version, required artifact, and published digest
 - **THEN** `--suggest` SHALL print the candidate version, URL, and digest in a reviewable form
-- **AND** SHALL leave `versions.toml` and the working tree unchanged
+- **AND** SHALL leave `docker-constructor.toml` and the working tree unchanged
 
 #### Scenario: Encountering an incomplete release
 - **WHEN** a newer release lacks a required artifact or checksum
@@ -270,7 +270,7 @@ Every maintained README translation SHALL explain how to inspect, review, apply,
 - **WHEN** a user follows the focused Pi update example
 - **THEN** documentation SHALL identify `stages.pi-tools.pi` as the inventory path
 - **AND** SHALL show a focused update check with a non-mutating suggestion
-- **AND** SHALL state that the suggested version is reviewed and applied manually to `versions.toml`
+- **AND** SHALL state that the suggested version is reviewed and applied manually to `docker-constructor.toml`
 - **AND** SHALL finish with inventory validation, diff review, image rebuild, and runtime verification
 
 #### Scenario: Understanding update-check options
@@ -291,4 +291,4 @@ Every maintained README translation SHALL identify component categories, represe
 - **WHEN** a user reviews what the development image manages
 - **THEN** documentation SHALL distinguish the base image, toolchain, Node CLIs, prebuilt binaries, shell runtime, Pi extensions, and Debian packages
 - **AND** SHALL distinguish image-owned paths from host-mounted Pi state
-- **AND** SHALL state that Debian packages are outside `versions.toml` update discovery
+- **AND** SHALL state that Debian packages are outside `docker-constructor.toml` update discovery

@@ -1,5 +1,5 @@
 """Semantic-source tests: reject selected version/revision/URL/digest
-defaults outside ``versions.toml``.
+defaults outside ``docker-constructor.toml``.
 
 The allowlist-driven scan extracts every concrete value from the
 canonical inventory and reports any path-qualified duplicate found in
@@ -96,7 +96,7 @@ _SCAN_EXCLUDES = {
     "openspec/specs/",
     ".docker-generated/",
     ".git/",
-    "versions.toml",
+    "docker-constructor.toml",
 }
 
 # Values that are acceptable in documentation files (describe system
@@ -148,8 +148,8 @@ def _is_excluded(rel: str) -> bool:
     for prefix in _SCAN_EXCLUDES:
         if rel.startswith(prefix):
             return True
-    # Also exclude exact match on versions.toml
-    return rel == "versions.toml"
+    # Also exclude exact match on docker-constructor.toml
+    return rel == "docker-constructor.toml"
 
 
 class TestSemanticSources(unittest.TestCase):
@@ -157,7 +157,7 @@ class TestSemanticSources(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        inv_path = REPO_ROOT / "versions.toml"
+        inv_path = REPO_ROOT / "docker-constructor.toml"
         cls.inventory = load_inventory(inv_path)
         cls.forbidden = _select_versions(cls.inventory)
         cls.source_files = [
@@ -166,7 +166,7 @@ class TestSemanticSources(unittest.TestCase):
         ]
 
     def test_no_duplicate_versions_in_semantic_sources(self):
-        """No selected version/revision/URL/digest outside versions.toml."""
+        """No selected version/revision/URL/digest outside docker-constructor.toml."""
         violations = []
         for source_rel in self.source_files:
             path = REPO_ROOT / source_rel
@@ -185,7 +185,7 @@ class TestSemanticSources(unittest.TestCase):
                     if value in _DOCKERFILE_PACKAGE_ALLOWED and source_rel == "Dockerfile":
                         continue
                     # Skip allowed-in-context values
-                    if value in _ALLOWED_IN_CONTEXT and source_rel != "versions.toml":
+                    if value in _ALLOWED_IN_CONTEXT and source_rel != "docker-constructor.toml":
                         # Only suppress for known diagnostic messages
                         # (the override policy minimum is surfaced as a
                         # diagnostic — not a build selection)
@@ -333,5 +333,145 @@ class TestSemanticSources(unittest.TestCase):
             self.fail(
                 "README files contain raw docker compose commands that bypass "
                 "the resolver — replace with ./docker/versions.py compose:\n"
+                + "\n".join(violations)
+            )
+
+
+# ---------------------------------------------------------------------------
+# Stale-reference contract — Task 3.2
+# ---------------------------------------------------------------------------
+
+# Files maintained by the project — any ``versions.toml`` reference in
+# these is a defect unless explicitly excluded below.
+_STALE_SCAN_ROOTS = [
+    "README.md",
+    "README.en.md",
+    "README.zh.md",
+    "docker/",
+    "tests/",
+    "openspec/changes/",
+    "openspec/specs/",
+    ".env.example",
+]
+
+# Whole-file exclusions — files that are completely skipped.
+# Prefer narrow block-level exclusions below; use whole-file only for
+# files that are entirely self-describing the legacy name.
+_STALE_EXCLUDED_FILES = frozenset({
+    # Archived OpenSpec history — immutable record of past decisions
+    "openspec/changes/archive/",
+    # This very test file — self-referencing docstrings and
+    # assertions that name the legacy file being scanned for
+    "tests/test_version_semantic_sources.py",
+})
+
+# Block-level allowlists: map of file → set of (start_line, end_line)
+# ranges where ``versions.toml`` references are intentionally allowed.
+# Ranges are 1-indexed and inclusive.
+_STALE_BLOCK_ALLOWLIST: dict[str, set[tuple[int, int]]] = {
+    "tests/test_version_rendering.py": {
+        # Arbitrary temp fixture filenames in TestWriteEffectiveInventory
+        # (write/read-back/determinism/atomic tests)
+        (226, 307),
+        # Absolute path and traversal rejection tests — path names are
+        # arbitrary, not authoritative
+        (344, 355),
+    },
+    "tests/test_versions_cli.py": {
+        # TestInventoryDiscovery — intentionally references the legacy
+        # name to test no-fallback behavior (Task 1.1/1.2)
+        (692, 815),
+    },
+}
+
+# Paths excluded by prefix — any file whose path starts with one of
+# these is skipped entirely.
+_STALE_EXCLUDED_PREFIXES = tuple(_STALE_EXCLUDED_FILES)
+
+# Additional line-level allowlist: entire files that mention
+# ``versions.toml`` in a benign context (e.g. this very contract,
+# changelogs, migration notes in active changes describing the rename).
+_STALE_LINE_ALLOWLIST = frozenset({
+    # The rename change itself documents the old name
+    "openspec/changes/rename-version-inventory",
+})
+
+
+class TestStaleVersionTomlReferences(unittest.TestCase):
+    """No maintained file may reference ``versions.toml`` except for
+    archived history, intentionally arbitrary fixtures, and the rename
+    change that documents the migration."""
+
+    _STALE_PATTERN = re.compile(r"\bversions\.toml\b")
+
+    def _scan_files(self) -> list[pathlib.Path]:
+        """Yield every file under scan roots that exists."""
+        files: list[pathlib.Path] = []
+        for root_spec in _STALE_SCAN_ROOTS:
+            root = REPO_ROOT / root_spec
+            if root.is_dir():
+                for p in root.rglob("*"):
+                    if p.is_file():
+                        files.append(p)
+            elif root.is_file():
+                files.append(root)
+        return files
+
+    @staticmethod
+    def _is_excluded(rel: str) -> bool:
+        """True if *rel* should be skipped by the stale-reference scan."""
+        for prefix in _STALE_EXCLUDED_PREFIXES:
+            if rel.startswith(prefix):
+                return True
+        return False
+
+    @staticmethod
+    def _is_line_allowlisted(rel: str) -> bool:
+        """True if *rel* is in a file where ``versions.toml`` mentions
+        are contextually allowed (e.g. rename documentation)."""
+        for prefix in _STALE_LINE_ALLOWLIST:
+            if rel.startswith(prefix):
+                return True
+        return False
+
+    @staticmethod
+    def _is_in_allowlisted_block(rel: str, lineno: int) -> bool:
+        """True if *lineno* falls within an allowlisted range for *rel*."""
+        ranges = _STALE_BLOCK_ALLOWLIST.get(rel)
+        if ranges is None:
+            return False
+        return any(lo <= lineno <= hi for (lo, hi) in ranges)
+
+    def test_no_stale_versions_toml_references(self):
+        """Scan maintained files for ``versions.toml`` references.
+
+        Every hit must be classified as archived history, fixture data,
+        an allowlisted block, or a documented rename artifact —
+        otherwise it is a defect."""
+        violations: list[str] = []
+        for path in self._scan_files():
+            rel = str(path.relative_to(REPO_ROOT))
+            if self._is_excluded(rel):
+                continue
+            allowlisted = self._is_line_allowlisted(rel)
+            try:
+                for lineno, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), 1
+                ):
+                    if not self._STALE_PATTERN.search(line):
+                        continue
+                    if allowlisted:
+                        continue
+                    if self._is_in_allowlisted_block(rel, lineno):
+                        continue
+                    violations.append(f"{rel}:{lineno}: {line.strip()[:100]}")
+            except UnicodeDecodeError:
+                # Binary files — skip
+                pass
+        if violations:
+            self.fail(
+                "Maintained files contain stale references to "
+                "versions.toml — rename to docker-constructor.toml, "
+                "add an exclusion, or classify as fixture/archive:\n"
                 + "\n".join(violations)
             )

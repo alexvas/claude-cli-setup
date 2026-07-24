@@ -1,4 +1,4 @@
-"""Tests for versions.toml inventory loading and validation."""
+"""Tests for docker-constructor.toml inventory loading and validation."""
 import sys
 import tempfile
 import unittest

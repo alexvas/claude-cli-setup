@@ -130,6 +130,23 @@ def _toml_name(field_name: str) -> str:
 
 _NATIVE_JSON = (str, int, float, bool, type(None))
 _DOMAIN_PRIMITIVES = (Constraint, ConstraintClause, NumericVersion)
+_DOMAIN_PRIMITIVE_NAMES = frozenset({
+    "Constraint", "ConstraintClause", "NumericVersion",
+})
+
+
+def _is_domain_primitive(value: object) -> bool:
+    """Recognize constraint values across both supported import paths.
+
+    The CLI can load these modules as ``versioning.*`` while package tests use
+    ``docker.versioning.*``.  Those paths create distinct class identities in
+    one process, so an ``isinstance`` check alone is insufficient.
+    """
+    value_type = type(value)
+    return isinstance(value, _DOMAIN_PRIMITIVES) or (
+        value_type.__name__ in _DOMAIN_PRIMITIVE_NAMES
+        and value_type.__module__.endswith(".constraints")
+    )
 
 
 def _is_inventory(value: object) -> bool:
@@ -146,7 +163,7 @@ def to_plain_data(value: object) -> object:
     """
     if isinstance(value, _NATIVE_JSON):
         return value
-    if isinstance(value, _DOMAIN_PRIMITIVES):
+    if _is_domain_primitive(value):
         return str(value)
     if isinstance(value, (tuple, list)):
         return [to_plain_data(v) for v in value]

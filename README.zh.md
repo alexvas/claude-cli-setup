@@ -2,7 +2,7 @@
 
 # Pi Docker runtime
 
-用于 Pi 和开发工具的隔离 Docker 环境。除 Debian 外，所有选定输入都保存在 `versions.toml`；不要在 README、`.env`、Dockerfile 或 Compose 中重复具体版本。
+用于 Pi 和开发工具的隔离 Docker 环境。除 Debian 外，所有选定输入都保存在 `docker-constructor.toml`；不要在 README、`.env`、Dockerfile 或 Compose 中重复具体版本。
 
 ## 要求
 
@@ -61,12 +61,12 @@ python3 docker/build_wrapper.py build -y
    ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` 是 **non-mutating**：核对上游发布，然后手动把接受的值及相关元数据应用到 `versions.toml` 的 `stages.pi-tools.pi`。
+2. `--suggest` 是 **non-mutating**：核对上游发布，然后手动把接受的值及相关元数据应用到 `docker-constructor.toml` 的 `stages.pi-tools.pi`。
 3. 验证并审查准确变更：
 
    ```bash
    ./docker/versions.py validate
-   git diff -- versions.toml
+   git diff -- docker-constructor.toml
    ```
 
 4. 重新构建并验证运行时镜像：
@@ -80,13 +80,13 @@ python3 docker/build_wrapper.py build -y
 
 | 类别 | 代表组件 | 安装位置 / 所有者 | 更新来源 |
 |---|---|---|---|
-| Base image | Node 基础镜像 | 镜像拥有的 OCI 层 | `versions.toml` 中的 Docker registry 元数据 |
+| Base image | Node 基础镜像 | 镜像拥有的 OCI 层 | `docker-constructor.toml` 中的 Docker registry 元数据 |
 | Toolchain | Rust、uv、Python、ty | builder/镜像拥有的路径 | Rust channel、GitHub、uv、PyPI |
 | Node CLIs | Pi、OpenSpec | 镜像拥有的全局工具 | npm |
 | Prebuilt binaries | rtk、fd | 镜像拥有的运行时二进制 | GitHub releases 和 checksums |
 | Shell runtime | Oh My Zsh | 镜像中的 `/home/dev` 内容 | Git revision |
 | Pi extensions | pi-read、usage、proxy、rtk 注册 | 主机挂载的 `/home/dev/.pi` | `runtime.pi-extensions` npm 元数据 |
-| Debian packages | 系统工具和库 | 镜像系统路径 | APT；不属于 `versions.toml` 更新发现 |
+| Debian packages | 系统工具和库 | 镜像系统路径 | APT；不属于 `docker-constructor.toml` 更新发现 |
 
 更新其他托管组件时，找到清单路径，运行 `check-updates --only <path> --suggest`，手动审核并编辑，然后执行验证、diff 审查、重建和运行时验证。对于 `runtime.pi-extensions`，重建只更新镜像的有效清单，不更新挂载状态；请在“维护”中刷新。
 

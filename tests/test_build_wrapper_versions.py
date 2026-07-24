@@ -86,10 +86,10 @@ class TestResolveBuildInputs(unittest.TestCase):
             with mock.patch("docker.build_wrapper.ROOT", root):
                 env = resolve_build_inputs(
                     inventory_path=self.toml_path,
-                    inventory_output=".docker-generated/versions.toml",
+                    inventory_output=".docker-generated/docker-constructor.toml",
                 )
 
-            generated = root / ".docker-generated" / "versions.toml"
+            generated = root / ".docker-generated" / "docker-constructor.toml"
             self.assertTrue(
                 generated.is_file(),
                 f"Effective inventory not written: {generated}",
@@ -105,7 +105,7 @@ class TestResolveBuildInputs(unittest.TestCase):
             # EFFECTIVE_VERSIONS_FILE must point to the generated file
             self.assertEqual(
                 env.get("EFFECTIVE_VERSIONS_FILE"),
-                ".docker-generated/versions.toml",
+                ".docker-generated/docker-constructor.toml",
             )
     def test_operational_env_values_preserved_in_compose_env(self):
         """Values from .env (like API keys, HOST_GATEWAY_IP) must survive

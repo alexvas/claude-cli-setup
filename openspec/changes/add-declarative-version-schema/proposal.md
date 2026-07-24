@@ -1,6 +1,6 @@
 ## Why
 
-The version inventory validator currently spreads schema knowledge across imperative key registries, provider dispatch, entry-specific checks, and model construction. As `versions.toml` and its providers grow, that duplication makes the accepted format difficult to document, review, and keep consistent with editor tooling.
+The version inventory validator currently spreads schema knowledge across imperative key registries, provider dispatch, entry-specific checks, and model construction. As `docker-constructor.toml` and its providers grow, that duplication makes the accepted format difficult to document, review, and keep consistent with editor tooling.
 
 ## What Changes
 
@@ -9,7 +9,7 @@ The version inventory validator currently spreads schema knowledge across impera
 - Keep domain relationships—constraint consistency, default/override matching, tag/version equality, URL/version consistency, and required-platform references—as explicit named semantic rules rather than inventing a general expression language.
 - Generate a deterministic `versions.schema.json` from the authoritative registry for documentation, editor integration, and optional standards-based checks without making runtime validation depend on `jsonschema` or another package.
 - Add drift checks proving the generated JSON Schema is current and structural validation remains offline, deterministic, and standard-library-only.
-- Preserve `versions.toml`, the public resolver interface, selected values, effective inventory behavior, and provider/update semantics established by `manage-docker-toolchain-versions`.
+- Preserve `docker-constructor.toml`, the public resolver interface, selected values, effective inventory behavior, and provider/update semantics established by `manage-docker-toolchain-versions`.
 
 ## Capabilities
 

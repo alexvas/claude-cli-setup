@@ -14,7 +14,7 @@
 - [ ] 2.3 **GREEN:** Describe every current inventory stage, provider variant, artifact map, override, and runtime extension in the declarative registry with typed factories and semantic-rule references
 - [ ] 2.4 **GREEN:** Implement the closed semantic-rule registry in `docker/versioning/semantic.py`, reusing `constraints.py` for its domain grammar and keeping cross-field logic out of the structural interpreter
 - [ ] 2.5 **GREEN:** Switch `inventory.py` to declarative validation and remove obsolete allowed-key registries, duplicated provider/entry dispatch, and path-specific structural traversal after differential parity passes
-- [ ] 2.6 **INTROSPECT:** Trace each production `versions.toml` value through schema node, semantic rules, and output model; inspect diagnostics and verify one authoritative structural definition remains
+- [ ] 2.6 **INTROSPECT:** Trace each production `docker-constructor.toml` value through schema node, semantic rules, and output model; inspect diagnostics and verify one authoritative structural definition remains
 - [ ] 2.7 **VALIDATE:** Run differential, semantic-rule, real-inventory, immutability, sanitized-environment, and zero-network tests; record intentional diagnostic differences explicitly
 
 ## 3. Deterministic JSON Schema generation — depends on Stage 2, no Docker

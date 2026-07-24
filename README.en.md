@@ -2,7 +2,7 @@
 
 # Pi Docker runtime
 
-An isolated Docker environment for Pi and development tools. Selected non-Debian inputs live in `versions.toml`; do not duplicate their versions in README files, `.env`, Dockerfile, or Compose.
+An isolated Docker environment for Pi and development tools. Selected non-Debian inputs live in `docker-constructor.toml`; do not duplicate their versions in README files, `.env`, Dockerfile, or Compose.
 
 ## Requirements
 
@@ -61,12 +61,12 @@ Low-level runtime commands remain available when `PROJECT_PATH_1` is set:
    ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` is **non-mutating**: verify the upstream release and manually apply the accepted value and related metadata to `stages.pi-tools.pi` in `versions.toml`.
+2. `--suggest` is **non-mutating**: verify the upstream release and manually apply the accepted value and related metadata to `stages.pi-tools.pi` in `docker-constructor.toml`.
 3. Validate and review the exact repository change:
 
    ```bash
    ./docker/versions.py validate
-   git diff -- versions.toml
+   git diff -- docker-constructor.toml
    ```
 
 4. Rebuild and verify the runtime image:
@@ -80,13 +80,13 @@ Low-level runtime commands remain available when `PROJECT_PATH_1` is set:
 
 | Category | Representative components | Installation location / owner | Update source |
 |---|---|---|---|
-| Base image | Node base | Image-owned OCI layers | Docker registry metadata in `versions.toml` |
+| Base image | Node base | Image-owned OCI layers | Docker registry metadata in `docker-constructor.toml` |
 | Toolchain | Rust, uv, Python, ty | Builder/image-owned paths | Rust channel, GitHub, uv, PyPI providers |
 | Node CLIs | Pi, OpenSpec | Image-owned global tools | npm provider |
 | Prebuilt binaries | rtk, fd | Image-owned runtime binaries | GitHub release artifacts and checksums |
 | Shell runtime | Oh My Zsh | Image-owned `/home/dev` content | Git revision provider |
 | Pi extensions | pi-read, usage, proxy, rtk registration | Host-mounted `/home/dev/.pi` | `runtime.pi-extensions` npm metadata |
-| Debian packages | OS utilities and libraries | Image-owned system paths | APT; outside `versions.toml` update discovery |
+| Debian packages | OS utilities and libraries | Image-owned system paths | APT; outside `docker-constructor.toml` update discovery |
 
 For another managed component, locate its inventory path, run `check-updates --only <path> --suggest`, review and edit manually, validate, inspect the diff, rebuild, and verify. If the path is under `runtime.pi-extensions`, rebuilding updates the effective image inventory but not mounted state; refresh it under Maintenance.
 

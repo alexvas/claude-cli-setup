@@ -628,11 +628,11 @@ class TestTypedAccess(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestRealInventory(unittest.TestCase):
-    """Production versions.toml must load."""
+    """Production docker-constructor.toml must load."""
 
     def test_repository_inventory_is_valid(self):
         repo_root = _THIS_DIR.parent
-        inv = load_inventory(repo_root / "versions.toml")
+        inv = load_inventory(repo_root / "docker-constructor.toml")
         # Python
         self.assertEqual(inv.stages.toolchain.python.version, "3.14.6")
         # ty

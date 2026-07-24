@@ -43,9 +43,9 @@ def resolve_build_inputs(
     overrides: dict[str, str] | None = None,
     *,
     platform: str = "linux-amd64",
-    inventory_output: str = ".docker-generated/versions.toml",
+    inventory_output: str = ".docker-generated/docker-constructor.toml",
 ) -> dict[str, str]:
-    """Resolve version build arguments from ``versions.toml``.
+    """Resolve version build arguments from ``docker-constructor.toml``.
 
     Delegates to ``docker.versioning.rendering`` so that
     ``build_wrapper.py`` and ``versions.py compose`` produce identical
@@ -59,7 +59,7 @@ def resolve_build_inputs(
     )
 
     if inventory_path is None:
-        inventory_path = ROOT / "versions.toml"
+        inventory_path = ROOT / "docker-constructor.toml"
     inv = load_inventory(inventory_path)
     eff = apply_overrides(inv, overrides or {})
 
@@ -423,7 +423,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     dotenv = load_dotenv(env_path)
     merged = merge_env(dotenv)
 
-    # Resolve version environment from versions.toml (not .env).
+    # Resolve version environment from docker-constructor.toml (not .env).
     # This is the single authoritative source — no duplicate mapping.
     # Reuse the canonical override parser so that duplicate paths,
     # whitespace, and empty tokens are rejected consistently.
@@ -537,7 +537,7 @@ def main() -> int:
         "--inventory",
         default=None,
         metavar="PATH",
-        help="Path to versions.toml (default: versions.toml in repo root)",
+        help="Path to docker-constructor.toml (default: docker-constructor.toml in repo root)",
     )
     p_build.add_argument(
         "--override",
