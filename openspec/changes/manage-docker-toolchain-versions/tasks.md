@@ -70,7 +70,7 @@ This stage removes duplicated constants and rewires source files. Static and she
 
 This is the only implementation stage that requires Docker. It validates the already-tested local configuration and source integration against real images.
 
-- [ ] 6.1 **RED:** Add a host-side acceptance script that checks effective inventory ownership/mode, installed-version equality, direct Python behavior, checksum rejection, and runtime extension pins; demonstrate it rejects the pre-migration image or a deliberately mismatched fixture image
+- [x] 6.1 **RED:** Add a host-side acceptance script that checks effective inventory ownership/mode, installed-version equality, direct Python behavior, checksum rejection, and runtime extension pins; demonstrate it rejects the pre-migration image or a deliberately mismatched fixture image
 - [ ] 6.2 **GREEN:** Build the default image through `versions.py compose` and fix only Docker-specific integration failures until the acceptance script and `verify-runtime.sh` pass
 - [ ] 6.3 **GREEN:** Build one supported stable Python override and confirm the effective inventory and direct `python`/`python3` report the requested exact version
 - [ ] 6.4 **INTROSPECT:** Compare image inventory with installed Node, Rust/Cargo, rustfmt/clippy, uv, Python, ty, Pi, OpenSpec, rtk, fd, and Pi extension metadata

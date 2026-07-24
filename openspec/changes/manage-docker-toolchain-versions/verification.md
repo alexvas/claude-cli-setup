@@ -611,6 +611,7 @@ Total: **577 tests** (481 + 11 + 77).  62 new tests in Stage 4 (33 initial + 29 
 |---|---|---|
 | `tests/test_version_rendering.py` | 28 | Build argument rendering, TOML generation+round-trip, compose_command, output-path validation |
 | `tests/test_version_orchestration.py` | 14 | Mocked compose subprocess orchestration + unsafe-path rejection |
+| `tests/test_versioned_image_acceptance.py` | 30 | Host-side acceptance script unit tests (mocked subprocess, no Docker) |
 | `tests/test_build_wrapper_versions.py` | 11 | build_wrapper.py version resolution, env merge, canonical override parsing, exception safety |
 
 ### Existing test file deltas
@@ -788,18 +789,18 @@ Tests:
 
 # Stage 5 Verification: Semantic source migration
 
-**Date:** 2026-07-25
+**Date:** 2026-07-25 (updated 2026-07-27)
 
 ## Test Suite
 
 ```
-Ran 510 tests in ~4.9s          (test_version*.py, fully offline)
+Ran 540 tests in ~5.1s          (test_version*.py, fully offline)
 Ran 11 tests  in 0.05s          (test_build_wrapper_versions.py)
 Ran 77 tests  in 0.004s         (provider adapters)
 OK
 ```
 
-Total: **598 tests** (510 + 11 + 77).
+Total: **628 tests** (540 + 11 + 77).
 
 ### New test files
 
@@ -859,7 +860,7 @@ Total: **598 tests** (510 + 11 + 77).
 
 ## Verification Evidence
 
-- **All 598 tests pass** with sanitized environment (`env -i`)
+- **All 628 tests pass** with sanitized environment (`env -i`)
 - **No Docker daemon** contacted — all compose tests mock `subprocess.run`
 - **No network** — all rendering and build_wrapper tests use in-memory inventory
 - **Full round-trip**: generated effective inventory loads via `load_inventory()` without errors; `RustEntry.rustup` carries the generated `artifacts` wrapper
@@ -890,3 +891,127 @@ Total: **598 tests** (510 + 11 + 77).
 17. **Published-checksum discovery** — `StaticUrlProvider` fetches `source.checksum_url` (lightweight `.sha256` file); parses `sha256sum`-format output (`<hex>  <filename>` / `<hex> *<filename>` / bare hex, case- and whitespace-tolerant); malformed checksum responses → `unavailable_reason`; multi-platform published-checksum tests verify no artifact-body downloads occur (only checksum file fetched)
 18. **`checksum_url` mandatory; `source.url` removed; body-fallback eliminated** — `StaticUrlSource` now has only `checksum_url: str` (no default); `url` field removed; inventory `_load_source` rewired to require `checksum_url`; `_validate_admissible_url(rustup_source.url, …)` guard removed; `_discover_via_body` / `_fetch_body_digest` deleted from provider; 6 body-fallback tests removed; no cached binary artifacts possible — only lightweight checksum files touch HTTP cache; artifact URLs live exclusively in `artifacts` per-platform entries, eliminating source/artifact provenance disagreement
 19. **Multi-platform static-url entries rejected** — `validate_inventory` now raises `InventoryError` when a `static-url` source has more than one artifact platform; a single checksum file cannot authoritatively cover multiple architecture binaries; 3 multi-platform provider tests removed; `TestStaticUrlMultiArtifactRejection.test_multi_artifact_rejected` added using a generated two-artifact TOML (static-url tests 14 → 12, provider total 79 → 77)
+
+---
+
+# Stage 6 Verification: Acceptance & Delivery (Task 6.1)
+
+**Date:** 2026-07-27 (updated)
+
+## Task 6.1 — Host-side acceptance script
+
+`docker/verify_versioned_image.py` — a host-side acceptance verifier that:
+
+- Loads the host effective inventory and reads the in-image inventory via `docker run`
+- **Deep-compares every key** of the complete parsed host and image inventories — not a hand-picked subset — catching differences in Rust profile/components, artifact URLs, source/update metadata, extension package identities, and any other field
+- Checks ownership/mode of the effective inventory (`root:root 0444`, dev-writable denied)
+- Checks ownership of runtime helpers (`/usr/local/lib/pi-cli/docker/versions.py` — root:root, not dev-writable)
+- Tool matrix: runs each tool with `--version`, extracts X.Y.Z via regex, normalizes v-prefix, compares exactly against inventory
+- Node major comparison: extracts major from image tag (`24-trixie-slim` → `v24.X`) and matches `node --version`
+- Python contract: resolves actual binary via `command -v python3` then `readlink -f`, verifies path inside `uv/python/`, matches version exactly, asserts `pip`/`pip3` absent
+- **`readlink -f` failures surfaced**: empty result or non-zero exit → explicit mismatch (no silent skip)
+- Direct execution proved through matching resolved `python`/`python3` paths; no `sys.executable` substring check
+- Extension verification: mounts `--pi-home` at `/home/dev/.pi`, reads `package.json` from `$PI_HOME/agent/npm/node_modules/<source.package>/` for every configured extension — matches `name` against `source.package` and `version` against inventory version
+- **Rust component callability**: after verifying `rustup component list --installed`, also runs `rustfmt --version` and `cargo clippy --version` to confirm components are actually callable
+- Every mismatch produces a path-qualified diagnostic; non-zero exit on any failure
+
+### Interface
+
+```bash
+python3 docker/verify_versioned_image.py \
+  --image pi-cli-pi:latest \
+  --inventory .docker-generated/versions.toml \
+  [--pi-home PATH] \
+  [--skip-extensions]
+```
+
+No `--expect-python` flag — the verifier always compares against the inventory value.
+
+### New Files
+
+| File | Purpose |
+|---|---|
+| `docker/verify_versioned_image.py` | Host-side acceptance verifier |
+| `tests/test_versioned_image_acceptance.py` | 30 unit tests, fully mocked subprocess |
+
+### Tests
+
+```
+Ran 30 tests in 0.130s
+OK
+```
+
+| Test | What it verifies |
+|---|---|
+| `TestImageInvSnippet::test_snippet_is_valid_python` | Inventory snippet compiles |
+| `TestImageInvSnippet::test_snippet_has_no_compound_statements_after_semicolons` | No `…; with open(…)` |
+| `TestExtensionPackageJsonSnippet::test_snippet_is_valid_python` | Package.json snippet compiles |
+| `test_correct_inventory_identity` | Host=image → exit 0 (deep comparison finds zero diffs) |
+| `test_inventory_version_mismatch` | Rust version diff → non-zero exit |
+| `test_inventory_artifact_digest_mismatch` | Image rustup SHA-256 ≠ host → non-zero exit (artifact digest mismatch detection) |
+| `test_deep_inventory_catches_profile_change` | Rust profile differs → caught by deep comparison |
+| `test_deep_inventory_catches_extra_image_key` | Extra key in image inventory → caught by deep comparison |
+| `test_python_version_mismatch` | Wrong Python → non-zero |
+| `test_python_path_not_in_uv_dir` | Path outside `uv/python/` → non-zero |
+| `test_pip_present_is_rejected` | `command -v pip`/`pip3` returns 0 → FAIL, non-zero exit |
+| `test_readlink_failure_detected` | `readlink -f` returns empty → explicit mismatch |
+| `test_ownership_wrong` | `dev:dev 644` → non-zero |
+| `test_docker_run_command_construction` | `docker run --rm <image>` structure |
+| `test_nonzero_docker_exit_propagated` | Tool crash → non-zero |
+| `test_node_major_mismatch` | Wrong Node major → non-zero |
+| `test_v_prefix_normalisation` | `v10.4.2` inventory ↔ `10.4.2` output |
+| `test_no_fallback_versions` | No X.Y.Z in output → non-zero (no silent match) |
+| `test_tool_output_exact_numeric_extraction` | First X.Y.Z token from multi-token output |
+| `test_all_extensions_verified_via_package_json` | All 3 extensions verified via `node_modules/<source.package>/package.json`; mount at `/home/dev/.pi` |
+| `test_missing_extension_package_json` | Missing `node_modules` → FAIL |
+| `test_extension_version_mismatch_from_package_json` | `package.json` version ≠ inventory version → non-zero exit |
+| `test_extension_package_name_mismatch` | `package.json` name ≠ `source.package` → non-zero exit |
+| `test_chown_work_on_start_is_set` | Every `docker run` includes `CHOWN_WORK_ON_START=0` |
+| `test_rustfmt_clippy_installed` | rustfmt and clippy installed + callable → exit 0 |
+| `test_rustfmt_not_installed` | rustfmt missing from component list → non-zero exit |
+| `test_clippy_not_installed` | clippy missing from component list → non-zero exit |
+| `test_rustfmt_and_clippy_actually_called` | `rustfmt --version` and `cargo clippy --version` invoked |
+| `test_rustfmt_unavailable_is_rejected` | rustfmt registered but `--version` fails → non-zero exit |
+| `test_clippy_unavailable_is_rejected` | clippy registered but `cargo clippy --version` fails → non-zero exit |
+
+### Key Decisions
+
+- All tests mock `subprocess.run` — no Docker daemon required
+- `_docker_run()` always sets `CHOWN_WORK_ON_START=0` (entrypoint ownership repair disabled for read-only mounts); `--rm`; `timeout=120`
+- Deep inventory comparison: recursive walk over every dict/list leaf — reports missing keys, extra keys, and value mismatches with full dotted paths
+- Tool version extraction uses first `\d+\.\d+\.\d+` match
+- No `--expect-python` — verifier always uses inventory as single source of truth
+- Python direct-execution proof: matching resolved paths of `python`/`python3`; no `sys.executable` substring check
+- `pip`/`pip3` checked via `command -v` — exit 0 means installed → FAIL
+- `readlink -f` empty/non-zero → explicit FAIL, no silent skip
+- Pi home mounts at `/home/dev/.pi` (not `/home/dev`)
+- Extensions verified by reading `node_modules/<source.package>/package.json` — uses `source.package`, not entry-level `package`
+- Rust components: `rustup component list --installed` for registration + `rustfmt --version` / `cargo clippy --version` for callability
+
+### Fixes Applied (repair rounds 20–24)
+
+20. **Image inventory snippet fixed** — `…; with open(…)` → simple statements; `TestImageInvSnippet` with 2 compilation tests
+20. **Python executable resolved dynamically** — `command -v python3` → `readlink -f`
+20. **pip absence correctly checked** — `command -v pip` returns 0 → FAIL
+20. **Pi home mounted at `/home/dev/.pi`**
+20. **All extensions verified** — iterates full `runtime.pi-extensions` dict
+20. **Filename aligned** — `verify_versioned_image.py` (underscores)
+20. **Checksum rejection coverage** — `test_checksum_mismatch_detected`
+21. **Extension verification against real `source.package` schema** — reads `node_modules/<source.package>/package.json`; `TestExtensionPackageJsonSnippet` added; 4 extension tests
+21. **`sys.executable` uv check removed** — legitimate path contains `/share/uv/python/`
+21. **`--expect-python` removed** — verifier always compares against inventory
+21. **Checksum test renamed** — `test_inventory_artifact_digest_mismatch` accurately describes inventory digest comparison
+22. **`CHOWN_WORK_ON_START=0` on every `docker run`** — entrypoint ownership repair disabled for read-only mounts
+22. **rustfmt/clippy component checks** — `rustup component list --installed` with presence check
+23. **Rust component detection fixed** — `--installed` output has no `(installed)` markers; switched to `line.startswith(f"{comp}-")`
+24. **Deep inventory comparison** — replaced hand-picked 13-path comparison with recursive dict/list walk; catches Rust profile/components, artifact URLs, source metadata, extension identities, and any other field; 2 new tests
+24. **rustfmt/clippy callability** — added `rustfmt --version` / `cargo clippy --version` after registration check; 3 new tests (call-invocation + unavailable for each)
+24. **readlink failure surfaced** — empty or non-zero result → explicit FAIL; 1 new test
+
+### Verification
+
+- `compileall`: ✓ clean
+- `openspec validate --strict`: ✓ valid
+- All 628 tests pass (540 + 11 + 77)
+- No Docker, no network in tests: ✓
+- No trailing whitespace: ✓
