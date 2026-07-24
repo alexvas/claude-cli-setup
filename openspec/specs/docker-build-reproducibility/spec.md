@@ -42,6 +42,16 @@ graph TD
 - **AND** SHALL report actionable configuration errors
 - **AND** SHALL reject or report unknown and misspelled entry paths rather than resolving them through catch-all access
 
+#### Scenario: Discovering the authoritative inventory
+- **WHEN** a resolver command runs without an explicit `--inventory` path
+- **THEN** it SHALL load `docker-constructor.toml` from the repository root
+- **AND** SHALL NOT fall back to `versions.toml`
+
+#### Scenario: Using an explicit custom inventory
+- **WHEN** a caller supplies `--inventory <path>`
+- **THEN** the resolver SHALL validate and use that TOML file regardless of its basename
+- **AND** SHALL NOT create a second authoritative root inventory
+
 #### Scenario: Describing uv-managed Python
 - **WHEN** the inventory declares the selected CPython runtime
 - **THEN** its source and update metadata SHALL use the dedicated `uv-python` type/provider and identify the `cpython` implementation
@@ -58,7 +68,7 @@ graph TD
 - **AND** package identity SHALL NOT be duplicated in a separate entry-level field
 
 #### Scenario: Building with default selections
-- **WHEN** the canonical Compose build command runs without overrides
+- **WHEN** the canonical build command runs without overrides
 - **THEN** it SHALL pass values derived from `docker-constructor.toml` to the Docker build
 - **AND** SHALL make the same effective values inspectable in the runtime image
 
@@ -67,6 +77,11 @@ graph TD
 - **THEN** the resolver SHALL validate it against the entry's `override.constraint` and `allow_prerelease` policy from `docker-constructor.toml`
 - **AND** SHALL apply it to the effective configuration
 - **AND** the runtime inventory SHALL report the effective value rather than the default
+
+#### Scenario: Generating effective build configuration
+- **WHEN** effective Docker construction inputs are rendered with default paths
+- **THEN** the generated inventory SHALL be written to `.docker-generated/docker-constructor.toml`
+- **AND** the runtime image SHALL expose it read-only at `/usr/local/share/pi-cli/docker-constructor.toml`
 
 ### Requirement: Validate overrides with a restricted constraint grammar
 Overrideable entries SHALL keep an exact default `version` separate from an `override` policy. The resolver SHALL implement a dependency-free restricted grammar rather than embedding tool-specific minimum versions in code.
@@ -86,22 +101,32 @@ Overrideable entries SHALL keep an exact default `version` separate from an `ove
 - **AND** SHALL NOT resolve the newest version matching `override.constraint`
 
 ### Requirement: Prohibit duplicated version defaults
-`docker-constructor.toml` SHALL be the only source of selected default versions, revisions, artifact URLs, and digests. Dockerfile, Compose, runtime verification, extension setup, environment templates, and documentation SHALL NOT define independent concrete fallback values.
+`docker-constructor.toml` SHALL be the only source of selected default versions, revisions, artifact URLs, and digests. Dockerfile, Docker orchestration, runtime verification, extension setup, environment templates, and documentation SHALL NOT define independent concrete fallback values.
 
-#### Scenario: Resolving a canonical Compose build
-- **WHEN** `python3 docker/versions.py compose` launches a build
+#### Scenario: Resolving a canonical Docker build
+- **WHEN** the canonical version resolver launches a build
 - **THEN** it SHALL supply all required build arguments from the validated effective inventory
-- **AND** `docker-compose.yml` SHALL contain required argument declarations without concrete version defaults
+- **AND** SHALL NOT define concrete version defaults in orchestration configuration
 
-#### Scenario: Invoking Compose without resolved versions
-- **WHEN** low-level Docker Compose is invoked without the required resolved version environment
-- **THEN** configuration evaluation SHALL fail with an actionable instruction to use the version resolver
+#### Scenario: Invoking Docker without resolved versions
+- **WHEN** repository-owned low-level Docker orchestration is invoked without required resolved version values
+- **THEN** it SHALL fail with an actionable instruction to use the version resolver
 - **AND** SHALL NOT silently fall back to hard-coded versions
+
+#### Scenario: Protecting the authoritative inventory
+- **WHEN** an effective-inventory output path resolves to repository-root `docker-constructor.toml`
+- **THEN** rendering SHALL fail with an actionable error
+- **AND** SHALL NOT overwrite the authoritative source
 
 #### Scenario: Consuming versions at runtime
 - **WHEN** runtime verification or Pi extension setup needs an expected version
-- **THEN** it SHALL read the root-owned effective inventory
-- **AND** SHALL NOT use a script-local fallback version
+- **THEN** it SHALL read `/usr/local/share/pi-cli/docker-constructor.toml`
+- **AND** SHALL NOT use the retired runtime path or a script-local fallback
+
+#### Scenario: Detecting stale supported references
+- **WHEN** semantic-source and documentation checks inspect maintained source, active changes, scripts, and documentation
+- **THEN** they SHALL reject authoritative references to `versions.toml`
+- **AND** MAY exclude archived historical artifacts and filename-agnostic temporary fixtures
 
 ### Requirement: Preserve authoritative focused pins
 The central inventory SHALL incorporate the selected `rtk`/`fd` prebuilt artifacts from `split-rtk-fd-prebuilt` and Pi extension npm versions from `pin-pi-read-npm` without replacing their established installation workflows.
