@@ -34,6 +34,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 COMPOSE_FILE_BASE = REPO_ROOT / "docker-compose.yml"
+COMPOSE_FILE_RUNTIME = REPO_ROOT / "docker-compose.runtime.yml"
 
 
 @dataclass
@@ -174,7 +175,7 @@ def run_container(
     for i, proj in enumerate(additional_projects, start=2):
         env[f"PROJECT_PATH_{i}"] = proj["workspaceFolders"][0]
     env["COMPOSE_FILE"] = ":".join(
-        [str(COMPOSE_FILE_BASE)]
+        [str(COMPOSE_FILE_BASE), str(COMPOSE_FILE_RUNTIME)]
         + [str(f) for f in extra_fragments]
         + [str(override_path)]
     )

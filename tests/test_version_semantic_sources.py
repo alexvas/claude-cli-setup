@@ -76,6 +76,7 @@ def _select_versions(inv):
 _SEMANTIC_SOURCES = [
     "Dockerfile",
     "docker-compose.yml",
+    "docker-compose.runtime.yml",
     "docker/setup-python.sh",
     "docker/setup-zsh.sh",
     "docker/verify-runtime.sh",

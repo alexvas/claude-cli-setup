@@ -1,0 +1,13 @@
+# Runtime-only additions — evaluated for ``run`` and ``config`` but not
+# for ``build``.  The launcher generates further override / fragment
+# files on top.
+services:
+  pi:
+    working_dir: ${PROJECT_PATH_1:?set PROJECT_PATH_1}
+    volumes:
+      - ${HOME}/.pi:/home/dev/.pi
+      - ${PROJECT_PATH_1:?set PROJECT_PATH_1}:${PROJECT_PATH_1:?set PROJECT_PATH_1}
+    environment:
+      PROJECT_PATH_1: ${PROJECT_PATH_1:?set PROJECT_PATH_1}
+      PROJECT_PATH_2: ${PROJECT_PATH_2:-}
+      PROJECT_PATH_3: ${PROJECT_PATH_3:-}

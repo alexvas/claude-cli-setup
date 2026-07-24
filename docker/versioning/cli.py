@@ -204,6 +204,55 @@ def _cmd_compose(
     process_env = os.environ.copy()
     process_env.update(env_vars)
 
+    # 3a. Runtime compose file for non-build operations.
+    #     docker compose build must not evaluate runtime interpolation;
+    #     run / config / exec / up need the runtime project requirements.
+    #     Skip global Compose options to find the actual subcommand.
+    _RUNTIME_FILE = "docker-compose.runtime.yml"
+    _BASE_FILE = "docker-compose.yml"
+    _runtime_ops = {"run", "config", "exec", "up"}
+    _global_flags = frozenset({
+        "--compatibility", "--dry-run", "--no-ansi", "--no-parallel",
+        "--quiet-pull", "--verbose",
+    })
+    _global_value_opts = frozenset({
+        "--ansi", "--env-file", "--file", "-f", "--parallel",
+        "--progress", "--profile", "--project-directory",
+        "--project-name", "-p",
+    })
+    _first_op = ""
+    _has_explicit_file = False
+    i = 0
+    while i < len(compose_args):
+        a = compose_args[i]
+        if a in _global_value_opts:
+            if a in ("-f", "--file"):
+                _has_explicit_file = True
+            i += 2  # skip --opt value
+        elif a in _global_flags:
+            i += 1
+        elif "=" in a and a.split("=", 1)[0] in _global_value_opts:
+            opt_name = a.split("=", 1)[0]
+            if opt_name in ("-f", "--file"):
+                _has_explicit_file = True
+            i += 1  # --opt=value single token
+        elif "=" in a and a.split("=", 1)[0] in _global_flags:
+            i += 1
+        elif a.startswith("-"):
+            i += 1  # unknown option — assume safe to skip
+        else:
+            _first_op = a
+            break
+    if _first_op in _runtime_ops and "COMPOSE_FILE" not in process_env:
+        if _has_explicit_file:
+            # -f overrides COMPOSE_FILE — inject as leading -f pair so
+            # Compose evaluates them before the user's explicit files.
+            compose_args = (
+                ["-f", _BASE_FILE, "-f", _RUNTIME_FILE] + compose_args
+            )
+        else:
+            process_env["COMPOSE_FILE"] = f"{_BASE_FILE}:{_RUNTIME_FILE}"
+
     # 4. Run docker compose
     cmd = compose_command(compose_args)
     try:
