@@ -119,7 +119,7 @@ def _cmd_env(
 
     Mirrors the Compose contract: the generated effective inventory is
     written to disk and ``EFFECTIVE_VERSIONS_FILE`` is included in the
-    output so that ``eval "$(python3 docker/versions.py env)" && docker
+    output so that ``eval "$(./docker/versions.py env)" && docker
     compose …`` works identically to ``versions.py compose``.
     """
     from pathlib import Path

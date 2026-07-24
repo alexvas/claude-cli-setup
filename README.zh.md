@@ -41,7 +41,7 @@ cp .env.example .env
 检查最终配置（输出可能包含密钥）：
 
 ```bash
-python3 docker/versions.py compose config
+./docker/versions.py compose config
 ```
 
 ## 版本管理
@@ -51,20 +51,20 @@ python3 docker/versions.py compose config
 本地验证 inventory：
 
 ```bash
-python3 docker/versions.py validate
+./docker/versions.py validate
 ```
 
-Canonical build 始终使用 `python3 docker/versions.py compose`。对于底层集成，
+Canonical build 始终使用 `./docker/versions.py compose`。对于底层集成，
 以下命令输出 shell-safe `export` 行，可在手动调用 Compose 前加载：
 
 ```bash
-python3 docker/versions.py env
+./docker/versions.py env
 ```
 
 将受支持的 override 显式传给 resolver：
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 `versions.toml` 中的 override policy 与所选版本分离。受限语法只支持
@@ -75,11 +75,11 @@ python3 docker/versions.py compose --override stages.toolchain.python.version=X.
 不会调用 provider：
 
 ```bash
-python3 docker/versions.py check-updates
-python3 docker/versions.py check-updates --only stages.toolchain.python --json
-python3 docker/versions.py check-updates --suggest
-python3 docker/versions.py check-updates --strict
-python3 docker/versions.py check-updates --fail-on-outdated
+./docker/versions.py check-updates
+./docker/versions.py check-updates --only stages.toolchain.python --json
+./docker/versions.py check-updates --suggest
+./docker/versions.py check-updates --strict
+./docker/versions.py check-updates --fail-on-outdated
 ```
 
 默认模式为 best-effort：会报告不可用 provider，但构建不依赖它们。
@@ -99,7 +99,7 @@ effective inventory。
 Rootful Docker：
 
 ```bash
-python3 docker/versions.py compose build pi
+./docker/versions.py compose build pi
 ```
 
 Rootless Docker：
@@ -117,13 +117,13 @@ wrapper 会将检测到的 `HOST_GATEWAY_IP` 写入 `.env`，保留运行时主�
 构建时可以明确覆盖 Python 版本：
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 完全重建：
 
 ```bash
-python3 docker/versions.py compose build --no-cache pi
+./docker/versions.py compose build --no-cache pi
 ```
 
 ### BuildKit 缓存验证
@@ -131,15 +131,15 @@ python3 docker/versions.py compose build --no-cache pi
 使用普通进度输出，以区分已缓存和实际执行的步骤：
 
 ```bash
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
 第二次构建应完全使用缓存。定向失效测试 — 编辑 ``versions.toml`` 中的
 单个版本项（如 Pi 或 OpenSpec），重新构建，然后还原编辑：
 
 ```bash
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
 ```
 
 仅修改 Pi 应只重新构建 Pi 安装及最终组装（保留 OpenSpec 缓存层）。
@@ -157,7 +157,7 @@ Pi 扩展和 rtk 集成通过受保护的脚本安装到挂载的主机
 `/home/dev/.pi` 目录中，而非写入镜像。首次启动容器后，运行：
 
 ```bash
-python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
+./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
 脚本安装固定版本的 `@arcanemachine/pi-read`、`@llblab/pi-codex-usage`、
@@ -170,9 +170,9 @@ BuildKit 缓存可以使用 `docker builder prune` 清理；只有需要完全�
 ## 运行
 
 ```bash
-python3 docker/versions.py compose run --rm pi
-python3 docker/versions.py compose run --rm pi pi --version
-python3 docker/versions.py compose run --rm pi bash -lc 'openspec --help'
+./docker/versions.py compose run --rm pi
+./docker/versions.py compose run --rm pi pi --version
+./docker/versions.py compose run --rm pi bash -lc 'openspec --help'
 ./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```

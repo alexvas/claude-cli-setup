@@ -41,7 +41,7 @@ Set in `.env`:
 Check the rendered configuration (it may contain secrets):
 
 ```bash
-python3 docker/versions.py compose config
+./docker/versions.py compose config
 ```
 
 ## Version management
@@ -51,21 +51,21 @@ versions, revisions, URLs, and digests. Do not define those values in `.env`,
 the Dockerfile, or Compose. Validate the inventory locally before building:
 
 ```bash
-python3 docker/versions.py validate
+./docker/versions.py validate
 ```
 
-Canonical builds always use `python3 docker/versions.py compose`. For low-level
+Canonical builds always use `./docker/versions.py compose`. For low-level
 integration, this command prints shell-safe `export` lines that can be loaded
 before invoking Compose manually:
 
 ```bash
-python3 docker/versions.py env
+./docker/versions.py env
 ```
 
 Pass supported overrides explicitly to the resolver:
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 Override policy is separate from the selected version in `versions.toml`. The
@@ -78,11 +78,11 @@ Update discovery is explicit and is never run by ordinary build, launch,
 validation, or runtime setup paths:
 
 ```bash
-python3 docker/versions.py check-updates
-python3 docker/versions.py check-updates --only stages.toolchain.python --json
-python3 docker/versions.py check-updates --suggest
-python3 docker/versions.py check-updates --strict
-python3 docker/versions.py check-updates --fail-on-outdated
+./docker/versions.py check-updates
+./docker/versions.py check-updates --only stages.toolchain.python --json
+./docker/versions.py check-updates --suggest
+./docker/versions.py check-updates --strict
+./docker/versions.py check-updates --fail-on-outdated
 ```
 
 Default mode is best-effort: unavailable providers are reported without making
@@ -105,7 +105,7 @@ workflows.
 Rootful Docker:
 
 ```bash
-python3 docker/versions.py compose build pi
+./docker/versions.py compose build pi
 ```
 
 Rootless Docker:
@@ -123,13 +123,13 @@ The image exposes direct `python` and `python3` executables for the configured u
 Override the Python version deliberately when building:
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 For a full rebuild:
 
 ```bash
-python3 docker/versions.py compose build --no-cache pi
+./docker/versions.py compose build --no-cache pi
 ```
 
 ### BuildKit cache verification
@@ -137,8 +137,8 @@ python3 docker/versions.py compose build --no-cache pi
 Use plain progress output so cached and executed steps are distinguishable:
 
 ```bash
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
 The second build should be entirely cached. For targeted invalidation tests —
@@ -146,7 +146,7 @@ change a single version entry in ``versions.toml`` (e.g. bump Pi or OpenSpec),
 rebuild, then revert the edit:
 
 ```bash
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
 ```
 
 Changing Pi alone should rebuild only the Pi installation and final assembly
@@ -160,9 +160,9 @@ intended).
 ## Run
 
 ```bash
-python3 docker/versions.py compose run --rm pi
-python3 docker/versions.py compose run --rm pi pi --version
-python3 docker/versions.py compose run --rm pi bash -lc 'openspec --help'
+./docker/versions.py compose run --rm pi
+./docker/versions.py compose run --rm pi pi --version
+./docker/versions.py compose run --rm pi bash -lc 'openspec --help'
 ./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```
@@ -174,7 +174,7 @@ Pi extensions and rtk integration are installed into the mounted host
 After starting the container for the first time, run:
 
 ```bash
-python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
+./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
 The script installs pinned versions of `@arcanemachine/pi-read`,

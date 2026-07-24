@@ -17,6 +17,14 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _VERSIONS_PY = _REPO_ROOT / "docker" / "versions.py"
 _FIXTURES = _REPO_ROOT / "tests" / "fixtures" / "versions"
 
+
+def _versions_py_cmd() -> list[str]:
+    """Return the command line to invoke versions.py directly if
+    the file is executable, otherwise through the interpreter."""
+    if os.access(_VERSIONS_PY, os.X_OK):
+        return [str(_VERSIONS_PY)]
+    return [sys.executable, str(_VERSIONS_PY)]
+
 # Minimal sanitized environment — no HOME to avoid config leakage
 _SANITIZED_ENV: dict[str, str] = {}
 for _k in ("PATH", "LANG", "LC_ALL"):
@@ -502,6 +510,160 @@ class TestShellEscape(unittest.TestCase):
             _shell_escape('$PATH "double"'),
             "'$PATH \"double\"'",
         )
+
+
+# ---------------------------------------------------------------------------
+# 1.1 Executable file mode
+# ---------------------------------------------------------------------------
+
+class TestExecutableFileMode(unittest.TestCase):
+    """Verify that docker/versions.py has a portable shebang and is
+    tracked as executable in Git."""
+
+    def test_has_portable_python3_shebang(self):
+        """First line must be the env-based Python 3 shebang."""
+        first_line = _VERSIONS_PY.read_text(encoding="utf-8").splitlines()[0]
+        self.assertEqual(
+            first_line, "#!/usr/bin/env python3",
+            f"Expected shebang, got: {first_line!r}",
+        )
+
+    def test_git_tracks_executable_mode(self):
+        """File must have executable permission tracked in Git so that
+        clones receive the +x mode on POSIX hosts."""
+        import subprocess as sp
+        proc = sp.run(
+            ["git", "ls-files", "--stage", str(_VERSIONS_PY)],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0,
+                         f"git ls-files failed: {proc.stderr}")
+        # Git index line: <mode> <hash> <stage> <path>
+        # Executable files have mode 100755.
+        mode = proc.stdout.strip().split()[0] if proc.stdout.strip() else ""
+        self.assertEqual(
+            mode, "100755",
+            f"Expected Git mode 100755 (executable), got: {mode}",
+        )
+
+
+class TestDirectExecutionParity(unittest.TestCase):
+    """Verify that direct execution produces identical output to
+    interpreter-prefixed invocation."""
+
+    @staticmethod
+    def _run_direct(*args: str) -> subprocess.CompletedProcess[str]:
+        cmd = [str(_VERSIONS_PY), *args]
+        return subprocess.run(
+            cmd,
+            cwd=str(_REPO_ROOT),
+            text=True,
+            capture_output=True,
+            env=_SANITIZED_ENV,
+        )
+
+    @staticmethod
+    def _run_interpreter(*args: str) -> subprocess.CompletedProcess[str]:
+        cmd = [sys.executable, str(_VERSIONS_PY), *args]
+        return subprocess.run(
+            cmd,
+            cwd=str(_REPO_ROOT),
+            text=True,
+            capture_output=True,
+            env=_SANITIZED_ENV,
+        )
+
+    # ── successful invocations ────────────────────────────────────────
+
+    def test_validate_output_parity(self):
+        direct = self._run_direct("validate")
+        interpreter = self._run_interpreter("validate")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.stderr, interpreter.stderr)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_validate_json_output_parity(self):
+        direct = self._run_direct("validate", "--json")
+        interpreter = self._run_interpreter("validate", "--json")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_env_output_parity(self):
+        direct = self._run_direct("env")
+        interpreter = self._run_interpreter("env")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.stderr, interpreter.stderr)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_env_json_output_parity(self):
+        direct = self._run_direct("env", "--json")
+        interpreter = self._run_interpreter("env", "--json")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_get_scalar_output_parity(self):
+        direct = self._run_direct("get", "stages.toolchain.python.version")
+        interpreter = self._run_interpreter("get", "stages.toolchain.python.version")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_get_json_output_parity(self):
+        direct = self._run_direct("get", "stages.toolchain.python.version", "--json")
+        interpreter = self._run_interpreter("get", "stages.toolchain.python.version", "--json")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_compose_help_output_parity(self):
+        direct = self._run_direct("compose", "--help")
+        interpreter = self._run_interpreter("compose", "--help")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_check_updates_help_output_parity(self):
+        direct = self._run_direct("check-updates", "--help")
+        interpreter = self._run_interpreter("check-updates", "--help")
+        self.assertEqual(direct.stdout, interpreter.stdout)
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    # ── error paths ───────────────────────────────────────────────────
+
+    def test_invalid_inventory_exit_code_parity(self):
+        invalid_path = _FIXTURES / "missing-source.toml"
+        direct = self._run_direct("validate", "--inventory", str(invalid_path))
+        interpreter = self._run_interpreter("validate", "--inventory", str(invalid_path))
+        self.assertEqual(direct.returncode, interpreter.returncode)
+        self.assertEqual(direct.stderr, interpreter.stderr)
+
+    def test_nonexistent_inventory_exit_code_parity(self):
+        direct = self._run_direct("validate", "--inventory", "/nonexistent/path.toml")
+        interpreter = self._run_interpreter("validate", "--inventory", "/nonexistent/path.toml")
+        self.assertEqual(direct.returncode, interpreter.returncode)
+
+    def test_unknown_path_exit_code_parity(self):
+        direct = self._run_direct("get", "stages.toolchain.pythno.version")
+        interpreter = self._run_interpreter("get", "stages.toolchain.pythno.version")
+        self.assertEqual(direct.returncode, interpreter.returncode)
+        self.assertEqual(direct.stderr, interpreter.stderr)
+
+    def test_override_malformed_exit_code_parity(self):
+        direct = self._run_direct(
+            "get", "stages.toolchain.python.version",
+            "--override", "stages.toolchain.python.version =3.14.7",
+        )
+        interpreter = self._run_interpreter(
+            "get", "stages.toolchain.python.version",
+            "--override", "stages.toolchain.python.version =3.14.7",
+        )
+        self.assertEqual(direct.returncode, interpreter.returncode)
+        self.assertIn("spaces", direct.stderr.lower())
+
+    def test_unknown_only_filter_exit_code_parity(self):
+        direct = self._run_direct("check-updates", "--only", "nonexistent-xyz")
+        interpreter = self._run_interpreter("check-updates", "--only", "nonexistent-xyz")
+        self.assertEqual(direct.returncode, interpreter.returncode)
+        self.assertEqual(direct.stderr, interpreter.stderr)
 
 
 class TestCliCheckUpdates(unittest.TestCase):

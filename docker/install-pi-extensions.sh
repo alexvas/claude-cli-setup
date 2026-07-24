@@ -9,7 +9,7 @@ HELPER="/usr/local/lib/pi-cli/docker/versions.py"
 if ! mountpoint -q -- "$PI_HOME"; then
   echo "ERROR: $PI_HOME is not a mount point." >&2
   echo "The Pi home must be mounted from the host before running this script." >&2
-  echo "Example: python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh" >&2
+  echo "Example: ./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh" >&2
   exit 1
 fi
 

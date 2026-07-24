@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Thin wrapper that re-exports the docker.versioning package.
 
 This module exists for backward compatibility so existing imports like

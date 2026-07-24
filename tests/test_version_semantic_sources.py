@@ -331,6 +331,6 @@ class TestSemanticSources(unittest.TestCase):
         if violations:
             self.fail(
                 "README files contain raw docker compose commands that bypass "
-                "the resolver — replace with python3 docker/versions.py compose:\n"
+                "the resolver — replace with ./docker/versions.py compose:\n"
                 + "\n".join(violations)
             )

@@ -41,7 +41,7 @@ cp .env.example .env
 Проверьте итоговую конфигурацию (вывод может содержать секреты):
 
 ```bash
-python3 docker/versions.py compose config
+./docker/versions.py compose config
 ```
 
 ## Управление версиями
@@ -51,21 +51,21 @@ python3 docker/versions.py compose config
 `.env`, Dockerfile или Compose. Перед сборкой можно выполнить локальную проверку:
 
 ```bash
-python3 docker/versions.py validate
+./docker/versions.py validate
 ```
 
-Canonical build всегда запускается через `python3 docker/versions.py compose`.
+Canonical build всегда запускается через `./docker/versions.py compose`.
 Для низкоуровневой интеграции команда ниже печатает shell-safe `export`-строки;
 их можно загрузить в текущий shell перед ручным вызовом Compose:
 
 ```bash
-python3 docker/versions.py env
+./docker/versions.py env
 ```
 
 Допустимые overrides передаются явно в resolver:
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 Политика override хранится отдельно от выбранной версии в `versions.toml`.
@@ -77,11 +77,11 @@ python3 docker/versions.py compose --override stages.toolchain.python.version=X.
 обычных build, launch, validate или runtime setup:
 
 ```bash
-python3 docker/versions.py check-updates
-python3 docker/versions.py check-updates --only stages.toolchain.python --json
-python3 docker/versions.py check-updates --suggest
-python3 docker/versions.py check-updates --strict
-python3 docker/versions.py check-updates --fail-on-outdated
+./docker/versions.py check-updates
+./docker/versions.py check-updates --only stages.toolchain.python --json
+./docker/versions.py check-updates --suggest
+./docker/versions.py check-updates --strict
+./docker/versions.py check-updates --fail-on-outdated
 ```
 
 Обычный режим best-effort сообщает недоступные providers, но не делает сборку
@@ -104,7 +104,7 @@ byte-identical OCI image. Установка prebuilt `rtk`/`fd` остаётс�
 Rootful Docker:
 
 ```bash
-python3 docker/versions.py compose build pi
+./docker/versions.py compose build pi
 ```
 
 Rootless Docker:
@@ -122,13 +122,13 @@ Wrapper записывает обнаруженный `HOST_GATEWAY_IP` в `.env
 Версию Python можно явно переопределить при сборке:
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 Для полного rebuild:
 
 ```bash
-python3 docker/versions.py compose build --no-cache pi
+./docker/versions.py compose build --no-cache pi
 ```
 
 ### Проверка кеширования BuildKit
@@ -136,8 +136,8 @@ python3 docker/versions.py compose build --no-cache pi
 Используйте обычный вывод прогресса, чтобы отличать кешированные шаги от выполненных:
 
 ```bash
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
 Вторая сборка должна использовать кеш. Для тестирования инвалидации кеша —
@@ -145,7 +145,7 @@ python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/
 пересоберите и откатите правку:
 
 ```bash
-python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
+./docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
 ```
 
 Сборка с изменённым Pi должна пересобрать только установку Pi (сохраняя кеш
@@ -164,7 +164,7 @@ OpenSpec). Сборка с изменённым OpenSpec инвалидируе�
 запуска контейнера выполните:
 
 ```bash
-python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
+./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
 Скрипт устанавливает закреплённые версии `@arcanemachine/pi-read`,
@@ -178,10 +178,10 @@ python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.s
 ## Запуск
 
 ```bash
-python3 docker/versions.py compose run --rm pi
+./docker/versions.py compose run --rm pi
 
-python3 docker/versions.py compose run --rm pi pi --version
-python3 docker/versions.py compose run --rm pi bash -lc 'openspec --help'
+./docker/versions.py compose run --rm pi pi --version
+./docker/versions.py compose run --rm pi bash -lc 'openspec --help'
 ./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```
