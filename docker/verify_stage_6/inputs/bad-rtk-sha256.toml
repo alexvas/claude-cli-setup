@@ -1,0 +1,228 @@
+# versions.toml — Reviewed source of default versions, revisions, URLs,
+# digests, platform artifacts, and update metadata for the pi-cli Docker image.
+#
+# Stages mirror Dockerfile build-graph nodes.
+# Every versioned entry requires [source] and [update] metadata.
+# Platform artifacts bundle URL + SHA-256 so a version cannot be reviewed
+# independently from its bytes.
+
+schema = 1
+
+[cache]
+# Custom directory for disk-backed HTTP cache (default: $XDG_CACHE_HOME/pi-cli/versioning)
+# dir = "/path/to/cache"
+# Default TTL in seconds (can be overridden with --cache-ttl)
+# ttl = 3600
+
+# ---------------------------------------------------------------------------
+# Base image
+# ---------------------------------------------------------------------------
+
+[stages.base.node]
+tag = "24-trixie-slim"
+# Digest of node:24-trixie-slim resolved from Docker Hub manifest.
+digest = "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
+
+[stages.base.node.source]
+type = "docker-registry"
+registry = "docker.io"
+repository = "library/node"
+
+[stages.base.node.update]
+provider = "docker-registry"
+stable_only = true
+track = "tag-digest"
+
+# ---------------------------------------------------------------------------
+# Toolchain (builder-only, not copied into runtime)
+# ---------------------------------------------------------------------------
+
+[stages.toolchain.rust]
+version = "1.97.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+
+[stages.toolchain.rust.source]
+type = "rust-channel"
+manifest = "https://static.rust-lang.org/dist/channel-rust-1.97.1.toml"
+
+[stages.toolchain.rust.rustup.source]
+type = "static-url"
+checksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"
+
+[stages.toolchain.rust.rustup.update]
+provider = "static-url"
+stable_only = true
+
+[stages.toolchain.rust.rustup.artifacts.linux-amd64]
+url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
+sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+
+[stages.toolchain.rust.update]
+provider = "rust-channel"
+channel = "stable"
+stable_only = true
+
+[stages.toolchain.uv]
+version = "0.11.31"
+
+[stages.toolchain.uv.source]
+type = "github-release"
+repository = "astral-sh/uv"
+tag = "0.11.31"
+
+[stages.toolchain.uv.artifacts.linux-amd64]
+url = "https://github.com/astral-sh/uv/releases/download/0.11.31/uv-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b"
+
+[stages.toolchain.uv.update]
+provider = "github-release"
+stable_only = true
+required_platforms = ["linux-amd64"]
+
+[stages.toolchain.python]
+version = "3.14.6"
+
+[stages.toolchain.python.source]
+type = "uv-python"
+implementation = "cpython"
+
+[stages.toolchain.python.update]
+provider = "uv-python"
+implementation = "cpython"
+stable_only = true
+
+[stages.toolchain.python.override]
+constraint = ">=3.14.6"
+allow_prerelease = false
+scheme = "numeric"
+
+# ty is installed via `uv tool install` in setup-python.sh
+[stages.toolchain.ty]
+version = "0.0.61"
+
+[stages.toolchain.ty.source]
+type = "pypi"
+package = "ty"
+
+[stages.toolchain.ty.update]
+provider = "pypi"
+stable_only = true
+
+# ---------------------------------------------------------------------------
+# Prebuilt Rust tools — independent stages from base
+# ---------------------------------------------------------------------------
+
+[stages.rtk-prebuilt.rtk]
+version = "v0.43.0"
+
+[stages.rtk-prebuilt.rtk.source]
+type = "github-release"
+repository = "rtk-ai/rtk"
+tag = "v0.43.0"
+
+[stages.rtk-prebuilt.rtk.artifacts.linux-amd64]
+url = "https://github.com/rtk-ai/rtk/releases/download/v0.43.0/rtk_amd64.deb"
+sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[stages.rtk-prebuilt.rtk.update]
+provider = "github-release"
+stable_only = true
+tag_prefix = "v"
+required_platforms = ["linux-amd64"]
+
+[stages.fd-prebuilt.fd]
+version = "v10.4.2"
+
+[stages.fd-prebuilt.fd.source]
+type = "github-release"
+repository = "sharkdp/fd"
+tag = "v10.4.2"
+
+[stages.fd-prebuilt.fd.artifacts.linux-amd64]
+url = "https://github.com/sharkdp/fd/releases/download/v10.4.2/fd_10.4.2_amd64.deb"
+sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
+
+[stages.fd-prebuilt.fd.update]
+provider = "github-release"
+stable_only = true
+tag_prefix = "v"
+required_platforms = ["linux-amd64"]
+
+# ---------------------------------------------------------------------------
+# Node tools — independent cache scopes
+# ---------------------------------------------------------------------------
+
+[stages.pi-tools.pi]
+version = "0.80.10"
+
+[stages.pi-tools.pi.source]
+type = "npm"
+package = "@earendil-works/pi-coding-agent"
+
+[stages.pi-tools.pi.update]
+provider = "npm"
+stable_only = true
+
+[stages.openspec-tools.openspec]
+version = "1.6.0"
+
+[stages.openspec-tools.openspec.source]
+type = "npm"
+package = "@fission-ai/openspec"
+
+[stages.openspec-tools.openspec.update]
+provider = "npm"
+stable_only = true
+
+# ---------------------------------------------------------------------------
+# Runtime home artifacts
+# ---------------------------------------------------------------------------
+
+[stages.runtime.oh-my-zsh]
+revision = "70ad5e3df8f7bed68aa6672029496926e632aedd"
+
+[stages.runtime.oh-my-zsh.source]
+type = "git"
+repository = "https://github.com/ohmyzsh/ohmyzsh.git"
+
+[stages.runtime.oh-my-zsh.update]
+provider = "git-ref"
+ref = "master"
+
+# ---------------------------------------------------------------------------
+# Pi extensions — installed at runtime by install-pi-extensions.sh
+# ---------------------------------------------------------------------------
+
+[runtime.pi-extensions.pi-read]
+version = "0.2.0"
+
+[runtime.pi-extensions.pi-read.source]
+type = "npm"
+package = "@arcanemachine/pi-read"
+
+[runtime.pi-extensions.pi-read.update]
+provider = "npm"
+stable_only = true
+
+[runtime.pi-extensions.pi-codex-usage]
+version = "0.9.1"
+
+[runtime.pi-extensions.pi-codex-usage.source]
+type = "npm"
+package = "@llblab/pi-codex-usage"
+
+[runtime.pi-extensions.pi-codex-usage.update]
+provider = "npm"
+stable_only = true
+
+[runtime.pi-extensions.pi-proxy]
+version = "1.0.0"
+
+[runtime.pi-extensions.pi-proxy.source]
+type = "npm"
+package = "pi-proxy"
+
+[runtime.pi-extensions.pi-proxy.update]
+provider = "npm"
+stable_only = true

@@ -71,17 +71,17 @@ This stage removes duplicated constants and rewires source files. Static and she
 This is the only implementation stage that requires Docker. It validates the already-tested local configuration and source integration against real images.
 
 - [x] 6.1 **RED:** Add a host-side acceptance script that checks effective inventory ownership/mode, installed-version equality, direct Python behavior, checksum rejection, and runtime extension pins; demonstrate it rejects the pre-migration image or a deliberately mismatched fixture image
-- [ ] 6.2 **GREEN:** Build the default image through `versions.py compose` and fix only Docker-specific integration failures until the acceptance script and `verify-runtime.sh` pass
-- [ ] 6.3 **GREEN:** Build one supported stable Python override and confirm the effective inventory and direct `python`/`python3` report the requested exact version
-- [ ] 6.4 **INTROSPECT:** Compare image inventory with installed Node, Rust/Cargo, rustfmt/clippy, uv, Python, ty, Pi, OpenSpec, rtk, fd, and Pi extension metadata
-- [ ] 6.5 **INTROSPECT:** Change one inventory node at a time and inspect plain BuildKit output to confirm only dependent stages invalidate
-- [ ] 6.6 **VALIDATE:** Run clean default/custom UID-GID builds, checksum/digest negative tests, Python prerelease/old-version rejection, runtime smoke checks, and record Docker-host evidence
+- [x] 6.2 **GREEN:** Build the default image through `versions.py compose` and fix only Docker-specific integration failures until the acceptance script and `verify-runtime.sh` pass
+- [x] 6.3 **GREEN:** Using an isolated policy fixture with stable Python `3.14.5` selected, build the available stable `3.14.6` effective override and confirm the inventory plus direct `python`/`python3` report exactly `3.14.6`, without changing the authoritative default or minimum
+- [x] 6.4 **INTROSPECT:** Compare image inventory with installed Node, Rust/Cargo, rustfmt/clippy, uv, Python, ty, Pi, OpenSpec, rtk, fd, and Pi extension metadata
+- [x] 6.5 **INTROSPECT:** Change one inventory node at a time and inspect plain BuildKit output to confirm only dependent stages invalidate
+- [x] 6.6 **VALIDATE:** Run clean default/custom UID-GID builds, checksum/digest negative tests, Python prerelease/old-version rejection, runtime smoke checks, and record Docker-host evidence
 
 ## 7. User workflow and release validation — depends on Stages 3 and 6; documentation checks need no Docker
 
 This final stage joins update discovery with the proven build workflow and makes the supported interface reviewable.
 
-- [ ] 7.1 **RED:** Add documentation/source consistency tests requiring canonical build commands, inventory paths, override grammar, update-check semantics, `--suggest` non-mutation, and reproducibility boundaries
-- [ ] 7.2 **GREEN:** Update maintained documentation for canonical builds, low-level env export, inventory editing, controlled overrides, provider checks, suggestions, refresh review, and completed focused-change ownership
-- [ ] 7.3 **INTROSPECT:** Run a live best-effort update check, manually review at least one suggestion against its upstream artifact/checksum source, and confirm normal build/launch/setup paths make no update-provider requests
-- [ ] 7.4 **VALIDATE:** Run all local suites first, then available project checks and recorded Docker acceptance evidence; finish with `openspec validate --all --strict --no-interactive` and `git diff --check`
+- [x] 7.1 **RED:** Add documentation/source consistency tests requiring canonical build commands, inventory paths, override grammar, update-check semantics, `--suggest` non-mutation, and reproducibility boundaries
+- [x] 7.2 **GREEN:** Update maintained documentation for canonical builds, low-level env export, inventory editing, controlled overrides, provider checks, suggestions, refresh review, and completed focused-change ownership
+- [x] 7.3 **INTROSPECT:** Run a live best-effort update check, manually review at least one suggestion against its upstream artifact/checksum source, and confirm normal build/launch/setup paths make no update-provider requests
+- [x] 7.4 **VALIDATE:** Run all local suites first, then available project checks and recorded Docker acceptance evidence; finish with `openspec validate --all --strict --no-interactive` and `git diff --check`

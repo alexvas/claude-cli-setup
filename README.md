@@ -34,8 +34,7 @@ cp .env.example .env
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — дополнительные проекты;
 - `COMPOSE_FILE` — базовый compose и необходимые fragments;
 - `HOST_GATEWAY_IP` — адрес хоста для rootless Docker, обычно задаётся wrapper;
-- `DEV_UID`, `DEV_GID` — UID/GID пользователя `dev`;
-- `PYTHON_VERSION` — версия CPython под управлением uv (по умолчанию точно `3.14.6`; override допускается только для `3.14.6` или новее).
+- `DEV_UID`, `DEV_GID` — UID/GID пользователя `dev`.
 
 Параметры `SOCKS_PORT`, `SOCKS_HOST` и `EXTERNAL_IP` больше не используются для сборки и удалены из поддерживаемого интерфейса. Доступ к host services во время работы контейнера обеспечивается через `host.docker.internal`.
 
@@ -44,6 +43,61 @@ cp .env.example .env
 ```bash
 python3 docker/versions.py compose config
 ```
+
+## Управление версиями
+
+`versions.toml` — единственный поддерживаемый источник выбранных версий,
+ревизий, URL и digest для non-Debian инструментов. Не задавайте эти значения в
+`.env`, Dockerfile или Compose. Перед сборкой можно выполнить локальную проверку:
+
+```bash
+python3 docker/versions.py validate
+```
+
+Canonical build всегда запускается через `python3 docker/versions.py compose`.
+Для низкоуровневой интеграции команда ниже печатает shell-safe `export`-строки;
+их можно загрузить в текущий shell перед ручным вызовом Compose:
+
+```bash
+python3 docker/versions.py env
+```
+
+Допустимые overrides передаются явно в resolver:
+
+```bash
+python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+```
+
+Политика override хранится отдельно от выбранной версии в `versions.toml`.
+Грамматика ограничена операторами `==, >, >=, <, <=` над полными числовыми
+версиями `X.Y.Z`; clauses через запятую означают AND. Wildcards, OR, неполные
+версии и prerelease запрещены, если policy явно не разрешает их.
+
+Проверка обновлений выполняется только по явной команде и не участвует в
+обычных build, launch, validate или runtime setup:
+
+```bash
+python3 docker/versions.py check-updates
+python3 docker/versions.py check-updates --only stages.toolchain.python --json
+python3 docker/versions.py check-updates --suggest
+python3 docker/versions.py check-updates --strict
+python3 docker/versions.py check-updates --fail-on-outdated
+```
+
+Обычный режим best-effort сообщает недоступные providers, но не делает сборку
+зависимой от них. `--strict` превращает provider failures в ошибку;
+`--fail-on-outdated` нужен для policy checks. `--suggest` — **non-mutating**:
+он печатает reviewable candidate values, URL и опубликованные checksums, но не
+редактирует репозиторий. Переносите предложение в `versions.toml` вручную,
+проверяйте upstream release/checksum, запускайте `validate`, тесты и canonical
+build, затем проверяйте effective inventory в образе.
+
+Границы воспроизводимости: inventory фиксирует non-Debian inputs, но не
+замораживает Debian repositories, BuildKit metadata и не гарантирует
+byte-identical OCI image. Установка prebuilt `rtk`/`fd` остаётся в области
+завершённого изменения `split-rtk-fd-prebuilt`, а установка npm-расширений в
+смонтированный Pi home — `pin-pi-read-npm`; общий inventory не меняет ownership
+этих workflows.
 
 ## Сборка
 
@@ -68,7 +122,7 @@ Wrapper записывает обнаруженный `HOST_GATEWAY_IP` в `.env
 Версию Python можно явно переопределить при сборке:
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=3.14.6 -- build pi
+python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 Для полного rebuild:
@@ -82,8 +136,8 @@ python3 docker/versions.py compose build --no-cache pi
 Используйте обычный вывод прогресса, чтобы отличать кешированные шаги от выполненных:
 
 ```bash
-python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
-python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
 Вторая сборка должна использовать кеш. Для тестирования инвалидации кеша —
@@ -91,7 +145,7 @@ python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/
 пересоберите и откатите правку:
 
 ```bash
-python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/pi-cache-test.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
 ```
 
 Сборка с изменённым Pi должна пересобрать только установку Pi (сохраняя кеш

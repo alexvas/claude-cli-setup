@@ -10,27 +10,27 @@ services:
       context: .
       target: runtime
       args:
-        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:?run: python3 docker/versions.py compose}
-        RUST_VERSION: ${RUST_VERSION:?run: python3 docker/versions.py compose}
-        RUST_PROFILE: ${RUST_PROFILE:?run: python3 docker/versions.py compose}
-        RUST_COMPONENTS: ${RUST_COMPONENTS:?run: python3 docker/versions.py compose}
-        RUSTUP_URL: ${RUSTUP_URL:?run: python3 docker/versions.py compose}
-        RUSTUP_SHA256: ${RUSTUP_SHA256:?run: python3 docker/versions.py compose}
-        UV_VERSION: ${UV_VERSION:?run: python3 docker/versions.py compose}
-        UV_URL: ${UV_URL:?run: python3 docker/versions.py compose}
-        UV_SHA256: ${UV_SHA256:?run: python3 docker/versions.py compose}
-        PYTHON_VERSION: ${PYTHON_VERSION:?run: python3 docker/versions.py compose}
-        TY_VERSION: ${TY_VERSION:?run: python3 docker/versions.py compose}
-        RTK_VERSION: ${RTK_VERSION:?run: python3 docker/versions.py compose}
-        RTK_URL: ${RTK_URL:?run: python3 docker/versions.py compose}
-        RTK_SHA256: ${RTK_SHA256:?run: python3 docker/versions.py compose}
-        FD_VERSION: ${FD_VERSION:?run: python3 docker/versions.py compose}
-        FD_URL: ${FD_URL:?run: python3 docker/versions.py compose}
-        FD_SHA256: ${FD_SHA256:?run: python3 docker/versions.py compose}
-        PI_VERSION: ${PI_VERSION:?run: python3 docker/versions.py compose}
-        OPENSPEC_VERSION: ${OPENSPEC_VERSION:?run: python3 docker/versions.py compose}
-        OH_MY_ZSH_VERSION: ${OH_MY_ZSH_VERSION:?run: python3 docker/versions.py compose}
-        EFFECTIVE_VERSIONS_FILE: ${EFFECTIVE_VERSIONS_FILE:?run: python3 docker/versions.py compose}
+        NODE_BASE_IMAGE: "${NODE_BASE_IMAGE:?run: python3 docker/versions.py compose}"
+        RUST_VERSION: "${RUST_VERSION:?run: python3 docker/versions.py compose}"
+        RUST_PROFILE: "${RUST_PROFILE:?run: python3 docker/versions.py compose}"
+        RUST_COMPONENTS: "${RUST_COMPONENTS:?run: python3 docker/versions.py compose}"
+        RUSTUP_URL: "${RUSTUP_URL:?run: python3 docker/versions.py compose}"
+        RUSTUP_SHA256: "${RUSTUP_SHA256:?run: python3 docker/versions.py compose}"
+        UV_VERSION: "${UV_VERSION:?run: python3 docker/versions.py compose}"
+        UV_URL: "${UV_URL:?run: python3 docker/versions.py compose}"
+        UV_SHA256: "${UV_SHA256:?run: python3 docker/versions.py compose}"
+        PYTHON_VERSION: "${PYTHON_VERSION:?run: python3 docker/versions.py compose}"
+        TY_VERSION: "${TY_VERSION:?run: python3 docker/versions.py compose}"
+        RTK_VERSION: "${RTK_VERSION:?run: python3 docker/versions.py compose}"
+        RTK_URL: "${RTK_URL:?run: python3 docker/versions.py compose}"
+        RTK_SHA256: "${RTK_SHA256:?run: python3 docker/versions.py compose}"
+        FD_VERSION: "${FD_VERSION:?run: python3 docker/versions.py compose}"
+        FD_URL: "${FD_URL:?run: python3 docker/versions.py compose}"
+        FD_SHA256: "${FD_SHA256:?run: python3 docker/versions.py compose}"
+        PI_VERSION: "${PI_VERSION:?run: python3 docker/versions.py compose}"
+        OPENSPEC_VERSION: "${OPENSPEC_VERSION:?run: python3 docker/versions.py compose}"
+        OH_MY_ZSH_VERSION: "${OH_MY_ZSH_VERSION:?run: python3 docker/versions.py compose}"
+        EFFECTIVE_VERSIONS_FILE: "${EFFECTIVE_VERSIONS_FILE:?run: python3 docker/versions.py compose}"
         DEV_UID: ${DEV_UID:-1000}
         DEV_GID: ${DEV_GID:-1000}
     stdin_open: true

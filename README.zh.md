@@ -34,8 +34,7 @@ cp .env.example .env
 - `PROJECT_PATH_2`、`PROJECT_PATH_3` — 可选的其他项目；
 - `COMPOSE_FILE` — 基础 Compose 文件和所需 fragments；
 - `HOST_GATEWAY_IP` — rootless Docker 的主机地址，通常由 wrapper 设置；
-- `DEV_UID`、`DEV_GID` — 容器 `dev` 用户的 UID/GID；
-- `PYTHON_VERSION` — uv 管理的 CPython 版本（默认严格为 `3.14.6`；覆盖值必须为 `3.14.6` 或更高版本）。
+- `DEV_UID`、`DEV_GID` — 容器 `dev` 用户的 UID/GID。
 
 `SOCKS_PORT`、`SOCKS_HOST` 和 `EXTERNAL_IP` 不再用于镜像构建，也不属于受支持的接口。容器运行时通过 `host.docker.internal` 访问主机服务。
 
@@ -44,6 +43,56 @@ cp .env.example .env
 ```bash
 python3 docker/versions.py compose config
 ```
+
+## 版本管理
+
+`versions.toml` 是所选 non-Debian 工具版本、revision、URL 和 digest 的唯一
+受支持来源。不要在 `.env`、Dockerfile 或 Compose 中定义这些值。构建前可在
+本地验证 inventory：
+
+```bash
+python3 docker/versions.py validate
+```
+
+Canonical build 始终使用 `python3 docker/versions.py compose`。对于底层集成，
+以下命令输出 shell-safe `export` 行，可在手动调用 Compose 前加载：
+
+```bash
+python3 docker/versions.py env
+```
+
+将受支持的 override 显式传给 resolver：
+
+```bash
+python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+```
+
+`versions.toml` 中的 override policy 与所选版本分离。受限语法只支持
+`==, >, >=, <, <=` 和完整数字版本 `X.Y.Z`；逗号分隔的 clauses 表示 AND。
+除非 policy 明确允许，否则 wildcard、OR、不完整版本和 prerelease 都会被拒绝。
+
+更新发现只能显式运行，普通 build、launch、validate 和 runtime setup 路径
+不会调用 provider：
+
+```bash
+python3 docker/versions.py check-updates
+python3 docker/versions.py check-updates --only stages.toolchain.python --json
+python3 docker/versions.py check-updates --suggest
+python3 docker/versions.py check-updates --strict
+python3 docker/versions.py check-updates --fail-on-outdated
+```
+
+默认模式为 best-effort：会报告不可用 provider，但构建不依赖它们。
+`--strict` 将 provider failure 视为错误，`--fail-on-outdated` 用于 policy check。
+`--suggest` 是 **non-mutating**：它输出可审查的 candidate values、URL 和已发布
+checksum，但不会修改仓库。请手动将建议应用到 `versions.toml`，核对 upstream
+release/checksum，运行 `validate`、测试和 canonical build，然后检查镜像中的
+effective inventory。
+
+可复现性边界：inventory 固定 non-Debian inputs，但不冻结 Debian repositories
+或 BuildKit metadata，也不保证 byte-identical OCI image。Prebuilt `rtk`/`fd`
+安装仍归已完成的 `split-rtk-fd-prebuilt` change 管理；挂载 Pi home 的 npm 扩展
+安装仍归 `pin-pi-read-npm` 管理。共享 inventory 不替代这些 workflows。
 
 ## 构建
 
@@ -68,7 +117,7 @@ wrapper 会将检测到的 `HOST_GATEWAY_IP` 写入 `.env`，保留运行时主�
 构建时可以明确覆盖 Python 版本：
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=3.14.6 -- build pi
+python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 完全重建：
@@ -82,15 +131,15 @@ python3 docker/versions.py compose build --no-cache pi
 使用普通进度输出，以区分已缓存和实际执行的步骤：
 
 ```bash
-python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
-python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
 第二次构建应完全使用缓存。定向失效测试 — 编辑 ``versions.toml`` 中的
 单个版本项（如 Pi 或 OpenSpec），重新构建，然后还原编辑：
 
 ```bash
-python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-cache-test.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
 ```
 
 仅修改 Pi 应只重新构建 Pi 安装及最终组装（保留 OpenSpec 缓存层）。

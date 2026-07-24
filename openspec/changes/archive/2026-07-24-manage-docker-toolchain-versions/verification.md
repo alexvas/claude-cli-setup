@@ -1015,3 +1015,72 @@ OK
 - All 628 tests pass (540 + 11 + 77)
 - No Docker, no network in tests: ✓
 - No trailing whitespace: ✓
+
+## Stage 6 real-Docker evidence
+
+Evidence was collected by the independently runnable scripts under
+`docker/verify_stage_6/`; each command has separate stdout/stderr logs and a
+machine-readable `evidence.json` under `/tmp/pi-stage6/<task>/`.
+
+- **6.2 — passed:** canonical default Compose build completed; both
+  `docker/verify-runtime.sh` and full image acceptance passed; image inspect and
+  untruncated history were recorded (`6.2/evidence.json`, 6 commands).
+- **6.3 — passed with an isolated policy fixture:** because update discovery
+  reported no stable CPython newer than the authoritative `3.14.6`, the
+  verification fixture selected stable `3.14.5` with a matching temporary
+  minimum and built available stable `3.14.6` as the effective override. Full
+  acceptance and direct `python`/`python3` checks reported exactly `3.14.6`.
+  The authoritative default and minimum remained unchanged at `3.14.6`.
+- **6.4 — passed:** complete host/image inventory comparison, tool matrix,
+  direct Python contract, and all configured npm extension package identities
+  and versions passed (`6.4/evidence.json`, 4 commands).
+- **6.5 — passed after isolated rerun:** each Python-toolchain, Rust-profile,
+  and runtime-extension variant was preceded by a canonical baseline build.
+  Plain BuildKit output recorded 45 cached markers and 10 orchestration/build
+  completion markers per variant; changed cache keys selected only their
+  dependent cached stage outputs while unrelated stages remained cached.
+  Durations were 8.09 s, 21.34 s, and 2.41 s respectively
+  (`6.5/evidence.json`, 7 successful commands).
+- **6.6 — passed:** default and custom UID/GID builds, runtime smoke and full
+  acceptance, deliberately wrong artifact checksum and base digest failures,
+  rejection of old/prerelease/non-numeric Python selectors, `git diff --check`,
+  and strict OpenSpec validation all behaved as expected
+  (`6.6/evidence.json`, 16 commands). Expected negative commands returned
+  non-zero while the evidence collector recorded overall success.
+
+## Stage 7 documentation and update review
+
+- Documentation consistency tests cover all maintained README languages and
+  require the canonical resolver, inventory validation, low-level `env` export,
+  restricted override grammar, explicit update modes, non-mutating suggestions,
+  reproducibility boundaries, and focused-change ownership.
+- A live `check-updates --suggest --no-cache` completed in best-effort mode with
+  exit 0. It reported applicable updates for uv, ty, Pi, and oh-my-zsh while
+  reporting unavailable Node/Python providers without failing the check.
+- The uv `0.11.32` suggestion was manually checked against the published
+  upstream checksum at
+  `https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz.sha256`.
+  Suggested and published SHA-256 values both equalled
+  `aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967`.
+- The working-tree fingerprint before and after `--suggest` was identical:
+  `1f46f917848b6d3b5da9ffc5ed23549f293af99d88d34e72859832909deded71`.
+- Structural ordinary-command tests confirmed `validate`, `get`, `env`, domain
+  imports, and the thin wrapper do not import provider/update modules. Static
+  inspection found no update-discovery invocation in Dockerfile, Compose,
+  launch, entrypoint, build-wrapper, extension setup, or runtime verification
+  paths.
+
+### Final Stage 7 validation
+
+- Full unittest discovery: **562 tests passed**.
+- Documentation, semantic-source, and source-contract suites: passed.
+- Python `compileall`: passed.
+- All `docker/*.sh` syntax checks: passed.
+- Recorded Stage 6 real-Docker evidence: tasks 6.2–6.6 report success, with
+  expected non-zero results only for deliberate negative cases.
+- `openspec validate --all --strict --no-interactive`: **7 items passed, 0
+  failed**.
+- `git diff --check`: passed.
+- `pi-green-loop` was invoked but found no configured checks; the explicit
+  Python, shell, OpenSpec, documentation, and diff checks above were run
+  directly instead.

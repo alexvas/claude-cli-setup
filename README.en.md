@@ -34,8 +34,7 @@ Set in `.env`:
 - `PROJECT_PATH_2`, `PROJECT_PATH_3` — optional additional projects;
 - `COMPOSE_FILE` — the base Compose file plus required fragments;
 - `HOST_GATEWAY_IP` — host address for rootless Docker, usually set by the wrapper;
-- `DEV_UID`, `DEV_GID` — the container `dev` user's UID/GID;
-- `PYTHON_VERSION` — uv-managed CPython version (defaults exactly to `3.14.6`; overrides must be `3.14.6` or newer).
+- `DEV_UID`, `DEV_GID` — the container `dev` user's UID/GID.
 
 `SOCKS_PORT`, `SOCKS_HOST`, and `EXTERNAL_IP` are no longer used for image builds and are not part of the supported interface. Runtime access to host services uses `host.docker.internal`.
 
@@ -44,6 +43,62 @@ Check the rendered configuration (it may contain secrets):
 ```bash
 python3 docker/versions.py compose config
 ```
+
+## Version management
+
+`versions.toml` is the only supported source of selected non-Debian tool
+versions, revisions, URLs, and digests. Do not define those values in `.env`,
+the Dockerfile, or Compose. Validate the inventory locally before building:
+
+```bash
+python3 docker/versions.py validate
+```
+
+Canonical builds always use `python3 docker/versions.py compose`. For low-level
+integration, this command prints shell-safe `export` lines that can be loaded
+before invoking Compose manually:
+
+```bash
+python3 docker/versions.py env
+```
+
+Pass supported overrides explicitly to the resolver:
+
+```bash
+python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+```
+
+Override policy is separate from the selected version in `versions.toml`. The
+restricted grammar supports only `==, >, >=, <, <=` over complete numeric
+`X.Y.Z` versions; comma-separated clauses are ANDed. Wildcards, OR, incomplete
+versions, and prerelease values are rejected unless policy explicitly permits
+them.
+
+Update discovery is explicit and is never run by ordinary build, launch,
+validation, or runtime setup paths:
+
+```bash
+python3 docker/versions.py check-updates
+python3 docker/versions.py check-updates --only stages.toolchain.python --json
+python3 docker/versions.py check-updates --suggest
+python3 docker/versions.py check-updates --strict
+python3 docker/versions.py check-updates --fail-on-outdated
+```
+
+Default mode is best-effort: unavailable providers are reported without making
+builds depend on them. `--strict` makes provider failures fatal, while
+`--fail-on-outdated` supports policy checks. `--suggest` is **non-mutating**: it
+prints reviewable candidate values, URLs, and published checksums but never
+edits the repository. Apply a suggestion to `versions.toml` manually, verify
+its upstream release/checksum, run `validate`, tests, and a canonical build,
+then inspect the effective inventory in the image.
+
+Reproducibility boundary: the inventory pins non-Debian inputs, but does not
+freeze Debian repositories or BuildKit metadata and does not promise a
+byte-identical OCI image. Prebuilt `rtk`/`fd` installation remains owned by the
+completed `split-rtk-fd-prebuilt` change; mounted-Pi-home npm extension setup
+remains owned by `pin-pi-read-npm`. The shared inventory does not replace those
+workflows.
 
 ## Build
 
@@ -68,7 +123,7 @@ The image exposes direct `python` and `python3` executables for the configured u
 Override the Python version deliberately when building:
 
 ```bash
-python3 docker/versions.py compose --override stages.toolchain.python.version=3.14.6 -- build pi
+python3 docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 For a full rebuild:
@@ -82,8 +137,8 @@ python3 docker/versions.py compose build --no-cache pi
 Use plain progress output so cached and executed steps are distinguishable:
 
 ```bash
-python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
-python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-1.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
 The second build should be entirely cached. For targeted invalidation tests —
@@ -91,7 +146,7 @@ change a single version entry in ``versions.toml`` (e.g. bump Pi or OpenSpec),
 rebuild, then revert the edit:
 
 ```bash
-python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-cache-test.log
+python3 docker/versions.py compose -- --progress plain build pi 2>&1 | tee /tmp/pi-cache-test.log
 ```
 
 Changing Pi alone should rebuild only the Pi installation and final assembly
