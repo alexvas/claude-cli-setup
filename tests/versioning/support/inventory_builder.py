@@ -60,6 +60,16 @@ track = "tag-digest"''')}
 channel = "stable"
 stable_only = true''')}
 
+[stages.toolchain.rust.rustup.source]
+{g("stages.toolchain.rust.rustup.source", 'type = "static-url"\nchecksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"')}
+
+[stages.toolchain.rust.rustup.update]
+{g("stages.toolchain.rust.rustup.update", '''provider = "static-url"
+stable_only = true''')}
+
+[stages.toolchain.rust.rustup.artifacts.linux-amd64]
+{g("stages.toolchain.rust.rustup", 'url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"\nsha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"')}
+
 [stages.toolchain.uv]
 {g("stages.toolchain.uv", 'version = "0.1.0"')}
 

@@ -8,10 +8,9 @@ if [[ ! ${PYTHON_VERSION} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! dpkg --compare-versions "${PYTHON_VERSION}" ge 3.14.6; then
-  echo "PYTHON_VERSION must be 3.14.6 or newer (got ${PYTHON_VERSION})" >&2
-  exit 1
-fi
+# Minimum-version and prerelease policy are validated by the resolver
+# (stages.toolchain.python.override); this script enforces only that
+# uv installs the exact requested version.
 
 export PATH="${HOME}/.local/bin:${PATH}"
 uv python install --default "${PYTHON_VERSION}"
@@ -50,4 +49,3 @@ for command_name in python python3; do
 done
 
 "${python_bin}" --version
-uv tool install --python "${PYTHON_VERSION}" ty

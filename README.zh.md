@@ -42,7 +42,7 @@ cp .env.example .env
 检查最终配置（输出可能包含密钥）：
 
 ```bash
-docker compose config
+python3 docker/versions.py compose config
 ```
 
 ## 构建
@@ -50,7 +50,7 @@ docker compose config
 Rootful Docker：
 
 ```bash
-docker compose build pi
+python3 docker/versions.py compose build pi
 ```
 
 Rootless Docker：
@@ -68,13 +68,13 @@ wrapper 会将检测到的 `HOST_GATEWAY_IP` 写入 `.env`，保留运行时主�
 构建时可以明确覆盖 Python 版本：
 
 ```bash
-PYTHON_VERSION=3.14.6 docker compose build pi
+python3 docker/versions.py compose --override stages.toolchain.python.version=3.14.6 -- build pi
 ```
 
 完全重建：
 
 ```bash
-docker compose build --no-cache pi
+python3 docker/versions.py compose build --no-cache pi
 ```
 
 ### BuildKit 缓存验证
@@ -82,15 +82,19 @@ docker compose build --no-cache pi
 使用普通进度输出，以区分已缓存和实际执行的步骤：
 
 ```bash
-docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
-docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
-PI_VERSION=0.80.10 OPENSPEC_VERSION=1.5.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-openspec.log
-PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-version.log
+python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
+python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
-第二次构建应使用缓存。仅修改 OpenSpec 的构建应只执行 OpenSpec
-安装和必要的最终组装，并保留 Pi 相关步骤的缓存；仅修改 Pi 的构建
-应保留 OpenSpec 安装缓存。
+第二次构建应完全使用缓存。定向失效测试 — 编辑 ``versions.toml`` 中的
+单个版本项（如 Pi 或 OpenSpec），重新构建，然后还原编辑：
+
+```bash
+python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-cache-test.log
+```
+
+仅修改 Pi 应只重新构建 Pi 安装及最终组装（保留 OpenSpec 缓存层）。
+仅修改 OpenSpec 应使 OpenSpec 层失效，但保留 Pi 安装缓存。
 
 验证 `dev` 用户下的运行时工具：
 
@@ -104,7 +108,7 @@ Pi 扩展和 rtk 集成通过受保护的脚本安装到挂载的主机
 `/home/dev/.pi` 目录中，而非写入镜像。首次启动容器后，运行：
 
 ```bash
-docker compose run --rm pi /home/dev/install-pi-extensions.sh
+python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
 脚本安装固定版本的 `@arcanemachine/pi-read`、`@llblab/pi-codex-usage`、
@@ -117,9 +121,9 @@ BuildKit 缓存可以使用 `docker builder prune` 清理；只有需要完全�
 ## 运行
 
 ```bash
-docker compose run --rm pi
-docker compose run --rm pi pi --version
-docker compose run --rm pi bash -lc 'openspec --help'
+python3 docker/versions.py compose run --rm pi
+python3 docker/versions.py compose run --rm pi pi --version
+python3 docker/versions.py compose run --rm pi bash -lc 'openspec --help'
 ./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```

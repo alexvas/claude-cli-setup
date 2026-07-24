@@ -41,7 +41,7 @@ provider = "static-url"
 stable_only = true
 
 [stages.toolchain.rust.rustup.artifacts.linux-amd64]
-url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
+url = "https://example.com"
 sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [stages.toolchain.uv]
@@ -54,9 +54,12 @@ tag = "0.11.29"
 
 [stages.toolchain.uv.artifacts.linux-amd64]
 url = "https://github.com/astral-sh/uv/releases/download/0.11.29/uv-x86_64-unknown-linux-gnu.tar.gz"
-sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-
+[stages.toolchain.uv.update]
+provider = "github-release"
+stable_only = true
+required_platforms = ["linux-amd64"]
 
 [stages.toolchain.python]
 version = "3.14.6"

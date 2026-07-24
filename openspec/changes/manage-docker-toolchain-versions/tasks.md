@@ -58,13 +58,13 @@ This stage defines the boundary between effective configuration and Compose/buil
 
 This stage removes duplicated constants and rewires source files. Static and shell-level tests provide the primary feedback.
 
-- [ ] 5.1 **RED:** Add semantic-source tests that reject selected version/revision/URL/digest defaults outside `versions.toml`, allowing only explicit test fixtures and generated effective inventory
-- [ ] 5.2 **RED:** Add source-contract tests requiring value-free Dockerfile `ARG` declarations, required Compose interpolation, inventory-backed runtime/extension scripts, and canonical documentation commands
-- [ ] 5.3 **GREEN:** Remove concrete defaults from Dockerfile, Compose, runtime verification, extension setup, environment templates, and direct-build documentation
-- [ ] 5.4 **GREEN:** Resolve the Node base before `FROM`; pin/verify remaining Rust/rustup and uv inputs; preserve exact Pi, OpenSpec, ty, oh-my-zsh, and direct Python behavior
-- [ ] 5.5 **GREEN:** Copy the effective inventory as root-owned read-only runtime content and make `verify-runtime.sh` plus `install-pi-extensions.sh` query it
-- [ ] 5.6 **INTROSPECT:** Search all semantic source paths for duplicate constants, inspect Docker stage/cache ownership of every argument, and review shell quoting and failure paths
-- [ ] 5.7 **VALIDATE:** Run static source-contract tests, Python unit tests, shell syntax checks, Compose configuration rendering if the CLI is available, `git diff --check`, and strict OpenSpec validation without requiring a daemon
+- [x] 5.1 **RED:** Add semantic-source tests that reject selected version/revision/URL/digest defaults outside `versions.toml`, allowing only explicit test fixtures and generated effective inventory
+- [x] 5.2 **RED:** Add source-contract tests requiring value-free Dockerfile `ARG` declarations, required Compose interpolation, inventory-backed runtime/extension scripts, and canonical documentation commands
+- [x] 5.3 **GREEN:** Remove concrete defaults from Dockerfile, Compose, runtime verification, extension setup, environment templates, and direct-build documentation
+- [x] 5.4 **GREEN:** Resolve the Node base before `FROM`; pin/verify remaining Rust/rustup and uv inputs; preserve exact Pi, OpenSpec, ty, oh-my-zsh, and direct Python behavior
+- [x] 5.5 **GREEN:** Copy the effective inventory as root-owned read-only runtime content and make `verify-runtime.sh` plus `install-pi-extensions.sh` query it
+- [x] 5.6 **INTROSPECT:** Search all semantic source paths for duplicate constants, inspect Docker stage/cache ownership of every argument, and review shell quoting and failure paths
+- [x] 5.7 **VALIDATE:** Run static source-contract tests, Python unit tests, shell syntax checks, Compose configuration rendering if the CLI is available, `git diff --check`, and strict OpenSpec validation without requiring a daemon
 
 ## 6. Docker image integration — depends on Stage 5, requires a Docker host
 

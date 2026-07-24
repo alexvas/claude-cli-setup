@@ -25,7 +25,16 @@ class FakeHttpTransport:
     """
 
     _responses: dict[tuple[str, str], HttpResponse] = field(default_factory=dict)
+    _exceptions: dict[tuple[str, str], Exception] = field(default_factory=dict)
     requests: list[tuple[str, str, Mapping[str, str]]] = field(default_factory=list)
+
+    def set_exception(
+        self,
+        method: str,
+        url: str,
+        exc: Exception,
+    ) -> None:
+        self._exceptions[(method, url)] = exc
 
     def set(
         self,
@@ -50,6 +59,10 @@ class FakeHttpTransport:
     ) -> HttpResponse:
         self.requests.append((method, url, dict(headers)))
         key = (method, url)
+
+        if key in self._exceptions:
+            raise self._exceptions[key]
+
         if key not in self._responses:
             raise AssertionError(
                 f"Unexpected HTTP request: {method} {url}\n"

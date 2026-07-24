@@ -42,7 +42,7 @@ cp .env.example .env
 Проверьте итоговую конфигурацию (вывод может содержать секреты):
 
 ```bash
-docker compose config
+python3 docker/versions.py compose config
 ```
 
 ## Сборка
@@ -50,7 +50,7 @@ docker compose config
 Rootful Docker:
 
 ```bash
-docker compose build pi
+python3 docker/versions.py compose build pi
 ```
 
 Rootless Docker:
@@ -68,13 +68,13 @@ Wrapper записывает обнаруженный `HOST_GATEWAY_IP` в `.env
 Версию Python можно явно переопределить при сборке:
 
 ```bash
-PYTHON_VERSION=3.14.6 docker compose build pi
+python3 docker/versions.py compose --override stages.toolchain.python.version=3.14.6 -- build pi
 ```
 
 Для полного rebuild:
 
 ```bash
-docker compose build --no-cache pi
+python3 docker/versions.py compose build --no-cache pi
 ```
 
 ### Проверка кеширования BuildKit
@@ -82,15 +82,21 @@ docker compose build --no-cache pi
 Используйте обычный вывод прогресса, чтобы отличать кешированные шаги от выполненных:
 
 ```bash
-docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
-docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
-PI_VERSION=0.80.10 OPENSPEC_VERSION=1.5.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-openspec.log
-PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-version.log
+python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
+python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
-Вторая сборка должна использовать кеш. Сборка только с изменённым OpenSpec
-должна выполнять установку OpenSpec и финальную сборку, сохраняя кеш Pi.
-Сборка только с изменённым Pi должна сохранять установку OpenSpec.
+Вторая сборка должна использовать кеш. Для тестирования инвалидации кеша —
+измените версию в ``versions.toml`` (например, Pi или OpenSpec),
+пересоберите и откатите правку:
+
+```bash
+python3 docker/versions.py compose -- build --progress=plain pi 2>&1 | tee /tmp/pi-cache-test.log
+```
+
+Сборка с изменённым Pi должна пересобрать только установку Pi (сохраняя кеш
+OpenSpec). Сборка с изменённым OpenSpec инвалидирует слой OpenSpec,
+но сохраняет кеш установки Pi.
 Проверка runtime-инструментов от имени `dev`:
 
 ```bash
@@ -104,7 +110,7 @@ PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain p
 запуска контейнера выполните:
 
 ```bash
-docker compose run --rm pi /home/dev/install-pi-extensions.sh
+python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
 Скрипт устанавливает закреплённые версии `@arcanemachine/pi-read`,
@@ -118,10 +124,10 @@ docker compose run --rm pi /home/dev/install-pi-extensions.sh
 ## Запуск
 
 ```bash
-docker compose run --rm pi
+python3 docker/versions.py compose run --rm pi
 
-docker compose run --rm pi pi --version
-docker compose run --rm pi bash -lc 'openspec --help'
+python3 docker/versions.py compose run --rm pi pi --version
+python3 docker/versions.py compose run --rm pi bash -lc 'openspec --help'
 ./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```

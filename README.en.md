@@ -42,7 +42,7 @@ Set in `.env`:
 Check the rendered configuration (it may contain secrets):
 
 ```bash
-docker compose config
+python3 docker/versions.py compose config
 ```
 
 ## Build
@@ -50,7 +50,7 @@ docker compose config
 Rootful Docker:
 
 ```bash
-docker compose build pi
+python3 docker/versions.py compose build pi
 ```
 
 Rootless Docker:
@@ -68,13 +68,13 @@ The image exposes direct `python` and `python3` executables for the configured u
 Override the Python version deliberately when building:
 
 ```bash
-PYTHON_VERSION=3.14.6 docker compose build pi
+python3 docker/versions.py compose --override stages.toolchain.python.version=3.14.6 -- build pi
 ```
 
 For a full rebuild:
 
 ```bash
-docker compose build --no-cache pi
+python3 docker/versions.py compose build --no-cache pi
 ```
 
 ### BuildKit cache verification
@@ -82,25 +82,32 @@ docker compose build --no-cache pi
 Use plain progress output so cached and executed steps are distinguishable:
 
 ```bash
-docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
-docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
-PI_VERSION=0.80.10 OPENSPEC_VERSION=1.5.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-openspec.log
-PI_VERSION=0.80.9 OPENSPEC_VERSION=1.6.0 docker compose build --progress=plain pi 2>&1 | tee /tmp/pi-version.log
+python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-1.log
+python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-build-2.log
 ```
 
-The second build should be cached. The OpenSpec-only build should execute only the
-OpenSpec installation and final assembly, while the Pi-only build should retain
-the OpenSpec installation. Record elapsed time and `docker image ls` size from
+The second build should be entirely cached. For targeted invalidation tests —
+change a single version entry in ``versions.toml`` (e.g. bump Pi or OpenSpec),
+rebuild, then revert the edit:
+
+```bash
+python3 docker/versions.py compose build --progress=plain pi 2>&1 | tee /tmp/pi-cache-test.log
+```
+
+Changing Pi alone should rebuild only the Pi installation and final assembly
+while keeping the cached OpenSpec layer. Changing OpenSpec alone should
+invalidate the OpenSpec layer but retain the cached Pi installation.
+Record elapsed time and ``docker image ls`` size from
 these runs when comparing builders. BuildKit caches are disposable; reclaim them
-normally with `docker builder prune` (use `-af` only when a full cache reset is
+normally with ``docker builder prune`` (use ``-af`` only when a full cache reset is
 intended).
 
 ## Run
 
 ```bash
-docker compose run --rm pi
-docker compose run --rm pi pi --version
-docker compose run --rm pi bash -lc 'openspec --help'
+python3 docker/versions.py compose run --rm pi
+python3 docker/versions.py compose run --rm pi pi --version
+python3 docker/versions.py compose run --rm pi bash -lc 'openspec --help'
 ./docker/verify-runtime.sh pi-cli-pi:latest
 python3 launch-pi.py
 ```
@@ -112,7 +119,7 @@ Pi extensions and rtk integration are installed into the mounted host
 After starting the container for the first time, run:
 
 ```bash
-docker compose run --rm pi /home/dev/install-pi-extensions.sh
+python3 docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
 ```
 
 The script installs pinned versions of `@arcanemachine/pi-read`,

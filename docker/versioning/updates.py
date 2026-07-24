@@ -39,6 +39,7 @@ from .model import (
     RustChannelSource,
     RustChannelUpdate,
     RustEntry,
+    StaticUrlUpdate,
     TyEntry,
     UvEntry,
     UvPythonSource,
@@ -62,6 +63,7 @@ from .providers.rust import RustChannelProvider
 from .providers.docker_registry import DockerRegistryProvider
 from .providers.git import GitRefProvider
 from .providers.uv_python import UvPythonProvider
+from .providers.static_url import StaticUrlProvider
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +78,7 @@ _DEFAULT_PROVIDERS: Mapping[str, UpdateProvider] = MappingProxyType({
     "docker-registry": DockerRegistryProvider(),
     "git-ref": GitRefProvider(),
     "uv-python": UvPythonProvider(),
+    "static-url": StaticUrlProvider(),
 })
 
 
@@ -111,6 +114,14 @@ def build_update_targets(
         source=s.toolchain.rust.source,
         update=s.toolchain.rust.update,
         artifacts={},
+    ))
+    # toolchain.rust.rustup (static-url bootstrap artifact)
+    result.append(UpdateTarget(
+        path="stages.toolchain.rust.rustup",
+        current=s.toolchain.rust.rustup.get("linux-amd64", ArtifactEntry(url="", sha256="")).sha256,
+        source=s.toolchain.rust.rustup_source,
+        update=s.toolchain.rust.rustup_update,
+        artifacts=dict(s.toolchain.rust.rustup),
     ))
 
     # toolchain.uv
@@ -235,6 +246,17 @@ def _classify_candidate(
     # Detect git revision
     if isinstance(target.update, GitRefUpdate):
         kind = UpdateKind.REVISION
+    elif isinstance(target.update, StaticUrlUpdate):
+        kind = UpdateKind.DIGEST_REFRESH
+
+    # Static-url: compare returned digest against stored artifact digest
+    if isinstance(target.update, StaticUrlUpdate):
+        if not target.artifacts:
+            return (UpdateStatus.SKIPPED, kind, False, "no stored artifact digest")
+        stored_digest = next(iter(target.artifacts.values())).sha256
+        if candidate.value == stored_digest:
+            return (UpdateStatus.CURRENT, kind, False, None)
+        return (UpdateStatus.OUTDATED, kind, True, None)
 
     # Current check
     if candidate.value == target.current:

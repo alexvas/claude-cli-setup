@@ -6,7 +6,8 @@
 """Launch π Docker container with IDE integration.
 
 Provides a TUI for selecting main and additional projects,
-then runs docker compose with the appropriate mounts, env vars,
+then runs docker compose (via versions.py compose for resolved
+toolchain variables) with the appropriate mounts, env vars,
 and port forwarding.
 
 Usage:
@@ -180,10 +181,9 @@ def run_container(
 
     name = f"pi-{container_num}"
     cmd = [
-        "docker",
+        "python3",
+        "docker/versions.py",
         "compose",
-        "--project-directory",
-        str(REPO_ROOT),
         "run",
         "--rm",
         "--remove-orphans",

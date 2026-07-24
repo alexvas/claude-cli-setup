@@ -31,6 +31,18 @@ provider = "rust-channel"
 channel = "stable"
 stable_only = true
 
+[stages.toolchain.rust.rustup.source]
+type = "static-url"
+checksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"
+
+[stages.toolchain.rust.rustup.update]
+provider = "static-url"
+stable_only = true
+
+[stages.toolchain.rust.rustup.artifacts.linux-amd64]
+url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
+sha256 = "4acc9acc43b2f2b80c2f6b12c8f1b45e78fa2b9a9e4d62af2f8a3f8b15236f65"
+
 [stages.toolchain.uv]
 version = "0.11.29"
 

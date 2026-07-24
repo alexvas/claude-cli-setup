@@ -59,6 +59,11 @@ def render_build_environment(
     result["RUST_VERSION"] = inv.stages.toolchain.rust.version
     result["RUST_PROFILE"] = inv.stages.toolchain.rust.profile
     result["RUST_COMPONENTS"] = " ".join(inv.stages.toolchain.rust.components)
+    # Mandatory rustup bootstrap artifact
+    rustup_artifact = inv.stages.toolchain.rust.rustup.get(platform)
+    if rustup_artifact is not None:
+        result["RUSTUP_URL"] = rustup_artifact.url
+        result["RUSTUP_SHA256"] = rustup_artifact.sha256
     result["UV_VERSION"] = inv.stages.toolchain.uv.version
     result["UV_URL"] = artifacts_uv.url
     result["UV_SHA256"] = artifacts_uv.sha256
@@ -275,9 +280,12 @@ def _write_toml(fh: object, data: object, *, _prefix: str = "") -> None:
 
 def _write_dict(fh: object, data: dict, prefix: str) -> None:
     keys = sorted(data.keys(), key=str)
-    # Scalars first, then nested dicts, then arrays.
+    # Scalars first, then arrays, then nested dicts.
     # TOML requires that bare ``key = value`` lines appear before
     # any ``[header]`` — otherwise they get absorbed into the last table.
+    # Arrays (e.g. components = [...]) must also precede nested tables
+    # because a plain ``key = [...]`` after a ``[subsection]`` header
+    # would be captured into that subsection.
     scalars: list[tuple[str, object]] = []
     nested: list[tuple[str, object]] = []
     arrays: list[tuple[str, object]] = []
@@ -321,12 +329,8 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
             fh.write(f"{k} = {_toml_str(str(v))}\n")
 
     # --- nested dicts (table headers) ---
-    for k, v in nested:
-        full = f"{prefix}.{k}" if prefix else str(k)
-        fh.write(f"\n[{full}]\n")
-        _write_dict(fh, v, full)
-
-    # --- arrays ---
+    # Emit arrays BEFORE nested tables so that ``components = [...]``
+    # lines are not captured into a preceding ``[subsection]``.
     for k, v in arrays:
         full = f"{prefix}.{k}" if prefix else str(k)
         if all(isinstance(i, dict) for i in v):
@@ -337,6 +341,12 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
             fh.write(f"{k} = [")
             fh.write(", ".join(_toml_value(i) for i in v))
             fh.write("]\n")
+
+    # --- nested dicts (table headers) ---
+    for k, v in nested:
+        full = f"{prefix}.{k}" if prefix else str(k)
+        fh.write(f"\n[{full}]\n")
+        _write_dict(fh, v, full)
 
 
 def _is_leaf_dict(d: dict) -> bool:

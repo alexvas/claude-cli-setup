@@ -30,6 +30,8 @@ from docker.versioning.model import (
     RustChannelSource,
     RustChannelUpdate,
     RustEntry,
+    StaticUrlSource,
+    StaticUrlUpdate,
     TyEntry,
     UvEntry,
     UvPythonSource,
@@ -83,6 +85,9 @@ def _minimal_inventory():
                     components=("rustfmt", "clippy"),
                     source=RustChannelSource(manifest="https://example.com/rust.toml"),
                     update=RustChannelUpdate(channel="stable", stable_only=True),
+                    rustup={"linux-amd64": ArtifactEntry(url="https://example.com/rustup-init", sha256="a" * 64)},
+                    rustup_source=StaticUrlSource(checksum_url="https://example.com/rustup-init.sha256"),
+                    rustup_update=StaticUrlUpdate(stable_only=True),
                 ),
                 uv=UvEntry(
                     version="0.1.0",
@@ -162,6 +167,7 @@ class TestTargetTraversal(unittest.TestCase):
         expected = {
             "stages.base.node",
             "stages.toolchain.rust",
+            "stages.toolchain.rust.rustup",
             "stages.toolchain.uv",
             "stages.toolchain.python",
             "stages.toolchain.ty",
@@ -193,7 +199,7 @@ class TestTargetTraversal(unittest.TestCase):
                     update=DockerRegistryUpdate(stable_only=True, track="tag-digest"),
                 )),
                 toolchain=ToolchainStage(
-                    rust=RustEntry(version="1.0.0", profile="minimal", components=(), source=RustChannelSource(manifest="u"), update=RustChannelUpdate(channel="stable", stable_only=True)),
+                    rust=RustEntry(version="1.0.0", profile="minimal", components=(), source=RustChannelSource(manifest="u"), update=RustChannelUpdate(channel="stable", stable_only=True), rustup={"linux-amd64": ArtifactEntry(url="u", sha256="a" * 64)}, rustup_source=StaticUrlSource(checksum_url="u.sha256"), rustup_update=StaticUrlUpdate(stable_only=True)),
                     uv=UvEntry(version="0.1.0", artifacts={}, source=GitHubReleaseSource(repository="r/r", tag="0.1.0"), update=GitHubReleaseUpdate(stable_only=True)),
                     python=PythonEntry(version="3.14.6", source=UvPythonSource(implementation="cpython"), update=UvPythonUpdate(implementation="cpython", stable_only=True)),
                     ty=TyEntry(version="1.0.0", source=PyPiSource(package="p"), update=PyPiUpdate(stable_only=True)),
@@ -233,7 +239,7 @@ class TestCheckUpdates(unittest.TestCase):
         # All providers return current
         providers = {k: StubProvider() for k in [
             "docker-registry", "rust-channel", "github-release",
-            "uv-python", "pypi", "npm", "git-ref",
+            "uv-python", "pypi", "npm", "git-ref", "static-url",
         ]}
         results = check_updates(inv, providers=providers, context=self._ctx())
         for r in results:
@@ -253,6 +259,7 @@ class TestCheckUpdates(unittest.TestCase):
             ),
             "npm": StubProvider(),
             "git-ref": StubProvider(),
+            "static-url": StubProvider(),
         }
         results = check_updates(inv, providers=providers, context=self._ctx())
         ty = [r for r in results if r.path == "stages.toolchain.ty"][0]
@@ -275,6 +282,7 @@ class TestCheckUpdates(unittest.TestCase):
             "pypi": StubProvider(exc=RuntimeError("network error")),
             "npm": StubProvider(),
             "git-ref": StubProvider(),
+            "static-url": StubProvider(),
         }
         results = check_updates(inv, providers=providers, context=self._ctx())
         ty = [r for r in results if r.path == "stages.toolchain.ty"][0]
@@ -292,9 +300,10 @@ class TestCheckUpdates(unittest.TestCase):
             "pypi": StubProvider(exc=RuntimeError("dead!")),
             "npm": StubProvider(),
             "git-ref": StubProvider(exc=RuntimeError("dead!")),
+            "static-url": StubProvider(exc=RuntimeError("dead!")),
         }
         results = check_updates(inv, providers=providers, context=self._ctx())
-        self.assertEqual(len(results), 10)  # All targets present
+        self.assertEqual(len(results), 11)  # All targets present
         available = [r for r in results if r.status != UpdateStatus.UNAVAILABLE]
         self.assertTrue(len(available) > 0)
 
@@ -302,7 +311,7 @@ class TestCheckUpdates(unittest.TestCase):
         inv = _minimal_inventory()
         providers = {k: StubProvider() for k in [
             "docker-registry", "rust-channel", "github-release",
-            "uv-python", "pypi", "npm", "git-ref",
+            "uv-python", "pypi", "npm", "git-ref", "static-url",
         ]}
         results = check_updates(inv, providers=providers, context=self._ctx(), only=("npm",))
         self.assertTrue(all(r.provider == "npm" for r in results))
@@ -312,7 +321,7 @@ class TestCheckUpdates(unittest.TestCase):
         inv = _minimal_inventory()
         providers = {k: StubProvider() for k in [
             "docker-registry", "rust-channel", "github-release",
-            "uv-python", "pypi", "npm", "git-ref",
+            "uv-python", "pypi", "npm", "git-ref", "static-url",
         ]}
         results = check_updates(inv, providers=providers, context=self._ctx(),
                                  only=("stages.toolchain.python",))
@@ -323,7 +332,7 @@ class TestCheckUpdates(unittest.TestCase):
         inv = _minimal_inventory()
         providers = {k: StubProvider() for k in [
             "docker-registry", "rust-channel", "github-release",
-            "uv-python", "pypi", "npm", "git-ref",
+            "uv-python", "pypi", "npm", "git-ref", "static-url",
         ]}
         results = check_updates(inv, providers=providers, context=self._ctx())
         j1 = render_json(results)
@@ -331,7 +340,7 @@ class TestCheckUpdates(unittest.TestCase):
         self.assertEqual(j1, j2)
         data = json.loads(j1)
         self.assertIn("results", data)
-        self.assertEqual(len(data["results"]), 10)
+        self.assertEqual(len(data["results"]), 11)
 
 
 class TestSuggestions(unittest.TestCase):

@@ -453,6 +453,27 @@ class TestInconsistentUrl(unittest.TestCase):
         self.assertIn("stages.toolchain.uv.artifacts.linux-amd64.url", str(ctx.exception))
 
 
+class TestRustupBadUrl(unittest.TestCase):
+    """Non-https rustup artifact URL raises InventoryError."""
+
+    def test_rustup_url_not_admissible(self):
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(FIXTURES / "rustup-bad-url.toml")
+        self.assertIn("stages.toolchain.rust.rustup.artifacts.linux-amd64.url", str(ctx.exception))
+
+    def test_rustup_url_no_hostname(self):
+        """URL like https:///rustup-init (no hostname) is rejected."""
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(FIXTURES / "rustup-no-host.toml")
+        self.assertIn("hostname", str(ctx.exception))
+
+    def test_rustup_url_no_path(self):
+        """URL like https://example.com (no path) is rejected."""
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(FIXTURES / "rustup-no-path.toml")
+        self.assertIn("path", str(ctx.exception))
+
+
 class TestUnsupportedPlatform(unittest.TestCase):
     """Missing linux-amd64 artifact raises InventoryError."""
 

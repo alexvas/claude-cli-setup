@@ -66,6 +66,7 @@ class TestRenderBuildEnvironment(unittest.TestCase):
             "RUST_VERSION", "RUST_PROFILE", "RUST_COMPONENTS",
             "UV_VERSION", "UV_URL", "UV_SHA256",
             "PYTHON_VERSION", "TY_VERSION",
+            "RUSTUP_URL", "RUSTUP_SHA256",
             "RTK_VERSION", "RTK_URL", "RTK_SHA256",
             "FD_VERSION", "FD_URL", "FD_SHA256",
             "PI_VERSION", "OPENSPEC_VERSION",

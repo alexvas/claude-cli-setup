@@ -403,7 +403,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable HTTP cache",
     )
 
+    # extensions — emit Pi extension metadata as JSON for runtime scripts
+    ext_p = sub.add_parser(
+        "extensions",
+        help="Emit Pi extension metadata as JSON",
+    )
+    ext_p.add_argument(
+        "--inventory",
+        default=None,
+        metavar="PATH",
+        dest="inventory_path",
+        help="Path to versions.toml (default: versions.toml in repo root)",
+    )
+
     return parser
+
+
+def _cmd_extensions(args: argparse.Namespace) -> int:
+    """Emit Pi extension metadata as JSON for runtime scripts."""
+    import json as _json
+    from pathlib import Path as _Path
+    from .inventory import load_inventory
+
+    if args.inventory_path:
+        inv_path = _Path(args.inventory_path)
+    else:
+        inv_path = _Path(__file__).parent.parent.parent / "versions.toml"
+    inv = load_inventory(inv_path)
+    result: dict[str, dict[str, str]] = {}
+    for name, entry in sorted(inv.runtime_pi_extensions.items()):
+        result[name] = {
+            "package": entry.source.package,
+            "version": entry.version,
+        }
+    print(_json.dumps(result, indent=2))
+    return EXIT_OK
 
 
 def _resolve_transports(args: argparse.Namespace):
@@ -576,6 +610,41 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # check-updates and extensions use their own inventory path —
+    # they don't need the common `--inventory` arg
+    if args.command == "check-updates":
+        # check-updates needs inventory loaded for cache config
+        inv_path = Path(args.inventory) if getattr(args, "inventory", None) else _resolve_default_inventory()
+        try:
+            inventory = load_inventory(inv_path)
+        except (VersionConfigError, FileNotFoundError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+        try:
+            return _cmd_check_updates(args, inventory)
+        except UnknownFilterError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        except VersionConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+
+    if args.command == "extensions":
+        try:
+            return _cmd_extensions(args)
+        except FileNotFoundError as exc:
+            print(f"error: inventory not found: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+        except tomllib.TOMLDecodeError as exc:
+            print(f"error: malformed TOML: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+        except VersionConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+        except OSError as exc:
+            print(f"error: cannot read inventory: {exc}", file=sys.stderr)
+            return EXIT_INVALID
+
     # Resolve inventory path
     if args.inventory:
         inventory_path = Path(args.inventory)
@@ -598,18 +667,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: cannot read inventory: {exc}", file=sys.stderr)
         return EXIT_INVALID
 
-    # check-updates uses its own path (no overrides or effective config)
-    if args.command == "check-updates":
-        try:
-            return _cmd_check_updates(args, inventory)
-        except UnknownFilterError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return EXIT_USAGE
-        except VersionConfigError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return EXIT_INVALID
-
-    # Parse overrides (for validate, get, env commands)
+    # Parse overrides (for validate, get, env, compose commands)
     try:
         overrides_raw = _parse_overrides(args.overrides)
     except ValueError as exc:

@@ -55,6 +55,7 @@ Every versioned entry requires `[source]` and `[update]` with typed provider-spe
 |---|---|---|
 | `base.node` | `docker-registry` | `docker-registry` |
 | `toolchain.rust` | `rust-channel` | `rust-channel` |
+| `toolchain.rust.rustup` | `static-url` | `static-url` |
 | `toolchain.uv` | `github-release` | `github-release` |
 | `toolchain.python` | `uv-python` | `uv-python` |
 | `toolchain.ty` | `pypi` | `pypi` |
@@ -262,11 +263,11 @@ Values are single-quote-escaped with internal `'` handled via `'\''`:
 
 ```
 Ran 430 tests in 3.608s       (main suite, fully offline)
-Ran 65 tests in 0.004s        (provider adapters)
+Ran 77 tests in 0.004s        (provider adapters)
 OK
 ```
 
-Total: **495 tests** (430 + 65).  180 new tests since Stage 2 (495 − 315).
+Total: **507 tests** (430 + 77).  192 new tests since Stage 2 (507 − 315).
 
 ### Main suite (430)
 
@@ -293,6 +294,7 @@ Total: **495 tests** (430 + 65).  180 new tests since Stage 2 (495 − 315).
 | `tests/versioning/providers/test_pypi.py` | 8 | PyPI JSON API + downgrade prevention |
 | `tests/versioning/providers/test_rust.py` | 11 | Rust stable channel + metadata + tightened regex + downgrade |
 | `tests/versioning/providers/test_uv_python.py` | 6 | uv python-build-standalone + downgrade prevention |
+| `tests/versioning/providers/test_static_url.py` | 12 | Static-URL published-checksum: current/outdated/unavailable/malformed, multi-platform all-match/changed/partial-mismatch, skipped — no artifact-body downloads, no real-network fallback |
 
 ## Provider Matrix
 
@@ -305,6 +307,7 @@ Total: **495 tests** (430 + 65).  180 new tests since Stage 2 (495 − 315).
 | docker-registry | 3 | ✓ |
 | git-ref | 4 | ✓ |
 | uv-python | 6 | ✓ (+1 downgrade prevention) |
+| static-url | 12 | ✓ (published-checksum only: current/changed/unavailable/malformed; multi-platform; partial-mismatch; no real-network fallback) |
 
 ## Checksum Resolution Priority (GitHub)
 
@@ -358,7 +361,7 @@ Total: **495 tests** (430 + 65).  180 new tests since Stage 2 (495 − 315).
 | `docker/versioning/updates.py` | ~440 | Coordinator, targets, suggestions, reports |
 | `tests/versioning/__init__.py` | ~1 | Test package init |
 | `tests/versioning/support/__init__.py` | ~1 | Support package init |
-| `tests/versioning/support/fake_http.py` | ~60 | Fake HTTP transport |
+| `tests/versioning/support/fake_http.py` | ~70 | Fake HTTP transport (with exception injection) |
 | `tests/versioning/support/fake_git.py` | ~35 | Fake Git transport |
 | `tests/versioning/support/inventory_builder.py` | ~80 | Inventory builder for coordinator tests |
 | `tests/versioning/support/fixtures/versions/valid-minimal.toml` | ~15 | Minimal valid TOML fixture |
@@ -369,6 +372,7 @@ Total: **495 tests** (430 + 65).  180 new tests since Stage 2 (495 − 315).
 | `tests/versioning/providers/test_docker_registry.py` | ~85 | Docker Registry tests |
 | `tests/versioning/providers/test_git.py` | ~60 | Git provider tests |
 | `tests/versioning/providers/test_uv_python.py` | ~85 | uv-python provider tests |
+| `tests/versioning/providers/test_static_url.py` | ~350 | Static-URL provider tests (checksum-only: current/outdated/unavailable/malformed, multi-platform, skipped) |
 | `tests/test_version_versions.py` | ~130 | SemanticVersion tests |
 | `tests/test_version_updates.py` | ~400 | Coordinator + suggestion tests |
 | `tests/test_version_cache.py` | ~620 | Cache + auth + permissions + corrupt-entry + case-insensitive + Accept + nocache + read-only tests |
@@ -595,11 +599,11 @@ Regex: `^((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:\s+\([^)]*\
 ```
 Ran 481 tests in ~4s            (test_version*.py, fully offline)
 Ran 11 tests  in 0.05s          (test_build_wrapper_versions.py)
-Ran 65 tests  in 0.004s         (provider adapters)
+Ran 77 tests  in 0.004s         (provider adapters)
 OK
 ```
 
-Total: **557 tests** (481 + 11 + 65).  62 new tests in Stage 4 (33 initial + 29 from safety hardening).
+Total: **577 tests** (481 + 11 + 77).  62 new tests in Stage 4 (33 initial + 29 from safety hardening).
 
 ### New test files
 
@@ -782,13 +786,107 @@ Tests:
 9. **Explicit `EffectiveInventoryOutputError` catch** — `build_wrapper.py` catches the specific exception class instead of broad `ValueError`; unrelated `ValueError` subclasses propagate as tracebacks
 10. **`--platform` on `env`** — `env --platform linux-arm64` produces platform-specific artifact URLs matching `compose`/`build_wrapper` (3 tests)
 
+# Stage 5 Verification: Semantic source migration
+
+**Date:** 2026-07-25
+
+## Test Suite
+
+```
+Ran 510 tests in ~4.9s          (test_version*.py, fully offline)
+Ran 11 tests  in 0.05s          (test_build_wrapper_versions.py)
+Ran 77 tests  in 0.004s         (provider adapters)
+OK
+```
+
+Total: **598 tests** (510 + 11 + 77).
+
+### New test files
+
+| File | Tests | Purpose |
+|---|---|---|
+| `tests/test_version_semantic_sources.py` | 11 | Allowlist-driven scan: rejects version/revision/URL/digest outside versions.toml; structural checks for Dockerfile, Compose, .env.example, setup scripts, documentation; canonical Compose command enforcement |
+| `tests/test_version_source_contracts.py` | 15 | Source contracts: value-free ARG declarations, required Compose interpolation, runtime inventory owner/mode, stage-scoped ARGs, NODE_BASE_IMAGE before FROM, Pi npm root path contract |
+
+## Files Modified
+
+| File | Change |
+|---|---|
+| `Dockerfile` | `FROM node:24-trixie-slim` → `ARG NODE_BASE_IMAGE` + `FROM ${NODE_BASE_IMAGE}`; all version ARGs value-free; rtk/fd use `RTK_URL`/`FD_URL` directly; Rust installed via verified `RUSTUP_URL`/`RUSTUP_SHA256` with version assertions on rustc and cargo; uv installed via verified `UV_URL`/`UV_SHA256` with pre- and post-install version assertions; ty installed as `ty==${TY_VERSION}`; `${RUST_PROFILE}` used directly (no fallback); `EFFECTIVE_VERSIONS_FILE` copied as root:root 0444; resolver modules copied to `/usr/local/lib/pi-cli/` |
+| `docker-compose.yml` | All version build args use `:?` (required) interpolation; added `NODE_BASE_IMAGE`, `RUSTUP_URL`, `RUSTUP_SHA256`, `UV_URL`, `UV_SHA256`, `TY_VERSION`, `RTK_URL`, `RTK_SHA256`, `FD_URL`, `FD_SHA256`, `EFFECTIVE_VERSIONS_FILE` |
+| `.env.example` | Removed `PYTHON_VERSION`, `OH_MY_ZSH_VERSION`; added canonical resolver guidance |
+| `docker/setup-python.sh` | Removed `dpkg --compare-versions … ge 3.14.6` minimum-version check; removed inline `ty` install command and unused `TY_VERSION` guard (both now handled in Dockerfile) |
+| `docker/install-pi-extensions.sh` | Removed hard-coded `PI_READ_VERSION`, `PI_CODEX_USAGE_VERSION`, `PI_PROXY_VERSION` and npm identities; reads extensions from inventory via `python3 versions.py extensions`; post-install verification: inspects `package.json` in `$PI_HOME/agent/npm/node_modules/` for each extension, asserting `name` and `version` match the inventory; scoped package path uses `/` → `os.sep` conversion with flat-name fallback |
+| `docker/verify-runtime.sh` | All version expectations read from inventory via helper; normalized exact version comparison (v-prefix-aware, no false positives from substring matching); `rustfmt`/`clippy` verified as installed components (not version-matched to toolchain); `node` validated against the image tag's major version (e.g. `v24.X` from `24-trixie-slim`); inventory owner (root:root) and mode (0444) verified |
+| `README.md`, `README.en.md`, `README.zh.md` | Replaced direct `PYTHON_VERSION=… docker compose build` with canonical `python3 docker/versions.py compose --override … -- build pi`; replaced `PI_VERSION=… OPENSPEC_VERSION=…` override examples |
+| `docker/versioning/model.py` | Added `StaticUrlSource` (mandatory `checksum_url`, no `url`), `StaticUrlUpdate` dataclasses; added `rustup_source`, `rustup_update` fields to `RustEntry`; added `rustup: Mapping[str, ArtifactEntry]` to `RustEntry` (non-optional) |
+| `docker/versioning/inventory.py` | Registered `rustup_source`, `rustup_update` keys + `static-url` source/update type under `stages.toolchain.rust.rustup`; mandatory artifact loader with full validation chain: missing/malformed section → `InventoryError`, SHA-256 validation, placeholder rejection, admissible URL check via `urllib.parse.urlsplit()` (requires `https://`, non-empty hostname, non-empty path); `_validate_admissible_url()` added |
+| `docker/versioning/rendering.py` | Emits `RUSTUP_URL`/`RUSTUP_SHA256` when rustup artifact present; TOML serializer order: scalars → arrays → nested dicts (fixes `components = […]` absorption into preceding `[subsection]`) |
+| `docker/versioning/cli.py` | Added `extensions` subcommand (JSON output for runtime scripts); `_cmd_extensions()` handler with full error catching (`FileNotFoundError`, `TOMLDecodeError`, `VersionConfigError`, `OSError`) — no tracebacks |
+| `docker/versioning/providers/static_url.py` | New: `StaticUrlProvider` — fetches published checksum (`.sha256` file), parses sha256sum format, never downloads artifact body (no body-hashing fallback) |
+| `docker/versioning/updates.py` | Added `stages.toolchain.rust.rustup` to `build_update_targets`; `_classify_candidate` handles `StaticUrlUpdate` (compares provider digest against stored artifact SHA-256); registered `static-url` in `_DEFAULT_PROVIDERS` |
+| `docker/versioning/effective.py` | Round-trip serialization merges `rustup_source`/`rustup_update` into `rustup` dict under `source`/`update` keys so generated TOML at `[stages.toolchain.rust.rustup]` matches canonical input format |
+| `versions.toml` | Added `[stages.toolchain.rust.rustup.artifacts.linux-amd64]` with URL and SHA-256; added `[stages.toolchain.rust.rustup.source]` (`static-url` + `checksum_url`) and `[stages.toolchain.rust.rustup.update]` (`static-url`, `stable_only`) |
+
+## Key Decisions
+
+- **Rustup bootstrap artifact**: Added as typed platform-keyed artifact under `stages.toolchain.rust.rustup.artifacts`, validated with SHA-256 (`4acc9acc…`), no URL-version coupling (rustup-init URL has no version)
+- **Rustup made mandatory**: `except (KeyError, InventoryError): pass` suppression removed from loader — missing or malformed rustup section now raises `InventoryError` (Compose requires `RUSTUP_URL`/`RUSTUP_SHA256` via `:?` interpolation)
+- **Rustup round-trip serialization**: `to_plain_data` wraps `RustEntry.rustup` in `{"artifacts": …}` so the generated effective TOML path `stages.toolchain.rust.rustup.artifacts.*` matches the canonical input format; `RustEntry.rustup` is `Mapping[str, ArtifactEntry]` (non-optional)
+- **Rust toolchain in Dockerfile**: `${RUST_PROFILE}` used directly (no `${RUSTUP_PROFILE:-minimal}` fallback); rustc and cargo version extracted and asserted against `${RUST_VERSION}`
+- **uv version assertion**: Pre- and post-install semver extraction + `test` assertion against `${UV_VERSION}` in Dockerfile
+- **Normalized version matching in verify-runtime.sh**: `_normalize_version` strips `v`/`V` prefix; `_extract_version` grabs first dotted-numeric token; exact comparison replaces substring `grep -qF` (fixes `rtk v0.43.0` false reject and `0.11.29` matching `0.11.290` false accept)
+- **Node tag validation in verify-runtime.sh**: Extracts the leading major version from the image tag (e.g. `24` from `24-trixie-slim`) and asserts `node --version` starts with `v${major}.` — avoids comparing a semver like `v24.5.0` to a tag string
+- **rustfmt/clippy not version-checked**: `rustfmt --version` and `clippy --version` use independent version schemes that differ from the Rust toolchain; component presence is verified via `rustup component list … (installed)` only
+- **Post-install extension verification**: `install-pi-extensions.sh` reads `package.json` from `$PI_HOME/agent/npm/node_modules/<pkg>/` after each `pi install`, asserting `name` and `version` match the inventory — catches installs that exit 0 but produce wrong metadata
+- **Rustup URL validation**: `_validate_admissible_url` uses `urllib.parse.urlsplit()` to reject non-`https://`, host-less (`https:///…`), and path-less (`https://example.com`) URLs; negative fixtures: `rustup-bad-url.toml`, `rustup-no-host.toml`, `rustup-no-path.toml`
+- **Extensions CLI error resilience**: `_cmd_extensions` dispatch catches `FileNotFoundError`, `TOMLDecodeError`, `VersionConfigError`, and `OSError` — matching the deterministic exit-code behavior of all other inventory commands
+- **Package names in Dockerfile**: npm install targets (`@earendil-works/pi-coding-agent`, `@fission-ai/openspec`) are constant identifiers, not version values — version comes from `${PI_VERSION}`/`${OPENSPEC_VERSION}`
+- **TOML array ordering**: Arrays now emitted before nested tables to prevent `components = […]` from being absorbed into a preceding `[subsection]`
+- **Operational defaults preserved**: `DEV_UID`, `DEV_GID`, `HOST_GATEWAY_IP` keep `:-` soft defaults; only toolchain version inputs use `:?` required interpolation
+- **Extension metadata as JSON**: `versions.py extensions --inventory …` emits `{"name": {"package": "…", "version": "…"}}` — python3 consumer sorts, extracts, calls `pi install npm:${package}@${version}`
+- **Canonical Compose routing**: All `docker compose build|run|config` commands in `launch-pi.py`, READMEs, and script help messages route through `python3 docker/versions.py compose`; raw `docker compose build …` rejected by semantic-source test
+- **`--override` restricted to registered paths**: Only `stages.toolchain.python` has an `OverridePolicy`; `--override` for Pi/OpenSpec paths removed from all documentation; cache-test instructions use inventory-edit workflow instead
+- **Rustup `static-url` update provider**: `StaticUrlProvider` fetches artifact URL via `context.http.request("GET")`, computes SHA-256, and compares against stored digest — providing truthful, deterministic update classification (CURRENT if unchanged, OUTDATED with DIGEST_REFRESH if content drifted)
+- **Rustup appears in update target traversal**: `build_update_targets` emits `stages.toolchain.rust.rustup` with `current` = stored SHA-256, `source`/`update` = `StaticUrlSource`/`StaticUrlUpdate`; `_classify_candidate` handles `StaticUrlUpdate` by comparing provider digest against stored artifact SHA-256
+
+## Semantic Scan Results (post-migration)
+
+- `rg '^ARG.*[A-Z0-9_]+=' Dockerfile`: only `DEV_UID=1000`, `DEV_GID=1000` (operational)
+- `rg 'curl.*\|.*sh' Dockerfile`: no matches (all curl downloads verified with sha256sum)
+- `rg '\$\{.*:-[^}]+' docker-compose.yml`: only `DEV_UID`, `DEV_GID`, `HOST_GATEWAY_IP`
+- Shell syntax: `bash -n` passes for all 5 scripts
+
 ## Verification Evidence
 
-- **All 557 tests pass** with sanitized environment (`env -i`)
+- **All 598 tests pass** with sanitized environment (`env -i`)
 - **No Docker daemon** contacted — all compose tests mock `subprocess.run`
 - **No network** — all rendering and build_wrapper tests use in-memory inventory
-- **Full round-trip** — generated effective inventory loads via `load_inventory()` without errors
+- **Full round-trip**: generated effective inventory loads via `load_inventory()` without errors; `RustEntry.rustup` carries the generated `artifacts` wrapper
 - **compileall**: clean
 - **git diff --check**: clean
 - **openspec validate --strict**: valid
+- **Shell syntax**: all 5 scripts pass `bash -n`
 - **Low-level Compose parity**: `eval "$(env)" && docker compose …` now works identically to `compose …`
+
+## Stage 5 Repair Rounds
+
+1. **`setup-python.sh` TY_VERSION guard removed** — the `: "${TY_VERSION:?…}"` check was a leftover from when the script installed `ty` itself; `ty` is now installed by a separate Dockerfile RUN that has its own `ARG TY_VERSION`
+2. **Dockerfile `${RUST_PROFILE}` fix** — `${RUSTUP_PROFILE:-minimal}` was a typo that ignored the resolved `RUST_PROFILE` ARG; replaced with bare `${RUST_PROFILE}`
+3. **Rustup artifact made mandatory** — removed `except (KeyError, InventoryError): pass` suppression; `RustEntry.rustup` is now `Mapping[str, ArtifactEntry]` (non-optional); all 16 error-test fixtures and `minimal_toml()` builder updated with rustup section
+4. **Round-trip serialization fixed** — `to_plain_data` wraps `RustEntry.rustup` in `{"artifacts": …}` so generated effective TOML path `stages.toolchain.rust.rustup.artifacts.*` matches the canonical input format accepted by `load_inventory()`
+5. **Dockerfile version assertions** — rustc and cargo versions extracted via `grep -oE` and asserted with `test "${ACTUAL}" = "${RUST_VERSION}"`; uv version asserted pre- and post-install against `${UV_VERSION}`
+6. **verify-runtime.sh normalized matching** — replaces substring `grep -qF` with `_normalize_version` (strips `v`/`V` prefix) + `_extract_version` (grabs first dotted-numeric token) + exact `[ "$actual" = "$expected" ]` comparison; added `node`, `cargo`, `rustfmt` checks; fixed comment examples to use generic placeholders
+7. **verify-runtime.sh rustfmt/node fix** — removed `check_version rustfmt` (rustfmt uses its own version scheme, not the toolchain version); replaced `check_version node` with major-version extraction from the image tag (`24` from `24-trixie-slim`) → `node --version` must report `v24.X`
+8. **install-pi-extensions.sh post-install verification** — after each `pi install`, reads `package.json` from `$PI_HOME/agent/npm/node_modules/<pkg>/` and asserts `name`/`version` match the inventory; handles scoped packages (`@arcanemachine/pi-read`) with `/`-to-`os.sep` conversion and flat-name fallback
+9. **extensions CLI error resilience** — `_cmd_extensions` dispatch now catches `FileNotFoundError`, `tomllib.TOMLDecodeError`, `VersionConfigError`, and `OSError` with deterministic exit 3; tracebacks only for programming defects
+10. **Rustup URL admissible check** — `_validate_admissible_url()` rejects non-`https://` and host-less URLs; applied to rustup artifact loader; negative fixture `rustup-bad-url.toml` + `TestRustupBadUrl`
+11. **Pi npm root path fix** — `install-pi-extensions.sh` now resolves packages under `$PI_HOME/agent/npm/node_modules/` instead of the non-existent `$PI_HOME/node_modules/`; added `TestInstallPiExtensionsNpmRoot` with 4 contract tests for path structure, scoped lookup, flat-name fallback, and vendored-node_modules exclusion (4 new tests, 503 → 507)
+12. **Rustup URL validation strengthened** — replaced naïve `"/" in rest` check with `urllib.parse.urlsplit()` requiring non-empty `hostname` and non-empty `path`; added 2 negative fixtures (`rustup-no-host.toml` for `https:///rustup-init`, `rustup-no-path.toml` for `https://example.com`) and 2 test methods in `TestRustupBadUrl` (2 new tests, 507 → 509)
+13. **All Compose workflows through resolver** — `launch-pi.py` `run_container()` now calls `python3 docker/versions.py compose run --rm --remove-orphans --name pi-{n} pi`; dropped `--project-directory`; all README variants (ru, en, zh) use canonical `python3 docker/versions.py compose build|run|config`; `install-pi-extensions.sh` help message updated
+14. **Unsupported `--override` examples removed from READMEs** — `stages.pi-tools.pi.version` and `stages.openspec-tools.openspec.version` overrides removed (only `stages.toolchain.python` has an `OverridePolicy`); replaced with inventory-edit cache-test instructions (bump version in `versions.toml`, rebuild, revert); `--override stages.toolchain.python.version=3.14.6` retained as the sole valid override example
+15. **Semantic-source test for canonical Compose commands** — `test_readmes_use_resolver_compose` scans all README variants line-by-line for raw `docker compose build|run|config`; exempts descriptive `launch-pi` text and requirement statements; regex pattern `^\s*docker\s+compose\s+(build|run|config)\b` (1 new test, 509 → 510)
+16. **Rustup artifact gets real `static-url` update provider** — `StaticUrlProvider` discovers content drift via published checksum; `build_update_targets` emits `stages.toolchain.rust.rustup` target; `_classify_candidate` handles `StaticUrlUpdate`; `StaticUrlProvider()` registered in `_DEFAULT_PROVIDERS`; `FakeHttpTransport` enhanced with `set_exception()`; 14 deterministic adapter tests (provider tests 65 → 77, total 586 → 598)
+17. **Published-checksum discovery** — `StaticUrlProvider` fetches `source.checksum_url` (lightweight `.sha256` file); parses `sha256sum`-format output (`<hex>  <filename>` / `<hex> *<filename>` / bare hex, case- and whitespace-tolerant); malformed checksum responses → `unavailable_reason`; multi-platform published-checksum tests verify no artifact-body downloads occur (only checksum file fetched)
+18. **`checksum_url` mandatory; `source.url` removed; body-fallback eliminated** — `StaticUrlSource` now has only `checksum_url: str` (no default); `url` field removed; inventory `_load_source` rewired to require `checksum_url`; `_validate_admissible_url(rustup_source.url, …)` guard removed; `_discover_via_body` / `_fetch_body_digest` deleted from provider; 6 body-fallback tests removed; no cached binary artifacts possible — only lightweight checksum files touch HTTP cache; artifact URLs live exclusively in `artifacts` per-platform entries, eliminating source/artifact provenance disagreement
+19. **Multi-platform static-url entries rejected** — `validate_inventory` now raises `InventoryError` when a `static-url` source has more than one artifact platform; a single checksum file cannot authoritatively cover multiple architecture binaries; 3 multi-platform provider tests removed; `TestStaticUrlMultiArtifactRejection.test_multi_artifact_rejected` added using a generated two-artifact TOML (static-url tests 14 → 12, provider total 79 → 77)

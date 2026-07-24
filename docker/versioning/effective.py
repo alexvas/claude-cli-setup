@@ -174,7 +174,16 @@ def to_plain_data(value: object) -> object:
             if field.name.startswith("_"):
                 continue
             v = getattr(value, field.name)
-            result[_toml_name(field.name)] = to_plain_data(v)
+            # Round-trip: RustEntry.rustup is Mapping[str,ArtifactEntry] in the model
+            # but the canonical TOML path is stages.toolchain.rust.rustup.artifacts.*
+            # rustup_source / rustup_update are also sub-keys of rustup
+            if field.name == "rustup":
+                result[_toml_name(field.name)] = {"artifacts": to_plain_data(v)}
+            elif field.name in ("rustup_source", "rustup_update"):
+                target_key = "source" if field.name == "rustup_source" else "update"
+                result.setdefault("rustup", {})[target_key] = to_plain_data(v)
+            else:
+                result[_toml_name(field.name)] = to_plain_data(v)
         return result
     return str(value)
 

@@ -48,6 +48,8 @@ from docker.versioning.model import (
     RustEntry,
     RuntimeStage,
     Stages,
+    StaticUrlSource,
+    StaticUrlUpdate,
     ToolchainStage,
     TyEntry,
     UvEntry,
@@ -86,6 +88,16 @@ def _make_inventory(*, python_override=None) -> Inventory:
                         manifest="https://static.rust-lang.org/dist/channel-rust-1.97.0.toml",
                     ),
                     update=RustChannelUpdate(channel="stable", stable_only=True),
+                    rustup={
+                        "linux-amd64": ArtifactEntry(
+                            url="https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+                            sha256="a" * 64,
+                        ),
+                    },
+                    rustup_source=StaticUrlSource(
+                        checksum_url="https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256",
+                    ),
+                    rustup_update=StaticUrlUpdate(stable_only=True),
                 ),
                 uv=UvEntry(
                     version="0.11.0",

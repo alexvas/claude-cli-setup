@@ -49,6 +49,8 @@ from .model import (
     RustChannelUpdate,
     RustEntry,
     Stages,
+    StaticUrlSource,
+    StaticUrlUpdate,
     ToolchainStage,
     TyEntry,
     UvEntry,
@@ -253,6 +255,25 @@ def _validate_url_contains_version(url: str, version: str, path: str) -> None:
         )
 
 
+def _validate_admissible_url(url: str, path: str) -> None:
+    """Reject URLs that are not plausible download origins."""
+    from urllib.parse import urlsplit as _urlsplit
+
+    if not url.startswith("https://"):
+        raise InventoryError(
+            f"{path}: URL must start with 'https://'"
+        )
+    parsed = _urlsplit(url)
+    if not parsed.hostname:
+        raise InventoryError(
+            f"{path}: URL must contain a non-empty hostname"
+        )
+    if not parsed.path or parsed.path == "/":
+        raise InventoryError(
+            f"{path}: URL must contain a non-empty path"
+        )
+
+
 def _validate_linux_amd64_artifact(
     artifacts: Mapping[str, object], parent_path: str
 ) -> None:
@@ -354,8 +375,12 @@ _register(("stages", "base", "node", "source"), "type", "registry", "repository"
 _register(("stages", "base", "node", "update"), "provider", "stable_only", "track")
 
 _register(("stages", "toolchain"), "rust", "uv", "python", "ty")
-_register(("stages", "toolchain", "rust"), "version", "profile", "components", "source", "update")
+_register(("stages", "toolchain", "rust"), "version", "profile", "components", "source", "update", "rustup")
 _register(("stages", "toolchain", "rust", "source"), "type", "manifest")
+_register(("stages", "toolchain", "rust", "rustup"), "source", "update", "artifacts")
+_register(("stages", "toolchain", "rust", "rustup", "source"), "type", "checksum_url")
+_register(("stages", "toolchain", "rust", "rustup", "update"), "provider", "stable_only")
+_register(("stages", "toolchain", "rust", "rustup", "artifacts", "__ANY__"), "url", "sha256")
 _register(("stages", "toolchain", "rust", "update"), "provider", "channel", "stable_only")
 
 _register(("stages", "toolchain", "uv"), "version", "source", "artifacts", "update")
@@ -510,6 +535,15 @@ def _load_source(r: _PathReader, path: tuple[str, ...]) -> Any:
         repository = require_nonempty_string(r.root, path + ("source", "repository"))
         return GitSource(repository=repository)
 
+    elif stype == "static-url":
+        checksum_url = require_nonempty_string(
+            r.root, path + ("source", "checksum_url")
+        )
+        _validate_admissible_url(
+            checksum_url, f"{dot}.source.checksum_url"
+        )
+        return StaticUrlSource(checksum_url=checksum_url)
+
     else:
         raise InventoryError(
             f"{dot}.source.type: unknown source type {stype!r}"
@@ -579,6 +613,10 @@ def _load_update(r: _PathReader, path: tuple[str, ...]) -> Any:
         ref = require_nonempty_string(r.root, path + ("update", "ref"))
         return GitRefUpdate(ref=ref)
 
+    elif provider == "static-url":
+        stable_only = require_bool(r.root, path + ("update", "stable_only"))
+        return StaticUrlUpdate(stable_only=stable_only)
+
     else:
         raise InventoryError(
             f"{dot}.update.provider: unknown provider {provider!r}"
@@ -597,6 +635,7 @@ _SOURCE_UPDATE_MAP = {
     "rust-channel": "rust-channel",
     "docker-registry": "docker-registry",
     "git": "git-ref",
+    "static-url": "static-url",
 }
 
 
@@ -621,6 +660,7 @@ def _check_compat(source_type: str, update_provider: str, dot: str) -> None:
 _ENTRY_SOURCE_CLASSES = {
     "stages.base.node": (DockerRegistrySource, DockerRegistryUpdate),
     "stages.toolchain.rust": (RustChannelSource, RustChannelUpdate),
+    "stages.toolchain.rust.rustup": (StaticUrlSource, StaticUrlUpdate),
     "stages.toolchain.uv": (GitHubReleaseSource, GitHubReleaseUpdate),
     "stages.toolchain.python": (UvPythonSource, UvPythonUpdate),
     "stages.toolchain.ty": (PyPiSource, PyPiUpdate),
@@ -758,8 +798,47 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     rust_update = _load_update(r, ("stages", "toolchain", "rust"))
     _check_compat(rust_source.type, rust_update.provider, "stages.toolchain.rust")
     _check_entry_source_update(rust_source, rust_update, "stages.toolchain.rust")
+    # Mandatory rustup bootstrap artifact (platform-keyed, no version in URL)
+    rustup_source = _load_source(r, ("stages", "toolchain", "rust", "rustup"))
+    rustup_update = _load_update(r, ("stages", "toolchain", "rust", "rustup"))
+    _check_compat(rustup_source.type, rustup_update.provider, "stages.toolchain.rust.rustup")
+    _check_entry_source_update(rustup_source, rustup_update, "stages.toolchain.rust.rustup")
+    # Per-platform artifact URLs are validated individually below.
+    rustup_raw = r.tbl(("stages", "toolchain", "rust", "rustup", "artifacts"))
+    rustup_artifacts: dict[str, ArtifactEntry] = {}
+    for platform in rustup_raw:
+        plat_path = ("stages", "toolchain", "rust", "rustup", "artifacts", platform)
+        _check_unknown_keys(r.tbl(plat_path), plat_path)
+        art_url = r.str(plat_path + ("url",))
+        art_sha256 = r.str(plat_path + ("sha256",))
+        _validate_sha256(
+            art_sha256,
+            f"stages.toolchain.rust.rustup.artifacts.{platform}.sha256",
+        )
+        _reject_placeholder_sha256(
+            art_sha256,
+            f"stages.toolchain.rust.rustup.artifacts.{platform}.sha256",
+        )
+        _validate_admissible_url(
+            art_url,
+            f"stages.toolchain.rust.rustup.artifacts.{platform}.url",
+        )
+        rustup_artifacts[platform] = ArtifactEntry(
+            url=art_url, sha256=art_sha256,
+        )
+    _validate_linux_amd64_artifact(
+        rustup_raw, "stages.toolchain.rust.rustup",
+    )
+    if rustup_source.type == "static-url" and len(rustup_artifacts) > 1:
+        raise InventoryError(
+            "stages.toolchain.rust.rustup: static-url sources do not support"
+            " multi-platform artifacts — each architecture must declare its"
+            " own checksum_url"
+        )
     _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "source",)), ("stages", "toolchain", "rust", "source",))
     _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "update",)), ("stages", "toolchain", "rust", "update",))
+    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "rustup", "source",)), ("stages", "toolchain", "rust", "rustup", "source",))
+    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "rustup", "update",)), ("stages", "toolchain", "rust", "rustup", "update",))
     _validate_url_contains_version(
         rust_source.manifest, rust_version, "stages.toolchain.rust.source.manifest"
     )
@@ -902,6 +981,8 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
                 rust=RustEntry(
                     version=rust_version, profile=rust_profile,
                     components=tuple(components), source=rust_source, update=rust_update,
+                    rustup=MappingProxyType(rustup_artifacts),
+                    rustup_source=rustup_source, rustup_update=rustup_update,
                 ),
                 uv=UvEntry(
                     version=uv_version,

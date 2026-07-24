@@ -7,9 +7,10 @@ ARG DEV_UID=1000
 ARG DEV_GID=1000
 
 # -----------------------------------------------------------------------------
-# Shared runtime OS and dev-user setup
+# Base image — resolved by the versioning resolver (NODE_BASE_IMAGE = <registry>/<repository>:<tag>@<digest>)
 # -----------------------------------------------------------------------------
-FROM node:24-trixie-slim AS base
+ARG NODE_BASE_IMAGE
+FROM ${NODE_BASE_IMAGE} AS base
 
 ARG DEV_UID
 ARG DEV_GID
@@ -41,17 +42,15 @@ RUN chmod +x /tmp/setup-dev-user.sh \
     && DEV_UID="${DEV_UID}" DEV_GID="${DEV_GID}" /tmp/setup-dev-user.sh \
     && rm -f /tmp/setup-dev-user.sh
 
-# Python is installed explicitly by uv in the toolchain stage.
-
 # -----------------------------------------------------------------------------
 # Independently pinned prebuilt Rust tools
 # -----------------------------------------------------------------------------
 FROM base AS rtk-prebuilt
 
-ARG RTK_VERSION=v0.43.0
-ARG RTK_SHA256=eb571d784b3269521722ebe2f0dc2409e89da6bd70bf097ddb21e9d4b3b240b9
-RUN URL="https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk_amd64.deb" \
-    && curl -fsSL -o /tmp/rtk.deb "$URL" \
+ARG RTK_VERSION
+ARG RTK_URL
+ARG RTK_SHA256
+RUN curl -fsSL -o /tmp/rtk.deb "${RTK_URL}" \
     && ACTUAL=$(sha256sum /tmp/rtk.deb | cut -d' ' -f1) \
     && if [ "$ACTUAL" != "${RTK_SHA256}" ]; then echo "SHA256 mismatch: expected ${RTK_SHA256}, got $ACTUAL" >&2; exit 1; fi \
     && dpkg-deb -x /tmp/rtk.deb /tmp/rtk-extract \
@@ -60,11 +59,10 @@ RUN URL="https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk_amd6
 
 FROM base AS fd-prebuilt
 
-ARG FD_VERSION=v10.4.2
-ARG FD_SHA256=0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b
-RUN VERSION_NO_V="${FD_VERSION#v}" \
-    && URL="https://github.com/sharkdp/fd/releases/download/${FD_VERSION}/fd_${VERSION_NO_V}_amd64.deb" \
-    && curl -fsSL -o /tmp/fd.deb "$URL" \
+ARG FD_VERSION
+ARG FD_URL
+ARG FD_SHA256
+RUN curl -fsSL -o /tmp/fd.deb "${FD_URL}" \
     && ACTUAL=$(sha256sum /tmp/fd.deb | cut -d' ' -f1) \
     && if [ "$ACTUAL" != "${FD_SHA256}" ]; then echo "SHA256 mismatch: expected ${FD_SHA256}, got $ACTUAL" >&2; exit 1; fi \
     && dpkg-deb -x /tmp/fd.deb /tmp/fd-extract \
@@ -86,26 +84,57 @@ USER dev
 WORKDIR /home/dev
 RUN mkdir -p /home/dev/.cargo /home/dev/.rustup /home/dev/.cache/uv /home/dev/mcp
 
+ARG RUST_VERSION
+ARG RUST_PROFILE
+ARG RUST_COMPONENTS
+ARG RUSTUP_URL
+ARG RUSTUP_SHA256
 RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/registry,uid=${DEV_UID},gid=${DEV_GID} \
     --mount=type=cache,id=cargo-git-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/git,uid=${DEV_UID},gid=${DEV_GID} \
     --mount=type=cache,id=rustup-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \
     env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
-    bash -euo pipefail -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable && rustup component add rustfmt clippy'
+    bash -euo pipefail -c ' \
+        curl -fsSL -o /tmp/rustup-init "${RUSTUP_URL}" \
+        && printf "%s  %s\n" "${RUSTUP_SHA256}" /tmp/rustup-init | sha256sum -c - \
+        && chmod +x /tmp/rustup-init \
+        && /tmp/rustup-init -y --profile "${RUST_PROFILE}" --default-toolchain "${RUST_VERSION}" \
+        && rustup component add ${RUST_COMPONENTS} \
+        && ACTUAL_RUSTC="$(rustc --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" \
+        && test "${ACTUAL_RUSTC}" = "${RUST_VERSION}" \
+        && ACTUAL_CARGO="$(cargo --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" \
+        && test "${ACTUAL_CARGO}" = "${RUST_VERSION}" \
+        && rustfmt --version \
+        && cargo clippy --version \
+        && rm -f /tmp/rustup-init'
 
+ARG UV_VERSION
+ARG UV_URL
+ARG UV_SHA256
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
-    curl -fsSL https://astral.sh/uv/install.sh | sh
+    bash -euo pipefail -c ' \
+        curl -fsSL -o /tmp/uv.tar.gz "${UV_URL}" \
+        && printf "%s  %s\n" "${UV_SHA256}" /tmp/uv.tar.gz | sha256sum -c - \
+        && tar xzf /tmp/uv.tar.gz -C /tmp \
+        && ACTUAL_UV="$(/tmp/uv-*/uv --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" \
+        && test "${ACTUAL_UV}" = "${UV_VERSION}" \
+        && install -D -m 755 /tmp/uv-*/uv "${HOME}/.local/bin/uv" \
+        && ACTUAL_UV2="$(uv --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" \
+        && test "${ACTUAL_UV2}" = "${UV_VERSION}" \
+        && rm -rf /tmp/uv.tar.gz /tmp/uv-*'
 
-ARG PYTHON_VERSION=3.14.6
+ARG PYTHON_VERSION
 COPY --chown=dev:dev docker/setup-python.sh /home/dev/setup-python.sh
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
     chmod +x /home/dev/setup-python.sh \
-    && /home/dev/setup-python.sh
+    && PYTHON_VERSION="${PYTHON_VERSION}" /home/dev/setup-python.sh
+
+ARG TY_VERSION
+RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
+    uv tool install --python "${PYTHON_VERSION}" "ty==${TY_VERSION}"
 
 COPY --chown=dev:dev docker/mcp /home/dev/mcp
 COPY --chown=dev:dev docker/setup-mcp-yarn.sh /home/dev/setup-mcp-yarn.sh
 RUN bash /home/dev/setup-mcp-yarn.sh
-
-# rtk and fd are now prebuilt in independent stages above.
 
 # -----------------------------------------------------------------------------
 # Independently versioned Node tool prefixes
@@ -133,7 +162,7 @@ RUN --mount=type=cache,id=npm-openspec-${DEV_UID}-${DEV_GID},target=/home/dev/.n
 # -----------------------------------------------------------------------------
 FROM base AS runtime
 
-ARG OH_MY_ZSH_VERSION=70ad5e3df8f7bed68aa6672029496926e632aedd
+ARG OH_MY_ZSH_VERSION
 
 COPY --from=pi-tools /opt/pi /opt/pi
 COPY --from=toolchain /home/dev/.local /home/dev/.local
@@ -154,7 +183,6 @@ RUN chown dev:dev \
 
 COPY --from=rtk-prebuilt /usr/local/bin/rtk /usr/local/bin/rtk
 COPY --from=fd-prebuilt /usr/local/bin/fd /usr/local/bin/fd
-# rtk integration is registered at runtime via /home/dev/install-pi-extensions.sh
 
 COPY docker/zsh/zshrc.fragment /tmp/zshrc.fragment
 COPY docker/setup-zsh.sh /tmp/setup-zsh.sh
@@ -165,6 +193,19 @@ RUN chmod +x /tmp/setup-zsh.sh \
 # Keep OpenSpec version changes after unrelated home and zsh setup.
 COPY --from=openspec-tools /opt/openspec /opt/openspec
 RUN ln -sf /opt/openspec/bin/openspec /usr/local/bin/openspec
+
+# Effective inventory — generated by the versioning resolver
+ARG EFFECTIVE_VERSIONS_FILE
+RUN install -d -m 755 -o root -g root /usr/local/share/pi-cli
+COPY ${EFFECTIVE_VERSIONS_FILE} /usr/local/share/pi-cli/versions.toml
+RUN chown root:root /usr/local/share/pi-cli/versions.toml \
+    && chmod 0444 /usr/local/share/pi-cli/versions.toml
+
+# Runtime resolver modules for inventory-backed scripts
+COPY docker/versions.py /usr/local/lib/pi-cli/docker/versions.py
+COPY docker/versioning/ /usr/local/lib/pi-cli/docker/versioning/
+RUN chown -R root:root /usr/local/lib/pi-cli \
+    && chmod -R a+rX /usr/local/lib/pi-cli
 
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

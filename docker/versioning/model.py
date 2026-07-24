@@ -87,6 +87,19 @@ class GitSource:
     type: str = "git"
 
 
+@dataclass(frozen=True)
+class StaticUrlSource:
+    """A version-independent source whose integrity is verified via a
+    published checksum file (e.g. rustup-init bootstrap binary).
+
+    The ``checksum_url`` points to an authoritative ``sha256sum``-format
+    file.  The per-platform artifact URLs and digests live in the parent
+    entry's ``artifacts`` table (e.g. ``rustup.artifacts.linux-amd64``).
+    """
+    checksum_url: str
+    type: str = "static-url"
+
+
 # ---------------------------------------------------------------------------
 # Update metadata (provider-specific)
 # ---------------------------------------------------------------------------
@@ -138,6 +151,15 @@ class GitRefUpdate:
     provider: str = "git-ref"
 
 
+@dataclass(frozen=True)
+class StaticUrlUpdate:
+    """Update contract for version-independent static URLs — the artifact
+    is content-addressed (SHA-256), and a provider can detect drift by
+    re-downloading and comparing the digest."""
+    stable_only: bool = True
+    provider: str = "static-url"
+
+
 # ---------------------------------------------------------------------------
 # Entry types
 # ---------------------------------------------------------------------------
@@ -157,6 +179,9 @@ class RustEntry:
     components: tuple[str, ...]
     source: RustChannelSource
     update: RustChannelUpdate
+    rustup: Mapping[str, ArtifactEntry]
+    rustup_source: StaticUrlSource
+    rustup_update: StaticUrlUpdate
 
 
 @dataclass(frozen=True)

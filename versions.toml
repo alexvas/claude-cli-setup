@@ -46,6 +46,18 @@ components = ["rustfmt", "clippy"]
 type = "rust-channel"
 manifest = "https://static.rust-lang.org/dist/channel-rust-1.97.1.toml"
 
+[stages.toolchain.rust.rustup.source]
+type = "static-url"
+checksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"
+
+[stages.toolchain.rust.rustup.update]
+provider = "static-url"
+stable_only = true
+
+[stages.toolchain.rust.rustup.artifacts.linux-amd64]
+url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
+sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+
 [stages.toolchain.rust.update]
 provider = "rust-channel"
 channel = "stable"
