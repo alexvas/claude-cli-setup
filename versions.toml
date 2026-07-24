@@ -154,7 +154,7 @@ required_platforms = ["linux-amd64"]
 # ---------------------------------------------------------------------------
 
 [stages.pi-tools.pi]
-version = "0.80.10"
+version = "0.82.0"
 
 [stages.pi-tools.pi.source]
 type = "npm"
