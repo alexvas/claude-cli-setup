@@ -30,7 +30,7 @@ python3 docker/build_wrapper.py build -y
 `./docker/versions.py env` prints shell-safe resolved build inputs for low-level integration. A deliberate Python override uses:
 
 ```bash
-./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override build.stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 Override constraints accept only `==, >, >=, <, <=` with complete `X.Y.Z` versions. Wildcards, incomplete versions, OR expressions, and prerelease values are rejected unless policy explicitly allows them. The inventory pins reviewed non-Debian inputs, but Debian repositories and BuildKit metadata mean byte-identical OCI output is not guaranteed.
@@ -58,10 +58,10 @@ Low-level runtime commands remain available when `PROJECT_PATH_1` is set:
 1. Inspect only Pi and request a reviewable suggestion:
 
    ```bash
-   ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
+   ./docker/versions.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` is **non-mutating**: verify the upstream release and manually apply the accepted value and related metadata to `stages.pi-tools.pi` in `docker-constructor.toml`.
+2. `--suggest` is **non-mutating**: verify the upstream release and manually apply the accepted value and related metadata to `build.stages.pi-tools.pi` in `docker-constructor.toml`.
 3. Validate and review the exact repository change:
 
    ```bash

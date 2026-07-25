@@ -233,14 +233,14 @@ def _check_inventory_ownership(image: str) -> int:
 # ---------------------------------------------------------------------------
 
 _TOOL_MATRIX = [
-    ("rustc", "stages.toolchain.rust.version"),
-    ("cargo", "stages.toolchain.rust.version"),
-    ("uv", "stages.toolchain.uv.version"),
-    ("ty", "stages.toolchain.ty.version"),
-    ("pi", "stages.pi-tools.pi.version"),
-    ("openspec", "stages.openspec-tools.openspec.version"),
-    ("rtk", "stages.rtk-prebuilt.rtk.version"),
-    ("fd", "stages.fd-prebuilt.fd.version"),
+    ("rustc", "build.stages.toolchain.rust.version"),
+    ("cargo", "build.stages.toolchain.rust.version"),
+    ("uv", "build.stages.toolchain.uv.version"),
+    ("ty", "build.stages.toolchain.ty.version"),
+    ("pi", "build.stages.pi-tools.pi.version"),
+    ("openspec", "build.stages.openspec-tools.openspec.version"),
+    ("rtk", "build.stages.rtk-prebuilt.rtk.version"),
+    ("fd", "build.stages.fd-prebuilt.fd.version"),
 ]
 
 
@@ -276,7 +276,7 @@ def _check_tool_versions(image: str, inventory: dict) -> int:
             mismatches += 1
 
     # Node: major-only comparison from image tag
-    node_tag = _inventory_get(inventory, "stages", "base", "node", "tag")
+    node_tag = _inventory_get(inventory, "build", "stages", "base", "node", "tag")
     node_major = node_tag.split("-")[0]
     proc = _docker_run(image, "node", "--version")
     if proc.returncode != 0:
@@ -293,7 +293,7 @@ def _check_tool_versions(image: str, inventory: dict) -> int:
 
     # Rust components: verify rustfmt and clippy are installed if listed
     try:
-        components_raw = inventory["stages"]["toolchain"]["rust"]["components"]
+        components_raw = inventory["build"]["stages"]["toolchain"]["rust"]["components"]
     except (KeyError, TypeError):
         components_raw = []
     if isinstance(components_raw, list):
@@ -336,7 +336,7 @@ def _check_tool_versions(image: str, inventory: dict) -> int:
 def _check_python_contract(image: str, inventory: dict) -> int:
     """Verify the direct Python contract inside the image."""
     mismatches = 0
-    expected = _inventory_get(inventory, "stages", "toolchain", "python", "version")
+    expected = _inventory_get(inventory, "build", "stages", "toolchain", "python", "version")
 
     # Resolve actual python3 binary path
     proc = _docker_run(image, "bash", "-c", "command -v python3")

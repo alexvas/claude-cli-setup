@@ -30,7 +30,7 @@ python3 docker/build_wrapper.py build -y
 `./docker/versions.py env` печатает безопасные для shell разрешённые входы сборки. Явное переопределение Python:
 
 ```bash
-./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override build.stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 Ограничения поддерживают только `==, >, >=, <, <=` и полные версии `X.Y.Z`. Шаблоны, неполные версии, OR и prerelease запрещены, если политика явно не разрешает их. Конфигурация версий фиксирует проверенные входы, кроме Debian, но репозитории Debian и метаданные BuildKit не гарантируют побайтово одинаковый OCI-образ.
@@ -58,10 +58,10 @@ python3 docker/build_wrapper.py build -y
 1. Проверьте только Pi и запросите предложение:
 
    ```bash
-   ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
+   ./docker/versions.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` работает в режиме **non-mutating**: проверьте upstream-релиз и вручную внесите принятое значение и связанные метаданные в `stages.pi-tools.pi` файла `docker-constructor.toml`.
+2. `--suggest` работает в режиме **non-mutating**: проверьте upstream-релиз и вручную внесите принятое значение и связанные метаданные в `build.stages.pi-tools.pi` файла `docker-constructor.toml`.
 3. Проверьте конфигурацию версий и diff:
 
    ```bash

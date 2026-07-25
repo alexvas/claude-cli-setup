@@ -184,9 +184,21 @@ version = "0.9.1"
 type = "npm"
 package = "@llblab/pi-codex-usage"
 
+[runtime.pi-extensions.pi-codex-usage.artifact]
+url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz"
+integrity = "sha512-r5iMe57KgKPWSvx5/fKCwT+s/haysaEs40OMdTtisAFR1njppvNAhlgNOBl7+nDm6j88XTee3m0Rp3s/kinIQg=="
+
 [runtime.pi-extensions.pi-codex-usage.update]
 provider = "npm"
 stable_only = true
+
+[runtime.pi-extensions.pi-codex-usage.override]
+constraint = ">=0.9.0"
+allow_prerelease = false
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-codex-usage.validation]
+metadata_file = "package.json"
 
 [runtime.pi-extensions.pi-proxy]
 version = "1.0.0"
@@ -195,9 +207,21 @@ version = "1.0.0"
 type = "npm"
 package = "pi-proxy"
 
+[runtime.pi-extensions.pi-proxy.artifact]
+url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
+integrity = "sha512-UHr/AQV2S0rISwRsD5jmKAo9ZQlZxU9Csh72sGYYDhbkSo44P+XzfRG96OuYYy2G3Iis0a75w3Cp9KYtjpbZxw=="
+
 [runtime.pi-extensions.pi-proxy.update]
 provider = "npm"
 stable_only = true
+
+[runtime.pi-extensions.pi-proxy.override]
+constraint = ">=1.0.0"
+allow_prerelease = false
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-proxy.validation]
+metadata_file = "package.json"
 
 [runtime.pi-extensions.pi-read]
 version = "0.2.0"
@@ -206,9 +230,21 @@ version = "0.2.0"
 type = "npm"
 package = "@arcanemachine/pi-read"
 
+[runtime.pi-extensions.pi-read.artifact]
+url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="
+
 [runtime.pi-extensions.pi-read.update]
 provider = "npm"
 stable_only = true
+
+[runtime.pi-extensions.pi-read.override]
+constraint = ">=0.2.0"
+allow_prerelease = false
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-read.validation]
+metadata_file = "package.json"
 """
 
 
@@ -274,9 +310,21 @@ version = "1.0.0"
 type = "npm"
 package = "pi-test"
 
+[runtime.pi-extensions.pi-test.artifact]
+url = "https://registry.npmjs.org/pi-test/-/pi-test-1.0.0.tgz"
+integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
 [runtime.pi-extensions.pi-test.update]
 provider = "npm"
 stable_only = true
+
+[runtime.pi-extensions.pi-test.override]
+constraint = ">=1.0.0"
+allow_prerelease = false
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-test.validation]
+metadata_file = "package.json"
 """
         p = self._write(bad_toml)
         with self.assertRaises(InventoryError) as ctx:
@@ -333,9 +381,21 @@ version = "1.0.0"
 type = "npm"
 package = "pi-test"
 
+[runtime.pi-extensions.pi-test.artifact]
+url = "https://registry.npmjs.org/pi-test/-/pi-test-1.0.0.tgz"
+integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
 [runtime.pi-extensions.pi-test.update]
 provider = "npm"
 stable_only = true
+
+[runtime.pi-extensions.pi-test.override]
+constraint = ">=1.0.0"
+allow_prerelease = false
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-test.validation]
+metadata_file = "package.json"
 """
         p = self._write(bad_toml)
         with self.assertRaises(InventoryError) as ctx:
@@ -504,13 +564,16 @@ class TestDirectConstructionImmutability(unittest.TestCase):
 
     def test_runtime_inventory_normalises_mutable_dict(self):
         """RuntimeInventory normalises a plain dict to MappingProxyType."""
-        from docker.versions import PiExtensionEntry, NpmSource, NpmUpdate, RuntimeInventory
+        from docker.versions import PiExtensionEntry, NpmSource, NpmUpdate, OverridePolicy, parse_constraint, NpmArtifact, RuntimeValidation, RuntimeInventory
 
         mutable: dict[str, PiExtensionEntry] = {
             "test-ext": PiExtensionEntry(
                 version="1.0.0",
                 source=NpmSource(package="test"),
                 update=NpmUpdate(stable_only=True),
+                artifact=NpmArtifact(url="https://registry.npmjs.org/test/-/test-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+                validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
             ),
         }
         ri = RuntimeInventory(pi_extensions=mutable)
@@ -520,19 +583,25 @@ class TestDirectConstructionImmutability(unittest.TestCase):
             version="9.9.9",
             source=NpmSource(package="evil"),
             update=NpmUpdate(stable_only=True),
+            artifact=NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
         )
         self.assertNotIn("intruder", ri.pi_extensions)
 
     def test_runtime_inventory_copies_backing_dict(self):
         """A MappingProxyType backed by a reachable dict must be deep-copied
         so the original dict cannot affect the frozen container."""
-        from docker.versions import PiExtensionEntry, NpmSource, NpmUpdate, RuntimeInventory
+        from docker.versions import PiExtensionEntry, NpmSource, NpmUpdate, OverridePolicy, parse_constraint, NpmArtifact, RuntimeValidation, RuntimeInventory
 
         backing: dict[str, PiExtensionEntry] = {
             "safe": PiExtensionEntry(
                 version="1.0.0",
                 source=NpmSource(package="safe"),
                 update=NpmUpdate(stable_only=True),
+                artifact=NpmArtifact(url="https://registry.npmjs.org/safe/-/safe-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+                validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
             ),
         }
         mp = MappingProxyType(backing)
@@ -546,6 +615,9 @@ class TestDirectConstructionImmutability(unittest.TestCase):
             version="9.9.9",
             source=NpmSource(package="evil"),
             update=NpmUpdate(stable_only=True),
+            artifact=NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
         )
         del backing["safe"]
 
@@ -557,14 +629,19 @@ class TestDirectConstructionImmutability(unittest.TestCase):
     def test_inventory_normalises_runtime_pi_extensions(self):
         """Direct Inventory construction normalises runtime_pi_extensions."""
         from docker.versions import (
-            Inventory, PiExtensionEntry, NpmSource, NpmUpdate,
+            Inventory, PiExtensionEntry, NpmSource, NpmUpdate, NpmArtifact, RuntimeValidation,
+            OverridePolicy, Constraint,
         )
+        from docker.versions import parse_constraint
 
         mutable_ext: dict[str, PiExtensionEntry] = {
             "ext-a": PiExtensionEntry(
                 version="1.0.0",
                 source=NpmSource(package="ext-a"),
                 update=NpmUpdate(stable_only=True),
+                artifact=NpmArtifact(url="https://registry.npmjs.org/ext-a/-/ext-a-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+                validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
             ),
         }
 
@@ -581,6 +658,9 @@ class TestDirectConstructionImmutability(unittest.TestCase):
             version="9.9.9",
             source=NpmSource(package="evil"),
             update=NpmUpdate(stable_only=True),
+            artifact=NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
         )
         self.assertNotIn("evil", inv.runtime_pi_extensions)
 

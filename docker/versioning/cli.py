@@ -332,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     get_p.add_argument(
         "path",
-        help="Dot-separated path (e.g. stages.toolchain.python.version)",
+        help="Dot-separated path (e.g. build.stages.toolchain.python.version)",
     )
 
     # env

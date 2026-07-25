@@ -29,7 +29,7 @@ class TestPyPiProvider(unittest.TestCase):
 
     def _target(self, version="0.0.61", package="ty", stable_only=True):
         return UpdateTarget(
-            path="stages.toolchain.ty",
+            path="build.stages.toolchain.ty",
             current=version,
             source=PyPiSource(package=package),
             update=PyPiUpdate(stable_only=stable_only),

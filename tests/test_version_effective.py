@@ -125,7 +125,7 @@ class TestEffectiveImmutability(unittest.TestCase):
     def setUpClass(cls):
         cls.inventory = _default_inventory()
         cls.effective = apply_overrides(
-            cls.inventory, {"stages.toolchain.python.version": "3.14.7"}
+            cls.inventory, {"build.stages.toolchain.python.version": "3.14.7"}
         )
 
     def test_overrides_is_mappingproxy(self):
@@ -151,12 +151,12 @@ class TestSourceInventoryImmutability(unittest.TestCase):
     def test_source_inventory_unchanged_after_override(self):
         inv = _default_inventory()
         original_version = inv.stages.toolchain.python.version
-        apply_overrides(inv, {"stages.toolchain.python.version": "3.14.7"})
+        apply_overrides(inv, {"build.stages.toolchain.python.version": "3.14.7"})
         self.assertEqual(inv.stages.toolchain.python.version, original_version)
 
     def test_effective_differs_from_source(self):
         inv = _default_inventory()
-        eff = apply_overrides(inv, {"stages.toolchain.python.version": "3.14.7"})
+        eff = apply_overrides(inv, {"build.stages.toolchain.python.version": "3.14.7"})
         self.assertNotEqual(
             eff.inventory.stages.toolchain.python.version,
             inv.stages.toolchain.python.version,
@@ -176,7 +176,7 @@ class TestOverridePolicy(unittest.TestCase):
 
     def test_3146_accepted(self):
         eff = apply_overrides(
-            self.inventory, {"stages.toolchain.python.version": "3.14.6"}
+            self.inventory, {"build.stages.toolchain.python.version": "3.14.6"}
         )
         self.assertEqual(
             eff.inventory.stages.toolchain.python.version, "3.14.6"
@@ -184,7 +184,7 @@ class TestOverridePolicy(unittest.TestCase):
 
     def test_3147_accepted(self):
         eff = apply_overrides(
-            self.inventory, {"stages.toolchain.python.version": "3.14.7"}
+            self.inventory, {"build.stages.toolchain.python.version": "3.14.7"}
         )
         self.assertEqual(
             eff.inventory.stages.toolchain.python.version, "3.14.7"
@@ -192,7 +192,7 @@ class TestOverridePolicy(unittest.TestCase):
 
     def test_400_accepted_by_constraint(self):
         eff = apply_overrides(
-            self.inventory, {"stages.toolchain.python.version": "4.0.0"}
+            self.inventory, {"build.stages.toolchain.python.version": "4.0.0"}
         )
         self.assertEqual(
             eff.inventory.stages.toolchain.python.version, "4.0.0"
@@ -201,14 +201,14 @@ class TestOverridePolicy(unittest.TestCase):
     def test_3145_rejected(self):
         with self.assertRaises(OverrideValidationError) as ctx:
             apply_overrides(
-                self.inventory, {"stages.toolchain.python.version": "3.14.5"}
+                self.inventory, {"build.stages.toolchain.python.version": "3.14.5"}
             )
         self.assertIn("does not satisfy", str(ctx.exception))
 
     def test_314_rejected(self):
         with self.assertRaises(OverrideValidationError) as ctx:
             apply_overrides(
-                self.inventory, {"stages.toolchain.python.version": "3.14"}
+                self.inventory, {"build.stages.toolchain.python.version": "3.14"}
             )
         self.assertIn("not a valid", str(ctx.exception).lower())
 
@@ -216,7 +216,7 @@ class TestOverridePolicy(unittest.TestCase):
         with self.assertRaises(OverrideValidationError) as ctx:
             apply_overrides(
                 self.inventory,
-                {"stages.toolchain.python.version": "3.14.7-rc.1"},
+                {"build.stages.toolchain.python.version": "3.14.7-rc.1"},
             )
         self.assertIn("not a valid", str(ctx.exception).lower())
 
@@ -224,7 +224,7 @@ class TestOverridePolicy(unittest.TestCase):
         with self.assertRaises(OverrideValidationError) as ctx:
             apply_overrides(
                 self.inventory,
-                {"stages.toolchain.python.version": "latest"},
+                {"build.stages.toolchain.python.version": "latest"},
             )
         self.assertIn("not a valid", str(ctx.exception).lower())
 
@@ -243,15 +243,16 @@ class TestSerialization(unittest.TestCase):
         data = to_plain_data(self.effective.inventory)
         self.assertIsInstance(data, dict)
         self.assertIn("schema", data)
-        self.assertIn("stages", data)
+        self.assertIn("build", data)
+        self.assertIn("stages", data["build"])
 
     def test_mappingproxy_to_dict(self):
         raw = serialize_effective_inventory(self.effective)
-        self.assertIsInstance(raw["stages"]["toolchain"]["uv"]["artifacts"], dict)
+        self.assertIsInstance(raw["build"]["stages"]["toolchain"]["uv"]["artifacts"], dict)
 
     def test_tuple_to_array(self):
         data = serialize_effective_inventory(self.effective)
-        components = data["stages"]["toolchain"]["rust"]["components"]
+        components = data["build"]["stages"]["toolchain"]["rust"]["components"]
         self.assertIsInstance(components, list)
 
     def test_json_serializable(self):
@@ -275,7 +276,7 @@ class TestSerialization(unittest.TestCase):
         inv = _default_inventory()
         default_eff = apply_overrides(inv, {})
         override_eff = apply_overrides(
-            inv, {"stages.toolchain.python.version": "3.14.9"}
+            inv, {"build.stages.toolchain.python.version": "3.14.9"}
         )
 
         default_raw = serialize_effective_inventory(default_eff)
@@ -283,17 +284,17 @@ class TestSerialization(unittest.TestCase):
 
         # Only python version differs
         self.assertNotEqual(
-            default_raw["stages"]["toolchain"]["python"]["version"],
-            override_raw["stages"]["toolchain"]["python"]["version"],
+            default_raw["build"]["stages"]["toolchain"]["python"]["version"],
+            override_raw["build"]["stages"]["toolchain"]["python"]["version"],
         )
         self.assertEqual(
-            default_raw["stages"]["toolchain"]["python"]["source"],
-            override_raw["stages"]["toolchain"]["python"]["source"],
+            default_raw["build"]["stages"]["toolchain"]["python"]["source"],
+            override_raw["build"]["stages"]["toolchain"]["python"]["source"],
         )
 
     def test_toml_style_names(self):
         raw = serialize_effective_inventory(self.effective)
-        stages = raw["stages"]
+        stages = raw["build"]["stages"]
         # TOML names, not Python attr names
         self.assertIn("rtk-prebuilt", stages)
         self.assertIn("fd-prebuilt", stages)
@@ -321,7 +322,7 @@ class TestEnvironmentMapping(unittest.TestCase):
     def test_overridden_python_env(self):
         eff = apply_overrides(
             self.inventory,
-            {"stages.toolchain.python.version": "3.14.7"},
+            {"build.stages.toolchain.python.version": "3.14.7"},
         )
         env = effective_environment(eff)
         self.assertEqual(env["PYTHON_VERSION"], "3.14.7")
@@ -355,7 +356,7 @@ class TestEnvironmentMapping(unittest.TestCase):
 
         # Modified fixture with different registry
         toml_modified = minimal_toml(**{
-            "stages.base.node.source": (
+            "build.stages.base.node.source": (
                 'type = "docker-registry"\n'
                 'registry = "quay.io"\n'
                 'repository = "custom/node"\n'

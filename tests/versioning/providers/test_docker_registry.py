@@ -35,7 +35,7 @@ class TestDockerRegistryProvider(unittest.TestCase):
     def _target(self, tag="24-trixie-slim", registry="docker.io",
                 repository="library/node"):
         return UpdateTarget(
-            path="stages.base.node",
+            path="build.stages.base.node",
             current=tag,
             source=DockerRegistrySource(registry=registry, repository=repository),
             update=DockerRegistryUpdate(stable_only=True, track="tag-digest"),

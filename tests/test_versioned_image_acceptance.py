@@ -23,65 +23,65 @@ _FIXTURE_TOML = r"""schema = 1
 
 [stages]
 
-[stages.base]
-[stages.base.node]
+[build.stages.base]
+[build.stages.base.node]
 tag = "24-trixie-slim"
 digest = "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
 
-[stages.toolchain]
+[build.stages.toolchain]
 
-[stages.toolchain.rust]
+[build.stages.toolchain.rust]
 version = "1.88.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
 
-[stages.toolchain.rust.rustup]
-[stages.toolchain.rust.rustup.source]
+[build.stages.toolchain.rust.rustup]
+[build.stages.toolchain.rust.rustup.source]
 type = "static-url"
 checksum_url = "https://example.com/rustup-init.sha256"
 
-[stages.toolchain.rust.rustup.update]
+[build.stages.toolchain.rust.rustup.update]
 provider = "static-url"
 stable_only = true
 
-[stages.toolchain.rust.rustup.artifacts.linux-amd64]
+[build.stages.toolchain.rust.rustup.artifacts.linux-amd64]
 url = "https://example.com/rustup-init"
 sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
 
-[stages.toolchain.uv]
+[build.stages.toolchain.uv]
 version = "0.11.29"
 
-[stages.toolchain.uv.artifacts.linux-amd64]
+[build.stages.toolchain.uv.artifacts.linux-amd64]
 url = "https://example.com/uv.tar.gz"
 sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-[stages.toolchain.python]
+[build.stages.toolchain.python]
 version = "3.14.6"
 
-[stages.toolchain.ty]
+[build.stages.toolchain.ty]
 version = "0.0.61"
 
-[stages.pi-tools.pi]
+[build.stages.pi-tools.pi]
 version = "0.80.10"
 
-[stages.openspec-tools.openspec]
+[build.stages.openspec-tools.openspec]
 version = "1.6.0"
 
-[stages.rtk-prebuilt.rtk]
+[build.stages.rtk-prebuilt.rtk]
 version = "v0.43.0"
 
-[stages.rtk-prebuilt.rtk.artifacts.linux-amd64]
+[build.stages.rtk-prebuilt.rtk.artifacts.linux-amd64]
 url = "https://example.com/rtk_amd64.deb"
 sha256 = "eb571d784b3269521722ebe2f0dc2409e89da6bd70bf097ddb21e9d4b3b240b9"
 
-[stages.fd-prebuilt.fd]
+[build.stages.fd-prebuilt.fd]
 version = "v10.4.2"
 
-[stages.fd-prebuilt.fd.artifacts.linux-amd64]
+[build.stages.fd-prebuilt.fd.artifacts.linux-amd64]
 url = "https://example.com/fd_amd64.deb"
 sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
 
-[stages.runtime.oh-my-zsh]
+[build.stages.runtime.oh-my-zsh]
 revision = "70ad5e3df8f7bed68aa6672029496926e632aedd"
 
 [runtime]
@@ -301,7 +301,7 @@ class TestVerifyVersionedImage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             inv_path = _write_fixture(td)
             image_inv = _fixture_dict()
-            image_inv["stages"]["toolchain"]["rust"]["version"] = "1.99.0"
+            image_inv["build"]["stages"]["toolchain"]["rust"]["version"] = "1.99.0"
 
             def _side(cmd_args, **kwargs):
                 cmd_str = " ".join(cmd_args)
@@ -327,7 +327,7 @@ class TestVerifyVersionedImage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             inv_path = _write_fixture(td)
             image_inv = _fixture_dict()
-            image_inv["stages"]["toolchain"]["rust"]["rustup"]["artifacts"]["linux-amd64"]["sha256"] = (
+            image_inv["build"]["stages"]["toolchain"]["rust"]["rustup"]["artifacts"]["linux-amd64"]["sha256"] = (
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             )
 
@@ -751,7 +751,7 @@ class TestVerifyVersionedImage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             inv_path = _write_fixture(td)
             inv = _fixture_dict()
-            inv["stages"]["toolchain"]["rust"]["profile"] = "complete"
+            inv["build"]["stages"]["toolchain"]["rust"]["profile"] = "complete"
             mock_run.side_effect = _make_run_side_effect(inv)
             rc = verify_main(["--image", "img", "--inventory", inv_path])
             self.assertNotEqual(rc, 0)
@@ -762,7 +762,7 @@ class TestVerifyVersionedImage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             inv_path = _write_fixture(td)
             inv = _fixture_dict()
-            inv["stages"]["toolchain"]["unexpected_tool"] = {"version": "9.9.9"}
+            inv["build"]["stages"]["toolchain"]["unexpected_tool"] = {"version": "9.9.9"}
             mock_run.side_effect = _make_run_side_effect(inv)
             rc = verify_main(["--image", "img", "--inventory", inv_path])
             self.assertNotEqual(rc, 0)

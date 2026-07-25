@@ -31,10 +31,10 @@ _RUNTIME_COMPOSE = _REPO_ROOT / "docker-compose.runtime.yml"
 def _python_override_toml() -> str:
     return minimal_toml(
         **{
-            "stages.toolchain.python": (
+            "build.stages.toolchain.python": (
                 'version = "3.14.6"\n'
                 "\n"
-                "[stages.toolchain.python.override]\n"
+                "[build.stages.toolchain.python.override]\n"
                 'constraint = ">=3.14.6"\n'
                 "allow_prerelease = false\n"
                 'scheme = "numeric"'
@@ -217,7 +217,7 @@ class TestComposeOrchestration(unittest.TestCase):
             self._run_compose(
                 "build", "pi",
                 **{
-                    "--override": "stages.toolchain.python.version=3.14.7",
+                    "--override": "build.stages.toolchain.python.version=3.14.7",
                     "--effective-inventory-output": ".docker-generated/test-override.toml",
                 },
             )
@@ -236,7 +236,7 @@ class TestComposeOrchestration(unittest.TestCase):
             with open(output, "rb") as f:
                 data = tomllib.load(f)
             self.assertEqual(
-                data["stages"]["toolchain"]["python"]["version"],
+                data["build"]["stages"]["toolchain"]["python"]["version"],
                 "3.14.7",
             )
             # Clean up

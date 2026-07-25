@@ -38,8 +38,8 @@ class TestVersionDocumentation(unittest.TestCase):
 
     def test_focused_pi_update_workflow(self):
         required = (
-            "stages.pi-tools.pi", "./docker/versions.py check-updates",
-            "--only stages.pi-tools.pi", "--suggest", "non-mutating",
+            "build.stages.pi-tools.pi", "./docker/versions.py check-updates",
+            "--only build.stages.pi-tools.pi", "--suggest", "non-mutating",
             "docker-constructor.toml", "./docker/versions.py validate", "git diff -- docker-constructor.toml",
             "./docker/versions.py compose build pi", "./docker/verify-runtime.sh",
         )
@@ -98,7 +98,7 @@ class TestVersionDocumentation(unittest.TestCase):
     def test_restricted_override_grammar_remains_documented(self):
         for name, text in self._documents():
             with self.subTest(readme=name):
-                self.assertIn("--override stages.toolchain.python.version=X.Y.Z", text)
+                self.assertIn("--override build.stages.toolchain.python.version=X.Y.Z", text)
                 self.assertIn("==, >, >=, <, <=", text)
                 self.assertIn("prerelease", text.lower())
 

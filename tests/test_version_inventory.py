@@ -246,17 +246,17 @@ class TestProviderCompatibility(unittest.TestCase):
 
     # Which TOML dot-path to inject source/update overrides into for each source type
     _ENTRY_FOR_SOURCE: dict[str, str] = {
-        "github-release": "stages.toolchain.uv",
-        "npm": "stages.pi-tools.pi",
-        "pypi": "stages.toolchain.ty",
-        "rust-channel": "stages.toolchain.rust",
-        "docker-registry": "stages.base.node",
-        "git": "stages.runtime.oh-my-zsh",
+        "github-release": "build.stages.toolchain.uv",
+        "npm": "build.stages.pi-tools.pi",
+        "pypi": "build.stages.toolchain.ty",
+        "rust-channel": "build.stages.toolchain.rust",
+        "docker-registry": "build.stages.base.node",
+        "git": "build.stages.runtime.oh-my-zsh",
     }
 
     def _load_with_compat(self, source_type: str, update_provider: str) -> object:
         """Create a TOML where the correct entry uses source_type and update_provider, then load."""
-        entry = self._ENTRY_FOR_SOURCE.get(source_type, "stages.toolchain.uv")
+        entry = self._ENTRY_FOR_SOURCE.get(source_type, "build.stages.toolchain.uv")
         src_extra = ""
         if source_type == "github-release":
             src_extra = 'repository = "owner/repo"\ntag = "0.1.0"'
@@ -413,7 +413,7 @@ class TestMissingRequiredField(unittest.TestCase):
     def test_missing_python_version(self):
         with self.assertRaises(InventoryError) as ctx:
             load_inventory(FIXTURES / "missing-required-field.toml")
-        self.assertIn("stages.toolchain.python.version", str(ctx.exception))
+        self.assertIn("build.stages.toolchain.python.version", str(ctx.exception))
 
 
 class TestMalformedDigest(unittest.TestCase):
@@ -450,7 +450,7 @@ class TestInconsistentUrl(unittest.TestCase):
     def test_url_diverges_from_version(self):
         with self.assertRaises(InventoryError) as ctx:
             load_inventory(FIXTURES / "inconsistent-url.toml")
-        self.assertIn("stages.toolchain.uv.artifacts.linux-amd64.url", str(ctx.exception))
+        self.assertIn("build.stages.toolchain.uv.artifacts.linux-amd64.url", str(ctx.exception))
 
 
 class TestRustupBadUrl(unittest.TestCase):
@@ -459,7 +459,7 @@ class TestRustupBadUrl(unittest.TestCase):
     def test_rustup_url_not_admissible(self):
         with self.assertRaises(InventoryError) as ctx:
             load_inventory(FIXTURES / "rustup-bad-url.toml")
-        self.assertIn("stages.toolchain.rust.rustup.artifacts.linux-amd64.url", str(ctx.exception))
+        self.assertIn("build.stages.toolchain.rust.rustup.artifacts.linux-amd64.url", str(ctx.exception))
 
     def test_rustup_url_no_hostname(self):
         """URL like https:///rustup-init (no hostname) is rejected."""
@@ -529,9 +529,9 @@ class TestAdditionalInvalidCases(unittest.TestCase):
     def test_exact_version_fails_own_policy(self):
         toml = _minimal_toml(
             **{
-                "stages.toolchain.python": """\
+                "build.stages.toolchain.python": """\
 version = "3.14.5"
-[stages.toolchain.python.override]
+[build.stages.toolchain.python.override]
 constraint = ">=3.14.6"
 allow_prerelease = false
 scheme = "numeric"
@@ -548,9 +548,9 @@ scheme = "numeric"
     def test_allow_prerelease_with_numeric_scheme(self):
         toml = _minimal_toml(
             **{
-                "stages.toolchain.python": """\
+                "build.stages.toolchain.python": """\
 version = "3.14.6"
-[stages.toolchain.python.override]
+[build.stages.toolchain.python.override]
 constraint = ">=3.14.6"
 allow_prerelease = true
 scheme = "numeric"
@@ -567,9 +567,9 @@ scheme = "numeric"
     def test_unknown_scheme(self):
         toml = _minimal_toml(
             **{
-                "stages.toolchain.python": """\
+                "build.stages.toolchain.python": """\
 version = "3.14.6"
-[stages.toolchain.python.override]
+[build.stages.toolchain.python.override]
 constraint = ">=3.14.6"
 allow_prerelease = false
 scheme = "semver"
@@ -586,7 +586,7 @@ scheme = "semver"
     def test_range_instead_of_exact(self):
         toml = _minimal_toml(
             **{
-                "stages.toolchain.python": 'version = ">=3.14.6"'
+                "build.stages.toolchain.python": 'version = ">=3.14.6"'
             }
         )
         path = _write_toml(toml)

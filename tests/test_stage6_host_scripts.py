@@ -44,7 +44,7 @@ class TestStage6HostScripts(unittest.TestCase):
                                         "--output-dir", str(out)])
             self.assertEqual(rc, 0)
             commands = self._evidence(out)["commands"]
-            self.assertTrue(any("stages.toolchain.python.version=3.14.7" in c["argv"] for c in commands))
+            self.assertTrue(any("build.stages.toolchain.python.version=3.14.7" in c["argv"] for c in commands))
             self.assertTrue(any("/tmp/experimental.toml" in c["argv"] for c in commands))
 
     def test_task_6_4_dry_run(self):

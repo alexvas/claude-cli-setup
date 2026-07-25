@@ -100,7 +100,7 @@ def build_update_targets(
     # base.node
     node = s.base.node
     result.append(UpdateTarget(
-        path="stages.base.node",
+        path="build.stages.base.node",
         current=node.tag,
         source=node.source,
         update=node.update,
@@ -109,7 +109,7 @@ def build_update_targets(
 
     # toolchain.rust
     result.append(UpdateTarget(
-        path="stages.toolchain.rust",
+        path="build.stages.toolchain.rust",
         current=s.toolchain.rust.version,
         source=s.toolchain.rust.source,
         update=s.toolchain.rust.update,
@@ -117,7 +117,7 @@ def build_update_targets(
     ))
     # toolchain.rust.rustup (static-url bootstrap artifact)
     result.append(UpdateTarget(
-        path="stages.toolchain.rust.rustup",
+        path="build.stages.toolchain.rust.rustup",
         current=s.toolchain.rust.rustup.get("linux-amd64", ArtifactEntry(url="", sha256="")).sha256,
         source=s.toolchain.rust.rustup_source,
         update=s.toolchain.rust.rustup_update,
@@ -126,7 +126,7 @@ def build_update_targets(
 
     # toolchain.uv
     result.append(UpdateTarget(
-        path="stages.toolchain.uv",
+        path="build.stages.toolchain.uv",
         current=s.toolchain.uv.version,
         source=s.toolchain.uv.source,
         update=s.toolchain.uv.update,
@@ -135,7 +135,7 @@ def build_update_targets(
 
     # toolchain.python
     result.append(UpdateTarget(
-        path="stages.toolchain.python",
+        path="build.stages.toolchain.python",
         current=s.toolchain.python.version,
         source=s.toolchain.python.source,
         update=s.toolchain.python.update,
@@ -145,7 +145,7 @@ def build_update_targets(
 
     # toolchain.ty
     result.append(UpdateTarget(
-        path="stages.toolchain.ty",
+        path="build.stages.toolchain.ty",
         current=s.toolchain.ty.version,
         source=s.toolchain.ty.source,
         update=s.toolchain.ty.update,
@@ -154,7 +154,7 @@ def build_update_targets(
 
     # rtk-prebuilt
     result.append(UpdateTarget(
-        path="stages.rtk-prebuilt.rtk",
+        path="build.stages.rtk-prebuilt.rtk",
         current=s.rtk_prebuilt.rtk.version,
         source=s.rtk_prebuilt.rtk.source,
         update=s.rtk_prebuilt.rtk.update,
@@ -163,7 +163,7 @@ def build_update_targets(
 
     # fd-prebuilt
     result.append(UpdateTarget(
-        path="stages.fd-prebuilt.fd",
+        path="build.stages.fd-prebuilt.fd",
         current=s.fd_prebuilt.fd.version,
         source=s.fd_prebuilt.fd.source,
         update=s.fd_prebuilt.fd.update,
@@ -172,7 +172,7 @@ def build_update_targets(
 
     # pi-tools.pi
     result.append(UpdateTarget(
-        path="stages.pi-tools.pi",
+        path="build.stages.pi-tools.pi",
         current=s.pi_tools.pi.version,
         source=s.pi_tools.pi.source,
         update=s.pi_tools.pi.update,
@@ -181,7 +181,7 @@ def build_update_targets(
 
     # openspec-tools.openspec
     result.append(UpdateTarget(
-        path="stages.openspec-tools.openspec",
+        path="build.stages.openspec-tools.openspec",
         current=s.openspec_tools.openspec.version,
         source=s.openspec_tools.openspec.source,
         update=s.openspec_tools.openspec.update,
@@ -190,7 +190,7 @@ def build_update_targets(
 
     # runtime.oh-my-zsh
     result.append(UpdateTarget(
-        path="stages.runtime.oh-my-zsh",
+        path="build.stages.runtime.oh-my-zsh",
         current=s.runtime.oh_my_zsh.revision,
         source=s.runtime.oh_my_zsh.source,
         update=s.runtime.oh_my_zsh.update,
@@ -418,7 +418,7 @@ def check_updates(
             continue
 
         # Classify
-        current_entry_digest = node_digest if target.path == "stages.base.node" else None
+        current_entry_digest = node_digest if target.path == "build.stages.base.node" else None
         status, kind, applicable, reason = _classify_candidate(
             target, candidate, current_entry_digest
         )

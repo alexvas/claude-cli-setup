@@ -29,7 +29,7 @@ class TestGitProvider(unittest.TestCase):
 
     def _target(self, revision="a" * 40, repo="https://github.com/test/repo.git", ref="master"):
         return UpdateTarget(
-            path="stages.runtime.oh-my-zsh",
+            path="build.stages.runtime.oh-my-zsh",
             current=revision,
             source=GitSource(repository=repo),
             update=GitRefUpdate(ref=ref),

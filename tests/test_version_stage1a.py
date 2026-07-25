@@ -21,6 +21,24 @@ from docker.versions import (
 
 from versioning.support.inventory_builder import minimal_toml, write_toml, FIXTURES
 
+# Artifact values matched to tested extension versions so the URL-version
+# consistency check passes when tests override only the version line.
+_EXT_ARTIFACT_1_2_3 = (
+    'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-1.2.3.tgz"\n'
+    'integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="\n'
+)
+_EXT_ARTIFACT_1_0_0 = (
+    'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-1.0.0.tgz"\n'
+    'integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="\n'
+)
+_EXT_ARTIFACT_0_3_0 = (
+    'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.3.0-beta.1.tgz"\n'
+    'integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="\n'
+)
+_EXT_ARTIFACT_0_2_0 = (
+    'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0-beta.1.tgz"\n'
+    'integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="\n'
+)
 
 # ---------------------------------------------------------------------------
 # 2. Constraint regression: equal strict/inclusive bounds
@@ -82,7 +100,7 @@ class TestPythonEntryContract(unittest.TestCase):
 
     def test_python_missing_source(self):
         toml = minimal_toml(
-            **{"stages.toolchain.python.source": ""}
+            **{"build.stages.toolchain.python.source": ""}
         )
         path = write_toml(toml)
         try:
@@ -93,7 +111,7 @@ class TestPythonEntryContract(unittest.TestCase):
 
     def test_python_missing_update(self):
         toml = minimal_toml(
-            **{"stages.toolchain.python.update": ""}
+            **{"build.stages.toolchain.python.update": ""}
         )
         path = write_toml(toml)
         try:
@@ -105,7 +123,7 @@ class TestPythonEntryContract(unittest.TestCase):
     def test_python_unknown_implementation(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.python.source": (
+                "build.stages.toolchain.python.source": (
                     'type = "uv-python"\nimplementation = "pypy"\n'
                 ),
             }
@@ -120,7 +138,7 @@ class TestPythonEntryContract(unittest.TestCase):
     def test_python_source_type_pypi_rejected(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.python.source": (
+                "build.stages.toolchain.python.source": (
                     'type = "pypi"\npackage = "python"\n'
                 ),
             }
@@ -135,7 +153,7 @@ class TestPythonEntryContract(unittest.TestCase):
     def test_python_incompatible_update_provider(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.python.update": (
+                "build.stages.toolchain.python.update": (
                     'provider = "npm"\nstable_only = true\nimplementation = "cpython"\n'
                 ),
             }
@@ -150,7 +168,7 @@ class TestPythonEntryContract(unittest.TestCase):
     def test_python_stable_only_not_boolean(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.python.update": (
+                "build.stages.toolchain.python.update": (
                     'provider = "uv-python"\nimplementation = "cpython"\nstable_only = "yes"\n'
                 ),
             }
@@ -195,7 +213,7 @@ class TestTyEntryContract(unittest.TestCase):
     def test_ty_missing_package(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.ty.source": 'type = "pypi"\n',
+                "build.stages.toolchain.ty.source": 'type = "pypi"\n',
             }
         )
         path = write_toml(toml)
@@ -208,7 +226,7 @@ class TestTyEntryContract(unittest.TestCase):
     def test_ty_empty_package(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.ty.source": 'type = "pypi"\npackage = ""\n',
+                "build.stages.toolchain.ty.source": 'type = "pypi"\npackage = ""\n',
             }
         )
         path = write_toml(toml)
@@ -221,7 +239,7 @@ class TestTyEntryContract(unittest.TestCase):
     def test_ty_incompatible_provider(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.ty.update": (
+                "build.stages.toolchain.ty.update": (
                     'provider = "npm"\nstable_only = true\n'
                 ),
             }
@@ -236,7 +254,7 @@ class TestTyEntryContract(unittest.TestCase):
     def test_ty_moving_version_latest(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.ty": 'version = "latest"',
+                "build.stages.toolchain.ty": 'version = "latest"',
             }
         )
         path = write_toml(toml)
@@ -249,7 +267,7 @@ class TestTyEntryContract(unittest.TestCase):
     def test_ty_non_numeric_exact_version(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.ty": 'version = "v0.0.61"',
+                "build.stages.toolchain.ty": 'version = "v0.0.61"',
             }
         )
         path = write_toml(toml)
@@ -369,6 +387,7 @@ class TestPiExtensionContract(unittest.TestCase):
         toml = minimal_toml(
             **{
                 "runtime.pi-extensions.pi-read": 'version = "0.3.0-beta.1"',
+                "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_0_3_0,
             }
         )
         path = write_toml(toml)
@@ -401,7 +420,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_stable_only_string(self):
         err = self._expect_error(
             **{
-                "stages.toolchain.python.update": (
+                "build.stages.toolchain.python.update": (
                     'provider = "uv-python"\nimplementation = "cpython"\nstable_only = "yes"\n'
                 ),
             }
@@ -411,7 +430,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_required_platforms_string(self):
         err = self._expect_error(
             **{
-                "stages.toolchain.uv.update": (
+                "build.stages.toolchain.uv.update": (
                     'provider = "github-release"\nstable_only = true\nrequired_platforms = "linux-amd64"\n'
                 ),
             }
@@ -421,7 +440,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_channel_int(self):
         err = self._expect_error(
             **{
-                "stages.toolchain.rust.update": (
+                "build.stages.toolchain.rust.update": (
                     'provider = "rust-channel"\nchannel = 123\nstable_only = true\n'
                 ),
             }
@@ -431,7 +450,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_track_boolean(self):
         err = self._expect_error(
             **{
-                "stages.base.node.update": (
+                "build.stages.base.node.update": (
                     'provider = "docker-registry"\nstable_only = true\ntrack = true\n'
                 ),
             }
@@ -441,7 +460,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_implementation_not_string(self):
         err = self._expect_error(
             **{
-                "stages.toolchain.python.source": (
+                "build.stages.toolchain.python.source": (
                     'type = "uv-python"\nimplementation = ["cpython"]\n'
                 ),
             }
@@ -480,7 +499,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_unknown_implementation_rejected(self):
         err = self._expect_error(
             **{
-                "stages.toolchain.python.source": (
+                "build.stages.toolchain.python.source": (
                     'type = "uv-python"\nimplementation = "graalvm"\n'
                 ),
             }
@@ -490,7 +509,7 @@ class TestProviderFieldTypes(unittest.TestCase):
     def test_unknown_rust_channel_rejected(self):
         err = self._expect_error(
             **{
-                "stages.toolchain.rust.update": (
+                "build.stages.toolchain.rust.update": (
                     'provider = "rust-channel"\nchannel = "nightly"\nstable_only = true\n'
                 ),
             }
@@ -697,8 +716,8 @@ class TestEntrySpecificSourceProvider(unittest.TestCase):
     def test_python_rejects_pypi_source(self):
         err = self._expect_inventory_error(
             **{
-                "stages.toolchain.python.source": 'type = "pypi"\npackage = "cpython"\n',
-                "stages.toolchain.python.update": 'provider = "pypi"\nstable_only = true\n',
+                "build.stages.toolchain.python.source": 'type = "pypi"\npackage = "cpython"\n',
+                "build.stages.toolchain.python.update": 'provider = "pypi"\nstable_only = true\n',
             }
         )
         self.assertIn("uv-python", err)
@@ -706,7 +725,7 @@ class TestEntrySpecificSourceProvider(unittest.TestCase):
     def test_python_rejects_npm_update(self):
         err = self._expect_inventory_error(
             **{
-                "stages.toolchain.python.update": (
+                "build.stages.toolchain.python.update": (
                     'provider = "npm"\nstable_only = true\n'
                 ),
             }
@@ -718,8 +737,8 @@ class TestEntrySpecificSourceProvider(unittest.TestCase):
     def test_ty_rejects_npm_source(self):
         err = self._expect_inventory_error(
             **{
-                "stages.toolchain.ty.source": 'type = "npm"\npackage = "ty"\n',
-                "stages.toolchain.ty.update": 'provider = "npm"\nstable_only = true\n',
+                "build.stages.toolchain.ty.source": 'type = "npm"\npackage = "ty"\n',
+                "build.stages.toolchain.ty.update": 'provider = "npm"\nstable_only = true\n',
             }
         )
         self.assertIn("pypi", err)
@@ -729,12 +748,12 @@ class TestEntrySpecificSourceProvider(unittest.TestCase):
     def test_rust_rejects_github_source(self):
         err = self._expect_inventory_error(
             **{
-                "stages.toolchain.rust.source": (
+                "build.stages.toolchain.rust.source": (
                     'type = "github-release"\n'
                     'repository = "rust-lang/rust"\n'
                     'tag = "1.0.0"\n'
                 ),
-                "stages.toolchain.rust.update": (
+                "build.stages.toolchain.rust.update": (
                     'provider = "github-release"\n'
                     'stable_only = true\n'
                     'required_platforms = ["linux-amd64"]\n'
@@ -764,7 +783,6 @@ class TestEntrySpecificSourceProvider(unittest.TestCase):
                 "runtime.pi-extensions.pi-read.update": (
                     'provider = "github-release"\n'
                     'stable_only = true\n'
-                    'required_platforms = ["linux-amd64"]\n'
                 ),
             }
         )
@@ -775,10 +793,10 @@ class TestEntrySpecificSourceProvider(unittest.TestCase):
     def test_pi_tool_rejects_pypi_source(self):
         err = self._expect_inventory_error(
             **{
-                "stages.pi-tools.pi.source": (
+                "build.stages.pi-tools.pi.source": (
                     'type = "pypi"\npackage = "pi"\n'
                 ),
-                "stages.pi-tools.pi.update": (
+                "build.stages.pi-tools.pi.update": (
                     'provider = "pypi"\nstable_only = true\n'
                 ),
             }
@@ -808,7 +826,7 @@ class TestUnknownKeyRejection(unittest.TestCase):
         # an extra key inside the python.update table.
         toml = minimal_toml(
             **{
-                "stages.toolchain.python.update": (
+                "build.stages.toolchain.python.update": (
                     'provider = "uv-python"\n'
                     'implementation = "cpython"\n'
                     'stable_only = true\n'
@@ -827,7 +845,7 @@ class TestUnknownKeyRejection(unittest.TestCase):
     def test_typo_verison_rejected(self):
         toml = minimal_toml(
             **{
-                "stages.toolchain.rust": (
+                "build.stages.toolchain.rust": (
                     'version = "1.0.0"\n'
                     'profile = "minimal"\n'
                     'components = ["rustfmt"]\n'
@@ -855,7 +873,7 @@ class TestUnknownKeyRejection(unittest.TestCase):
             path.unlink()
 
     def test_unknown_stage_key_rejected(self):
-        toml = minimal_toml() + '\n[stages.toolchain_typo]\nversion = "1.0.0"\n'
+        toml = minimal_toml() + '\n[build.stages.toolchain_typo]\nversion = "1.0.0"\n'
         path = write_toml(toml)
         try:
             with self.assertRaises(InventoryError) as ctx:
@@ -865,7 +883,7 @@ class TestUnknownKeyRejection(unittest.TestCase):
             path.unlink()
 
     def test_misspelled_tool_name_in_stage_rejected(self):
-        toml = minimal_toml() + '\n[stages.rtk-prebuilt.rrtk]\nversion = "v1.0.0"\n'
+        toml = minimal_toml() + '\n[build.stages.rtk-prebuilt.rrtk]\nversion = "v1.0.0"\n'
         path = write_toml(toml)
         try:
             with self.assertRaises(InventoryError) as ctx:
@@ -894,7 +912,7 @@ class TestUnknownKeyRejection(unittest.TestCase):
         toml = minimal_toml()
         # Add a second platform entry with misspelled sha256 field
         toml += """
-[stages.toolchain.uv.artifacts.linux-arm64]
+[build.stages.toolchain.uv.artifacts.linux-arm64]
 url = "https://example.invalid/uv-0.1.0-arm64.tar.gz"
 sh256 = "b1a2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f6789"
 """
@@ -928,13 +946,13 @@ class TestExactVersionValidation(unittest.TestCase):
 
     def test_rust_rejects_arbitrary_string(self):
         err = self._expect_inventory_error(
-            **{"stages.toolchain.rust": 'version = "latest"\nprofile = "minimal"\ncomponents = ["rustfmt"]\n'}
+            **{"build.stages.toolchain.rust": 'version = "latest"\nprofile = "minimal"\ncomponents = ["rustfmt"]\n'}
         )
         self.assertIn("X.Y.Z", err)
 
     def test_rust_rejects_semver_prerelease(self):
         err = self._expect_inventory_error(
-            **{"stages.toolchain.rust": 'version = "1.88.0-beta"\nprofile = "minimal"\ncomponents = ["rustfmt"]\n'}
+            **{"build.stages.toolchain.rust": 'version = "1.88.0-beta"\nprofile = "minimal"\ncomponents = ["rustfmt"]\n'}
         )
         self.assertIn("X.Y.Z", err)
 
@@ -950,13 +968,13 @@ class TestExactVersionValidation(unittest.TestCase):
 
     def test_npm_tool_rejects_latest_tag(self):
         err = self._expect_inventory_error(
-            **{"stages.pi-tools.pi": 'version = "latest"\n'}
+            **{"build.stages.pi-tools.pi": 'version = "latest"\n'}
         )
         self.assertIn("X.Y.Z", err)
 
     def test_npm_tool_rejects_range(self):
         err = self._expect_inventory_error(
-            **{"stages.pi-tools.pi": 'version = "^1.0.0"\n'}
+            **{"build.stages.pi-tools.pi": 'version = "^1.0.0"\n'}
         )
         self.assertIn("X.Y.Z", err)
 
@@ -965,8 +983,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_uv_rejects_latest(self):
         err = self._expect_inventory_error(
             **{
-                "stages.toolchain.uv": 'version = "latest"',
-                "stages.toolchain.uv.source": (
+                "build.stages.toolchain.uv": 'version = "latest"',
+                "build.stages.toolchain.uv.source": (
                     'type = "github-release"\n'
                     'repository = "astral-sh/uv"\n'
                     'tag = "latest"\n'
@@ -978,8 +996,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_uv_rejects_v_prefix(self):
         err = self._expect_inventory_error(
             **{
-                "stages.toolchain.uv": 'version = "v0.1.0"',
-                "stages.toolchain.uv.source": (
+                "build.stages.toolchain.uv": 'version = "v0.1.0"',
+                "build.stages.toolchain.uv.source": (
                     'type = "github-release"\n'
                     'repository = "astral-sh/uv"\n'
                     'tag = "v0.1.0"\n'
@@ -1001,8 +1019,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_prebuilt_rejects_bare_numeric(self):
         err = self._expect_inventory_error(
             **{
-                "stages.rtk-prebuilt.rtk": 'version = "1.0.0"',
-                "stages.rtk-prebuilt.rtk.source": (
+                "build.stages.rtk-prebuilt.rtk": 'version = "1.0.0"',
+                "build.stages.rtk-prebuilt.rtk.source": (
                     'type = "github-release"\n'
                     'repository = "rtk-ai/rtk"\n'
                     'tag = "1.0.0"\n'
@@ -1014,8 +1032,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_prebuilt_rejects_latest(self):
         err = self._expect_inventory_error(
             **{
-                "stages.rtk-prebuilt.rtk": 'version = "latest"',
-                "stages.rtk-prebuilt.rtk.source": (
+                "build.stages.rtk-prebuilt.rtk": 'version = "latest"',
+                "build.stages.rtk-prebuilt.rtk.source": (
                     'type = "github-release"\n'
                     'repository = "rtk-ai/rtk"\n'
                     'tag = "latest"\n'
@@ -1053,7 +1071,10 @@ class TestExactVersionValidation(unittest.TestCase):
         self.assertIn("moving", err.lower())
 
     def test_extension_accepts_x_y_z(self):
-        toml = minimal_toml(**{"runtime.pi-extensions.pi-read": 'version = "1.2.3"\n'})
+        toml = minimal_toml(**{
+            "runtime.pi-extensions.pi-read": 'version = "1.2.3"\n',
+            "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_1_2_3,
+        })
         path = write_toml(toml)
         try:
             inv = load_inventory(path)
@@ -1062,7 +1083,10 @@ class TestExactVersionValidation(unittest.TestCase):
             path.unlink()
 
     def test_extension_accepts_semver_prerelease(self):
-        toml = minimal_toml(**{"runtime.pi-extensions.pi-read": 'version = "0.2.0-beta.1"\n'})
+        toml = minimal_toml(**{
+            "runtime.pi-extensions.pi-read": 'version = "0.2.0-beta.1"\n',
+            "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_0_2_0,
+        })
         path = write_toml(toml)
         try:
             inv = load_inventory(path)
@@ -1071,7 +1095,10 @@ class TestExactVersionValidation(unittest.TestCase):
             path.unlink()
 
     def test_extension_accepts_build_suffix(self):
-        toml = minimal_toml(**{"runtime.pi-extensions.pi-read": 'version = "1.0.0+build.1"\n'})
+        toml = minimal_toml(**{
+            "runtime.pi-extensions.pi-read": 'version = "1.0.0+build.1"\n',
+            "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_1_0_0,
+        })
         path = write_toml(toml)
         try:
             inv = load_inventory(path)

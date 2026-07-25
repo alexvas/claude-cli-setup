@@ -42,7 +42,7 @@ class TestGitHubProvider(unittest.TestCase):
                 ),
             }
         return UpdateTarget(
-            path="stages.fd-prebuilt.fd",
+            path="build.stages.fd-prebuilt.fd",
             current=version,
             source=GitHubReleaseSource(repository=repo, tag=version),
             update=GitHubReleaseUpdate(

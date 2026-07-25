@@ -60,7 +60,7 @@ class TestUvPythonProvider(unittest.TestCase):
 
     def _target(self, version="3.14.6"):
         return UpdateTarget(
-            path="stages.toolchain.python",
+            path="build.stages.toolchain.python",
             current=version,
             source=UvPythonSource(implementation="cpython"),
             update=UvPythonUpdate(implementation="cpython", stable_only=True),

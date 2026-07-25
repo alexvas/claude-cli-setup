@@ -5,6 +5,7 @@ dataclasses, re, pathlib, and types.
 """
 from __future__ import annotations
 
+import base64
 import re
 import tomllib
 from pathlib import Path
@@ -31,6 +32,7 @@ from .model import (
     GitSource,
     Inventory,
     NodeEntry,
+    NpmArtifact,
     NpmSource,
     NpmToolEntry,
     NpmUpdate,
@@ -44,7 +46,9 @@ from .model import (
     PyPiUpdate,
     PythonEntry,
     RtkPrebuiltStage,
+    RuntimeInventory,
     RuntimeStage,
+    RuntimeValidation,
     RustChannelSource,
     RustChannelUpdate,
     RustEntry,
@@ -352,8 +356,135 @@ def _validate_extension_version(version: str, path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unknown-key rejection
+# Runtime extension artifact & validation helpers
 # ---------------------------------------------------------------------------
+
+_INTEGRITY_RE = re.compile(r"^sha(256|384|512)-([A-Za-z0-9+/]+=*)$")
+
+# Expected decoded-byte lengths for each algorithm
+_INTEGRITY_LENGTHS: dict[str, int] = {"256": 32, "384": 48, "512": 64}
+
+
+def _load_extension_artifact(
+    r: _RawReader, ext_path: tuple[str, ...], package: str, version: str
+) -> NpmArtifact:
+    """Load and validate [runtime.pi-extensions.<name>.artifact]."""
+    path_dot = ".".join(ext_path)
+    try:
+        artifact_raw = r.tbl(ext_path + ("artifact",))
+    except InventoryError as e:
+        if "missing" in str(e).lower():
+            raise InventoryError(
+                f"{path_dot}.artifact: missing required section"
+            ) from e
+        raise
+
+    url = require_string(r.root, ext_path + ("artifact", "url"))
+    if not url.startswith("https://"):
+        raise InventoryError(
+            f"{path_dot}.artifact.url: must use HTTPS, got {url!r}"
+        )
+
+    integrity = require_string(r.root, ext_path + ("artifact", "integrity"))
+    m = _INTEGRITY_RE.match(integrity)
+    if not m:
+        raise InventoryError(
+            f"{path_dot}.artifact.integrity: "
+            f"expected sha256-/sha384-/sha512- with base64, got {integrity!r}"
+        )
+
+    algorithm = m.group(1)
+    payload = m.group(2)
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except Exception as exc:
+        raise InventoryError(
+            f"{path_dot}.artifact.integrity: invalid base64 ({exc})"
+        ) from exc
+
+    expected_len = _INTEGRITY_LENGTHS[algorithm]
+    if len(decoded) != expected_len:
+        raise InventoryError(
+            f"{path_dot}.artifact.integrity: "
+            f"expected {expected_len} bytes for sha{algorithm}, "
+            f"got {len(decoded)}"
+        )
+
+    # Verify package name and version appear in URL as a coarse consistency check
+    expected_stem = f"/{package}/-/"
+    if expected_stem not in url:
+        raise InventoryError(
+            f"{path_dot}.artifact.url: expected npm tarball for {package!r}, "
+            f"got {url!r}"
+        )
+    # Strip build metadata (e.g. "1.0.0+build.1" → "1.0.0") for URL matching;
+    # npm tarball URLs never include build metadata.
+    base_version = version.split("+", 1)[0]
+    if base_version not in url:
+        raise InventoryError(
+            f"{path_dot}.artifact.url: URL does not contain version {base_version!r}"
+        )
+
+    return NpmArtifact(url=url, integrity=integrity)
+
+
+
+
+def _load_extension_validation(
+    r: _RawReader, ext_path: tuple[str, ...]
+) -> RuntimeValidation:
+    """Load [runtime.pi-extensions.<name>.validation]."""
+    path_dot = ".".join(ext_path)
+    try:
+        validation_raw = r.tbl(ext_path + ("validation",))
+    except InventoryError as e:
+        if "missing" in str(e).lower():
+            raise InventoryError(
+                f"{path_dot}.validation: missing required section"
+            ) from e
+        raise
+    metadata_file = require_string(r.root, ext_path + ("validation", "metadata_file"))
+    try:
+        return RuntimeValidation(metadata_file=metadata_file)
+    except ValueError as e:
+        raise InventoryError(
+            f"{path_dot}.validation.metadata_file: {e}"
+        ) from e
+
+
+def _extension_identity(source: NpmSource) -> tuple[str, str]:
+    """Return a normalized identity for an npm extension."""
+    return ("npm", source.package)
+
+
+def _check_cross_phase_duplicates(
+    stages: "Stages", extensions: dict[str, PiExtensionEntry]
+) -> None:
+    """Reject packages that appear in both build and runtime."""
+    build_npm_identities: dict[tuple[str, str], str] = {}
+
+    # Collect npm packages from build stages
+    # pi-tools.pi
+    pi_pkg = stages.pi_tools.pi.source.package
+    build_npm_identities[("npm", pi_pkg)] = "build.stages.pi-tools.pi"
+    # openspec-tools.openspec
+    os_pkg = stages.openspec_tools.openspec.source.package
+    build_npm_identities[("npm", os_pkg)] = "build.stages.openspec-tools.openspec"
+
+    for name, ext in extensions.items():
+        ext_identity = _extension_identity(ext.source)
+        ext_path = f"runtime.pi-extensions.{name}"
+        if ext_identity in build_npm_identities:
+            raise InventoryError(
+                f"duplicate npm package {ext.source.package!r}: "
+                f"previously defined at {build_npm_identities[ext_identity]}, "
+                f"duplicate at {ext_path}"
+            )
+
+
+# --------------------------------------------------------------------------
+# Unknown-key rejection
+# --------------------------------------------------------------------------
 
 # Allowed keys for every known TOML table (relative to stages/ runtime/).
 # Extra keys or typoed fields cause path-qualified InventoryError.
@@ -366,60 +497,64 @@ def _register(path: tuple[str, ...], *keys: str) -> None:
 
 
 # --- Top-level ---
-_register((), "schema", "stages", "runtime")
-_register(("stages",), "base", "toolchain", "rtk-prebuilt", "fd-prebuilt",
+_register((), "schema", "build", "runtime")
+_register(("build",), "stages")
+_register(("build", "stages",), "base", "toolchain", "rtk-prebuilt", "fd-prebuilt",
           "pi-tools", "openspec-tools", "runtime")
-_register(("stages", "base"), "node")
-_register(("stages", "base", "node"), "tag", "digest", "source", "update")
-_register(("stages", "base", "node", "source"), "type", "registry", "repository")
-_register(("stages", "base", "node", "update"), "provider", "stable_only", "track")
+_register(("build", "stages", "base"), "node")
+_register(("build", "stages", "base", "node"), "tag", "digest", "source", "update")
+_register(("build", "stages", "base", "node", "source"), "type", "registry", "repository")
+_register(("build", "stages", "base", "node", "update"), "provider", "stable_only", "track")
 
-_register(("stages", "toolchain"), "rust", "uv", "python", "ty")
-_register(("stages", "toolchain", "rust"), "version", "profile", "components", "source", "update", "rustup")
-_register(("stages", "toolchain", "rust", "source"), "type", "manifest")
-_register(("stages", "toolchain", "rust", "rustup"), "source", "update", "artifacts")
-_register(("stages", "toolchain", "rust", "rustup", "source"), "type", "checksum_url")
-_register(("stages", "toolchain", "rust", "rustup", "update"), "provider", "stable_only")
-_register(("stages", "toolchain", "rust", "rustup", "artifacts", "__ANY__"), "url", "sha256")
-_register(("stages", "toolchain", "rust", "update"), "provider", "channel", "stable_only")
+_register(("build", "stages", "toolchain"), "rust", "uv", "python", "ty")
+_register(("build", "stages", "toolchain", "rust"), "version", "profile", "components", "source", "update", "rustup")
+_register(("build", "stages", "toolchain", "rust", "source"), "type", "manifest")
+_register(("build", "stages", "toolchain", "rust", "rustup"), "source", "update", "artifacts")
+_register(("build", "stages", "toolchain", "rust", "rustup", "source"), "type", "checksum_url")
+_register(("build", "stages", "toolchain", "rust", "rustup", "update"), "provider", "stable_only")
+_register(("build", "stages", "toolchain", "rust", "rustup", "artifacts", "__ANY__"), "url", "sha256")
+_register(("build", "stages", "toolchain", "rust", "update"), "provider", "channel", "stable_only")
 
-_register(("stages", "toolchain", "uv"), "version", "source", "artifacts", "update")
-_register(("stages", "toolchain", "uv", "source"), "type", "repository", "tag")
-_register(("stages", "toolchain", "uv", "update"), "provider", "stable_only", "tag_prefix", "required_platforms")
-_register(("stages", "toolchain", "uv", "artifacts", "__ANY__"), "url", "sha256")
+_register(("build", "stages", "toolchain", "uv"), "version", "source", "artifacts", "update")
+_register(("build", "stages", "toolchain", "uv", "source"), "type", "repository", "tag")
+_register(("build", "stages", "toolchain", "uv", "update"), "provider", "stable_only", "tag_prefix", "required_platforms")
+_register(("build", "stages", "toolchain", "uv", "artifacts", "__ANY__"), "url", "sha256")
 
-_register(("stages", "toolchain", "python"), "version", "source", "update", "override")
-_register(("stages", "toolchain", "python", "source"), "type", "implementation")
-_register(("stages", "toolchain", "python", "update"), "provider", "implementation", "stable_only")
-_register(("stages", "toolchain", "python", "override"), "constraint", "allow_prerelease", "scheme")
+_register(("build", "stages", "toolchain", "python"), "version", "source", "update", "override")
+_register(("build", "stages", "toolchain", "python", "source"), "type", "implementation")
+_register(("build", "stages", "toolchain", "python", "update"), "provider", "implementation", "stable_only")
+_register(("build", "stages", "toolchain", "python", "override"), "constraint", "allow_prerelease", "scheme")
 
-_register(("stages", "toolchain", "ty"), "version", "source", "update")
-_register(("stages", "toolchain", "ty", "source"), "type", "package")
-_register(("stages", "toolchain", "ty", "update"), "provider", "stable_only")
+_register(("build", "stages", "toolchain", "ty"), "version", "source", "update")
+_register(("build", "stages", "toolchain", "ty", "source"), "type", "package")
+_register(("build", "stages", "toolchain", "ty", "update"), "provider", "stable_only")
 
 for _prebuilt_stage, _tool_name in [("rtk-prebuilt", "rtk"), ("fd-prebuilt", "fd")]:
-    _register(("stages", _prebuilt_stage), _tool_name)
-    _register(("stages", _prebuilt_stage, _tool_name), "version", "source", "artifacts", "update")
-    _register(("stages", _prebuilt_stage, _tool_name, "source"), "type", "repository", "tag")
-    _register(("stages", _prebuilt_stage, _tool_name, "update"), "provider", "stable_only", "tag_prefix", "required_platforms")
-    _register(("stages", _prebuilt_stage, _tool_name, "artifacts", "__ANY__"), "url", "sha256")
+    _register(("build", "stages", _prebuilt_stage), _tool_name)
+    _register(("build", "stages", _prebuilt_stage, _tool_name), "version", "source", "artifacts", "update")
+    _register(("build", "stages", _prebuilt_stage, _tool_name, "source"), "type", "repository", "tag")
+    _register(("build", "stages", _prebuilt_stage, _tool_name, "update"), "provider", "stable_only", "tag_prefix", "required_platforms")
+    _register(("build", "stages", _prebuilt_stage, _tool_name, "artifacts", "__ANY__"), "url", "sha256")
 
 for _npm_stage, _npm_name in [("pi-tools", "pi"), ("openspec-tools", "openspec")]:
-    _register(("stages", _npm_stage), _npm_name)
-    _register(("stages", _npm_stage, _npm_name), "version", "source", "update")
-    _register(("stages", _npm_stage, _npm_name, "source"), "type", "package")
-    _register(("stages", _npm_stage, _npm_name, "update"), "provider", "stable_only")
+    _register(("build", "stages", _npm_stage), _npm_name)
+    _register(("build", "stages", _npm_stage, _npm_name), "version", "source", "update")
+    _register(("build", "stages", _npm_stage, _npm_name, "source"), "type", "package")
+    _register(("build", "stages", _npm_stage, _npm_name, "update"), "provider", "stable_only")
 
-_register(("stages", "runtime"), "oh-my-zsh")
-_register(("stages", "runtime", "oh-my-zsh"), "revision", "source", "update")
-_register(("stages", "runtime", "oh-my-zsh", "source"), "type", "repository")
-_register(("stages", "runtime", "oh-my-zsh", "update"), "provider", "ref")
+_register(("build", "stages", "runtime"), "oh-my-zsh")
+_register(("build", "stages", "runtime", "oh-my-zsh"), "revision", "source", "update")
+_register(("build", "stages", "runtime", "oh-my-zsh", "source"), "type", "repository")
+_register(("build", "stages", "runtime", "oh-my-zsh", "update"), "provider", "ref")
 
 # Runtime pi-extensions (dynamic — allowed keys defined per entry)
 _register(("runtime",), "pi-extensions")
-_register(("runtime", "pi-extensions", "__ANY__"), "version", "source", "update")
+_register(("runtime", "pi-extensions", "__ANY__"), "version", "source", "update", "artifact", "validation", "override")
 _register(("runtime", "pi-extensions", "__ANY__", "source"), "type", "package")
+_register(("runtime", "pi-extensions", "__ANY__", "artifact"), "url", "integrity")
 _register(("runtime", "pi-extensions", "__ANY__", "update"), "provider", "stable_only")
+_register(("runtime", "pi-extensions", "__ANY__", "validation"), "metadata_file")
+_register(("runtime", "pi-extensions", "__ANY__", "override"), "constraint", "allow_prerelease", "scheme")
 
 
 def _check_unknown_keys(table: Mapping[str, object], path: tuple[str, ...], *, allowed: set[str] | None = None) -> None:
@@ -658,17 +793,17 @@ def _check_compat(source_type: str, update_provider: str, dot: str) -> None:
 # etc.
 
 _ENTRY_SOURCE_CLASSES = {
-    "stages.base.node": (DockerRegistrySource, DockerRegistryUpdate),
-    "stages.toolchain.rust": (RustChannelSource, RustChannelUpdate),
-    "stages.toolchain.rust.rustup": (StaticUrlSource, StaticUrlUpdate),
-    "stages.toolchain.uv": (GitHubReleaseSource, GitHubReleaseUpdate),
-    "stages.toolchain.python": (UvPythonSource, UvPythonUpdate),
-    "stages.toolchain.ty": (PyPiSource, PyPiUpdate),
-    "stages.rtk-prebuilt.rtk": (GitHubReleaseSource, GitHubReleaseUpdate),
-    "stages.fd-prebuilt.fd": (GitHubReleaseSource, GitHubReleaseUpdate),
-    "stages.pi-tools.pi": (NpmSource, NpmUpdate),
-    "stages.openspec-tools.openspec": (NpmSource, NpmUpdate),
-    "stages.runtime.oh-my-zsh": (GitSource, GitRefUpdate),
+    "build.stages.base.node": (DockerRegistrySource, DockerRegistryUpdate),
+    "build.stages.toolchain.rust": (RustChannelSource, RustChannelUpdate),
+    "build.stages.toolchain.rust.rustup": (StaticUrlSource, StaticUrlUpdate),
+    "build.stages.toolchain.uv": (GitHubReleaseSource, GitHubReleaseUpdate),
+    "build.stages.toolchain.python": (UvPythonSource, UvPythonUpdate),
+    "build.stages.toolchain.ty": (PyPiSource, PyPiUpdate),
+    "build.stages.rtk-prebuilt.rtk": (GitHubReleaseSource, GitHubReleaseUpdate),
+    "build.stages.fd-prebuilt.fd": (GitHubReleaseSource, GitHubReleaseUpdate),
+    "build.stages.pi-tools.pi": (NpmSource, NpmUpdate),
+    "build.stages.openspec-tools.openspec": (NpmSource, NpmUpdate),
+    "build.stages.runtime.oh-my-zsh": (GitSource, GitRefUpdate),
 }
 
 
@@ -786,199 +921,198 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
         _check_unknown_keys(build_raw, ("build",), allowed={"stages"})
         if "stages" not in build_raw:
             raise InventoryError("build.stages: missing required key")
-
-        # Unwrap build.stages → top-level stages for internal processing
-        raw = dict(raw)
-        raw["stages"] = build_raw["stages"]
-        del raw["build"]
-        r = _PathReader(raw)
     elif has_stages:
-        # Legacy layout — internal adapter, removed in Stage 2
-        known_top = {"schema", "stages", "runtime", "cache"}
-        _check_unknown_keys(raw, (), allowed=known_top)
+        raise InventoryError(
+            "stages: unknown top-level key; "
+            "move build dependencies under [build.stages]"
+        )
     else:
         raise InventoryError("build: missing required key — expected [build.stages] table")
 
     # --- base ---
-    _check_unknown_keys(r.tbl(("stages",)), ("stages",))
-    _check_unknown_keys(r.tbl(("stages", "base",)), ("stages", "base",))
-    _check_unknown_keys(r.tbl(("stages", "base", "node",)), ("stages", "base", "node",))
-    tag = r.str(("stages", "base", "node", "tag"))
-    digest = r.str(("stages", "base", "node", "digest"))
-    _validate_node_digest(digest, "stages.base.node.digest")
-    node_source = _load_source(r, ("stages", "base", "node"))
-    node_update = _load_update(r, ("stages", "base", "node"))
-    _check_compat(node_source.type, node_update.provider, "stages.base.node")
-    _check_entry_source_update(node_source, node_update, "stages.base.node")
-    _check_unknown_keys(r.tbl(("stages", "base", "node", "source",)), ("stages", "base", "node", "source",))
-    _check_unknown_keys(r.tbl(("stages", "base", "node", "update",)), ("stages", "base", "node", "update",))
+    _check_unknown_keys(r.tbl(("build", "stages",)), ("build", "stages",))
+    _check_unknown_keys(r.tbl(("build", "stages", "base",)), ("build", "stages", "base",))
+    _check_unknown_keys(r.tbl(("build", "stages", "base", "node",)), ("build", "stages", "base", "node",))
+    tag = r.str(("build", "stages", "base", "node", "tag"))
+    digest = r.str(("build", "stages", "base", "node", "digest"))
+    _validate_node_digest(digest, "build.stages.base.node.digest")
+    node_source = _load_source(r, ("build", "stages", "base", "node"))
+    node_update = _load_update(r, ("build", "stages", "base", "node"))
+    _check_compat(node_source.type, node_update.provider, "build.stages.base.node")
+    _check_entry_source_update(node_source, node_update, "build.stages.base.node")
+    _check_unknown_keys(r.tbl(("build", "stages", "base", "node", "source",)), ("build", "stages", "base", "node", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "base", "node", "update",)), ("build", "stages", "base", "node", "update",))
 
     # --- toolchain: rust ---
-    _check_unknown_keys(r.tbl(("stages", "toolchain",)), ("stages", "toolchain",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust",)), ("stages", "toolchain", "rust",))
-    rust_version = r.str(("stages", "toolchain", "rust", "version"))
-    _validate_rust_version(rust_version, "stages.toolchain.rust.version")
-    rust_profile = r.str(("stages", "toolchain", "rust", "profile"))
-    rust_data = r.tbl(("stages", "toolchain", "rust"))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain",)), ("build", "stages", "toolchain",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "rust",)), ("build", "stages", "toolchain", "rust",))
+    rust_version = r.str(("build", "stages", "toolchain", "rust", "version"))
+    _validate_rust_version(rust_version, "build.stages.toolchain.rust.version")
+    rust_profile = r.str(("build", "stages", "toolchain", "rust", "profile"))
+    rust_data = r.tbl(("build", "stages", "toolchain", "rust"))
     components_raw = rust_data.get("components")
     if not isinstance(components_raw, list):
-        raise InventoryError("stages.toolchain.rust.components: expected list")
+        raise InventoryError("build.stages.toolchain.rust.components: expected list")
     components: list[str] = []
     for i, c in enumerate(components_raw):
         if not isinstance(c, str):
             raise InventoryError(
-                f"stages.toolchain.rust.components[{i}]: expected string"
+                f"build.stages.toolchain.rust.components[{i}]: expected string"
             )
         components.append(c)
-    rust_source = _load_source(r, ("stages", "toolchain", "rust"))
-    rust_update = _load_update(r, ("stages", "toolchain", "rust"))
-    _check_compat(rust_source.type, rust_update.provider, "stages.toolchain.rust")
-    _check_entry_source_update(rust_source, rust_update, "stages.toolchain.rust")
+    rust_source = _load_source(r, ("build", "stages", "toolchain", "rust"))
+    rust_update = _load_update(r, ("build", "stages", "toolchain", "rust"))
+    _check_compat(rust_source.type, rust_update.provider, "build.stages.toolchain.rust")
+    _check_entry_source_update(rust_source, rust_update, "build.stages.toolchain.rust")
     # Mandatory rustup bootstrap artifact (platform-keyed, no version in URL)
-    rustup_source = _load_source(r, ("stages", "toolchain", "rust", "rustup"))
-    rustup_update = _load_update(r, ("stages", "toolchain", "rust", "rustup"))
-    _check_compat(rustup_source.type, rustup_update.provider, "stages.toolchain.rust.rustup")
-    _check_entry_source_update(rustup_source, rustup_update, "stages.toolchain.rust.rustup")
+    rustup_source = _load_source(r, ("build", "stages", "toolchain", "rust", "rustup"))
+    rustup_update = _load_update(r, ("build", "stages", "toolchain", "rust", "rustup"))
+    _check_compat(rustup_source.type, rustup_update.provider, "build.stages.toolchain.rust.rustup")
+    _check_entry_source_update(rustup_source, rustup_update, "build.stages.toolchain.rust.rustup")
     # Per-platform artifact URLs are validated individually below.
-    rustup_raw = r.tbl(("stages", "toolchain", "rust", "rustup", "artifacts"))
+    rustup_raw = r.tbl(("build", "stages", "toolchain", "rust", "rustup", "artifacts"))
     rustup_artifacts: dict[str, ArtifactEntry] = {}
     for platform in rustup_raw:
-        plat_path = ("stages", "toolchain", "rust", "rustup", "artifacts", platform)
+        plat_path = ("build", "stages", "toolchain", "rust", "rustup", "artifacts", platform)
         _check_unknown_keys(r.tbl(plat_path), plat_path)
         art_url = r.str(plat_path + ("url",))
         art_sha256 = r.str(plat_path + ("sha256",))
         _validate_sha256(
             art_sha256,
-            f"stages.toolchain.rust.rustup.artifacts.{platform}.sha256",
+            f"build.stages.toolchain.rust.rustup.artifacts.{platform}.sha256",
         )
         _reject_placeholder_sha256(
             art_sha256,
-            f"stages.toolchain.rust.rustup.artifacts.{platform}.sha256",
+            f"build.stages.toolchain.rust.rustup.artifacts.{platform}.sha256",
         )
         _validate_admissible_url(
             art_url,
-            f"stages.toolchain.rust.rustup.artifacts.{platform}.url",
+            f"build.stages.toolchain.rust.rustup.artifacts.{platform}.url",
         )
         rustup_artifacts[platform] = ArtifactEntry(
             url=art_url, sha256=art_sha256,
         )
     _validate_linux_amd64_artifact(
-        rustup_raw, "stages.toolchain.rust.rustup",
+        rustup_raw, "build.stages.toolchain.rust.rustup",
     )
     if rustup_source.type == "static-url" and len(rustup_artifacts) > 1:
         raise InventoryError(
-            "stages.toolchain.rust.rustup: static-url sources do not support"
+            "build.stages.toolchain.rust.rustup: static-url sources do not support"
             " multi-platform artifacts — each architecture must declare its"
             " own checksum_url"
         )
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "source",)), ("stages", "toolchain", "rust", "source",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "update",)), ("stages", "toolchain", "rust", "update",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "rustup", "source",)), ("stages", "toolchain", "rust", "rustup", "source",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "rust", "rustup", "update",)), ("stages", "toolchain", "rust", "rustup", "update",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "rust", "source",)), ("build", "stages", "toolchain", "rust", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "rust", "update",)), ("build", "stages", "toolchain", "rust", "update",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "rust", "rustup", "source",)), ("build", "stages", "toolchain", "rust", "rustup", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "rust", "rustup", "update",)), ("build", "stages", "toolchain", "rust", "rustup", "update",))
     _validate_url_contains_version(
-        rust_source.manifest, rust_version, "stages.toolchain.rust.source.manifest"
+        rust_source.manifest, rust_version, "build.stages.toolchain.rust.source.manifest"
     )
 
     # --- toolchain: uv ---
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "uv",)), ("stages", "toolchain", "uv",))
-    uv_version = r.str(("stages", "toolchain", "uv", "version"))
-    _validate_uv_version(uv_version, "stages.toolchain.uv.version")
-    uv_source = _load_source(r, ("stages", "toolchain", "uv"))
-    uv_update = _load_update(r, ("stages", "toolchain", "uv"))
-    _check_compat(uv_source.type, uv_update.provider, "stages.toolchain.uv")
-    _check_entry_source_update(uv_source, uv_update, "stages.toolchain.uv")
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "uv", "source",)), ("stages", "toolchain", "uv", "source",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "uv", "update",)), ("stages", "toolchain", "uv", "update",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "uv",)), ("build", "stages", "toolchain", "uv",))
+    uv_version = r.str(("build", "stages", "toolchain", "uv", "version"))
+    _validate_uv_version(uv_version, "build.stages.toolchain.uv.version")
+    uv_source = _load_source(r, ("build", "stages", "toolchain", "uv"))
+    uv_update = _load_update(r, ("build", "stages", "toolchain", "uv"))
+    _check_compat(uv_source.type, uv_update.provider, "build.stages.toolchain.uv")
+    _check_entry_source_update(uv_source, uv_update, "build.stages.toolchain.uv")
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "uv", "source",)), ("build", "stages", "toolchain", "uv", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "uv", "update",)), ("build", "stages", "toolchain", "uv", "update",))
     if isinstance(uv_source, GitHubReleaseSource) and uv_source.tag != uv_version:
         raise VersionConfigError(
-            f"stages.toolchain.uv.source.tag: must equal declared version "
+            f"build.stages.toolchain.uv.source.tag: must equal declared version "
             f"({uv_source.tag!r} != {uv_version!r})"
         )
-    uv_artifacts = _load_artifacts(r, ("stages", "toolchain", "uv"), uv_version)
-    _validate_required_platforms(uv_update, uv_artifacts, "stages.toolchain.uv")
+    uv_artifacts = _load_artifacts(r, ("build", "stages", "toolchain", "uv"), uv_version)
+    _validate_required_platforms(uv_update, uv_artifacts, "build.stages.toolchain.uv")
 
     # --- toolchain: python ---
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "python",)), ("stages", "toolchain", "python",))
-    py_version = r.str(("stages", "toolchain", "python", "version"))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "python",)), ("build", "stages", "toolchain", "python",))
+    py_version = r.str(("build", "stages", "toolchain", "python", "version"))
     try:
         parse_numeric_version(py_version)
     except VersionSyntaxError as e:
-        raise VersionSyntaxError(f"stages.toolchain.python.version: {e}") from e
-    py_source = _load_source(r, ("stages", "toolchain", "python"))
-    py_update = _load_update(r, ("stages", "toolchain", "python"))
-    _check_compat(py_source.type, py_update.provider, "stages.toolchain.python")
-    _check_entry_source_update(py_source, py_update, "stages.toolchain.python")
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "python", "source",)), ("stages", "toolchain", "python", "source",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "python", "update",)), ("stages", "toolchain", "python", "update",))
+        raise VersionSyntaxError(f"build.stages.toolchain.python.version: {e}") from e
+    py_source = _load_source(r, ("build", "stages", "toolchain", "python"))
+    py_update = _load_update(r, ("build", "stages", "toolchain", "python"))
+    _check_compat(py_source.type, py_update.provider, "build.stages.toolchain.python")
+    _check_entry_source_update(py_source, py_update, "build.stages.toolchain.python")
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "python", "source",)), ("build", "stages", "toolchain", "python", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "python", "update",)), ("build", "stages", "toolchain", "python", "update",))
 
     py_override: Optional[OverridePolicy] = None
-    py_data = r.tbl(("stages", "toolchain", "python"))
+    py_data = r.tbl(("build", "stages", "toolchain", "python"))
     if "override" in py_data:
-        over_data = r.tbl(("stages", "toolchain", "python", "override"))
-        _check_unknown_keys(over_data, ("stages", "toolchain", "python", "override",))
-        py_override = _parse_override_policy(over_data, "stages.toolchain.python.override")
+        over_data = r.tbl(("build", "stages", "toolchain", "python", "override"))
+        _check_unknown_keys(over_data, ("build", "stages", "toolchain", "python", "override",))
+        py_override = _parse_override_policy(over_data, "build.stages.toolchain.python.override")
         py_ver = parse_numeric_version(py_version)
         if not py_override.constraint.matches(py_ver):
             raise VersionConfigError(
-                f"stages.toolchain.python.version: {py_version} does not satisfy "
+                f"build.stages.toolchain.python.version: {py_version} does not satisfy "
                 f"override constraint '{py_override.constraint}'"
             )
 
     # --- toolchain: ty ---
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "ty",)), ("stages", "toolchain", "ty",))
-    ty_version = r.str(("stages", "toolchain", "ty", "version"))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "ty",)), ("build", "stages", "toolchain", "ty",))
+    ty_version = r.str(("build", "stages", "toolchain", "ty", "version"))
     try:
         parse_numeric_version(ty_version)
     except VersionSyntaxError as e:
-        raise VersionSyntaxError(f"stages.toolchain.ty.version: {e}") from e
-    ty_source = _load_source(r, ("stages", "toolchain", "ty"))
-    ty_update = _load_update(r, ("stages", "toolchain", "ty"))
-    _check_compat(ty_source.type, ty_update.provider, "stages.toolchain.ty")
-    _check_entry_source_update(ty_source, ty_update, "stages.toolchain.ty")
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "ty", "source",)), ("stages", "toolchain", "ty", "source",))
-    _check_unknown_keys(r.tbl(("stages", "toolchain", "ty", "update",)), ("stages", "toolchain", "ty", "update",))
+        raise VersionSyntaxError(f"build.stages.toolchain.ty.version: {e}") from e
+    ty_source = _load_source(r, ("build", "stages", "toolchain", "ty"))
+    ty_update = _load_update(r, ("build", "stages", "toolchain", "ty"))
+    _check_compat(ty_source.type, ty_update.provider, "build.stages.toolchain.ty")
+    _check_entry_source_update(ty_source, ty_update, "build.stages.toolchain.ty")
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "ty", "source",)), ("build", "stages", "toolchain", "ty", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "toolchain", "ty", "update",)), ("build", "stages", "toolchain", "ty", "update",))
 
     # --- prebuilt tools ---
-    _check_unknown_keys(r.tbl(("stages", "rtk-prebuilt",)), ("stages", "rtk-prebuilt",))
-    _check_unknown_keys(r.tbl(("stages", "fd-prebuilt",)), ("stages", "fd-prebuilt",))
-    rtk_tool = _load_prebuilt_tool(r, ("stages", "rtk-prebuilt", "rtk"))
-    fd_tool = _load_prebuilt_tool(r, ("stages", "fd-prebuilt", "fd"))
+    _check_unknown_keys(r.tbl(("build", "stages", "rtk-prebuilt",)), ("build", "stages", "rtk-prebuilt",))
+    _check_unknown_keys(r.tbl(("build", "stages", "fd-prebuilt",)), ("build", "stages", "fd-prebuilt",))
+    rtk_tool = _load_prebuilt_tool(r, ("build", "stages", "rtk-prebuilt", "rtk"))
+    fd_tool = _load_prebuilt_tool(r, ("build", "stages", "fd-prebuilt", "fd"))
 
     # --- npm tools ---
-    _check_unknown_keys(r.tbl(("stages", "pi-tools",)), ("stages", "pi-tools",))
-    _check_unknown_keys(r.tbl(("stages", "openspec-tools",)), ("stages", "openspec-tools",))
-    pi_tool = _load_npm_tool(r, ("stages", "pi-tools", "pi"))
-    openspec_tool = _load_npm_tool(r, ("stages", "openspec-tools", "openspec"))
+    _check_unknown_keys(r.tbl(("build", "stages", "pi-tools",)), ("build", "stages", "pi-tools",))
+    _check_unknown_keys(r.tbl(("build", "stages", "openspec-tools",)), ("build", "stages", "openspec-tools",))
+    pi_tool = _load_npm_tool(r, ("build", "stages", "pi-tools", "pi"))
+    openspec_tool = _load_npm_tool(r, ("build", "stages", "openspec-tools", "openspec"))
 
     # --- runtime ---
-    _check_unknown_keys(r.tbl(("stages", "runtime",)), ("stages", "runtime",))
-    _check_unknown_keys(r.tbl(("stages", "runtime", "oh-my-zsh",)), ("stages", "runtime", "oh-my-zsh",))
-    omz_revision = r.str(("stages", "runtime", "oh-my-zsh", "revision"))
+    _check_unknown_keys(r.tbl(("build", "stages", "runtime",)), ("build", "stages", "runtime",))
+    _check_unknown_keys(r.tbl(("build", "stages", "runtime", "oh-my-zsh",)), ("build", "stages", "runtime", "oh-my-zsh",))
+    omz_revision = r.str(("build", "stages", "runtime", "oh-my-zsh", "revision"))
     if not GIT_REVISION_RE.match(omz_revision):
         raise InventoryError(
-            f"stages.runtime.oh-my-zsh.revision: expected 40 hex characters, got {omz_revision!r}"
+            f"build.stages.runtime.oh-my-zsh.revision: expected 40 hex characters, got {omz_revision!r}"
         )
-    omz_source = _load_source(r, ("stages", "runtime", "oh-my-zsh"))
-    omz_update = _load_update(r, ("stages", "runtime", "oh-my-zsh"))
-    _check_compat(omz_source.type, omz_update.provider, "stages.runtime.oh-my-zsh")
-    _check_entry_source_update(omz_source, omz_update, "stages.runtime.oh-my-zsh")
-    _check_unknown_keys(r.tbl(("stages", "runtime", "oh-my-zsh", "source",)), ("stages", "runtime", "oh-my-zsh", "source",))
-    _check_unknown_keys(r.tbl(("stages", "runtime", "oh-my-zsh", "update",)), ("stages", "runtime", "oh-my-zsh", "update",))
+    omz_source = _load_source(r, ("build", "stages", "runtime", "oh-my-zsh"))
+    omz_update = _load_update(r, ("build", "stages", "runtime", "oh-my-zsh"))
+    _check_compat(omz_source.type, omz_update.provider, "build.stages.runtime.oh-my-zsh")
+    _check_entry_source_update(omz_source, omz_update, "build.stages.runtime.oh-my-zsh")
+    _check_unknown_keys(r.tbl(("build", "stages", "runtime", "oh-my-zsh", "source",)), ("build", "stages", "runtime", "oh-my-zsh", "source",))
+    _check_unknown_keys(r.tbl(("build", "stages", "runtime", "oh-my-zsh", "update",)), ("build", "stages", "runtime", "oh-my-zsh", "update",))
 
     # --- pi extensions ---
     _check_unknown_keys(r.tbl(("runtime",)), ("runtime",))
     pi_ext_data = r.tbl(("runtime", "pi-extensions"))
     extensions: dict[str, PiExtensionEntry] = {}
+    _ext_identities: dict[tuple[str, str], str] = {}  # (family, identity) → first path
     for name, ext_raw in pi_ext_data.items():
+        ext_path = f"runtime.pi-extensions.{name}"
         if not isinstance(ext_raw, dict):
-            raise InventoryError(
-                f"runtime.pi-extensions.{name}: expected table"
-            )
+            raise InventoryError(f"{ext_path}: expected table")
         _check_unknown_keys(ext_raw, ("runtime", "pi-extensions", name,))
+
+        # ── version ────────────────────────────────────────────────
         ext_version = require_string(raw, ("runtime", "pi-extensions", name, "version"))
         _validate_extension_version(
             ext_version, f"runtime.pi-extensions.{name}.version"
         )
+
+        # ── source ─────────────────────────────────────────────────
         # Reject entry-level package — it belongs in source
         if "package" in ext_raw:
             raise InventoryError(
@@ -986,60 +1120,124 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
                 f"entry-level 'package' is forbidden; use [*.source].package instead"
             )
         ext_source = _load_source(r, ("runtime", "pi-extensions", name))
-        ext_update = _load_update(r, ("runtime", "pi-extensions", name))
-        _check_compat(ext_source.type, ext_update.provider, f"runtime.pi-extensions.{name}")
-        _check_entry_source_update(ext_source, ext_update, None)
         _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "source",)), ("runtime", "pi-extensions", name, "source",))
-        _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "update",)), ("runtime", "pi-extensions", name, "update",))  # passed through _ENTRY_SOURCE_CLASSES special handling
         if type(ext_source) is not NpmSource:
             raise InventoryError(
                 f"runtime.pi-extensions.{name}.source.type: "
                 f"expected 'npm' for pi extensions, got {ext_source.type!r}"
             )
+
+        # ── artifact ───────────────────────────────────────────────
+        ext_artifact = _load_extension_artifact(
+            r, ("runtime", "pi-extensions", name), ext_source.package, ext_version
+        )
+        _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "artifact",)), ("runtime", "pi-extensions", name, "artifact",))
+
+        # ── update ─────────────────────────────────────────────────
+        ext_update = _load_update(r, ("runtime", "pi-extensions", name))
+        _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "update",)), ("runtime", "pi-extensions", name, "update",))
+        _check_compat(ext_source.type, ext_update.provider, f"runtime.pi-extensions.{name}")
+        _check_entry_source_update(ext_source, ext_update, None)
         if type(ext_update) is not NpmUpdate:
             raise InventoryError(
                 f"runtime.pi-extensions.{name}.update.provider: "
                 f"expected 'npm' for pi extensions, got {ext_update.provider!r}"
             )
+
+        # ── validation ─────────────────────────────────────────────
+        ext_validation = _load_extension_validation(
+            r, ("runtime", "pi-extensions", name)
+        )
+        _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "validation",)), ("runtime", "pi-extensions", name, "validation",))
+
+        # ── override ───────────────────────────────────────────────
+        if "override" not in ext_raw:
+            raise InventoryError(
+                f"runtime.pi-extensions.{name}.override: missing required section"
+            )
+        ext_override = _parse_override_policy(
+            r.tbl(("runtime", "pi-extensions", name, "override")),
+            f"runtime.pi-extensions.{name}.override",
+        )
+        _check_unknown_keys(
+            r.tbl(("runtime", "pi-extensions", name, "override")),
+            ("runtime", "pi-extensions", name, "override"),
+        )
+
+        # ── version satisfies override constraint ─────────────────
+        # Strip pre-release and build metadata for numeric comparison;
+        # overrides use numeric scheme which operates on X.Y.Z only.
+        numeric_ver = ext_version.split("-", 1)[0].split("+", 1)[0]
+        try:
+            ver = parse_numeric_version(numeric_ver)
+        except VersionSyntaxError as e:
+            raise ConstraintSyntaxError(
+                f"runtime.pi-extensions.{name}.version: {e}"
+            ) from e
+        if not ext_override.constraint.matches(ver):
+            raise ConstraintSyntaxError(
+                f"runtime.pi-extensions.{name}: version {ext_version!r} "
+                f"does not satisfy override constraint {ext_override.constraint!s}"
+            )
+
+        # ── duplicate detection ────────────────────────────────────
+        ext_identity = _extension_identity(ext_source)
+        if ext_identity in _ext_identities:
+            raise InventoryError(
+                f"duplicate npm package {ext_source.package!r}: "
+                f"previously defined at {_ext_identities[ext_identity]}, "
+                f"duplicate at runtime.pi-extensions.{name}"
+            )
+        _ext_identities[ext_identity] = f"runtime.pi-extensions.{name}"
+
         extensions[name] = PiExtensionEntry(
             version=ext_version,
             source=ext_source,
+            artifact=ext_artifact,
             update=ext_update,
+            validation=ext_validation,
+            override=ext_override,
         )
+
+    # ── construct stages ──────────────────────────────────────────
+    stages = Stages(
+        base=BaseStage(
+            node=NodeEntry(tag=tag, digest=digest, source=node_source, update=node_update)
+        ),
+        toolchain=ToolchainStage(
+            rust=RustEntry(
+                version=rust_version, profile=rust_profile,
+                components=tuple(components), source=rust_source, update=rust_update,
+                rustup=MappingProxyType(rustup_artifacts),
+                rustup_source=rustup_source, rustup_update=rustup_update,
+            ),
+            uv=UvEntry(
+                version=uv_version,
+                artifacts=MappingProxyType(uv_artifacts),
+                source=uv_source, update=uv_update,
+            ),
+            python=PythonEntry(
+                version=py_version, source=py_source, update=py_update, override=py_override,
+            ),
+            ty=TyEntry(version=ty_version, source=ty_source, update=ty_update),
+        ),
+        rtk_prebuilt=RtkPrebuiltStage(rtk=rtk_tool),
+        fd_prebuilt=FdPrebuiltStage(fd=fd_tool),
+        pi_tools=PiToolsStage(pi=pi_tool),
+        openspec_tools=OpenSpecToolsStage(openspec=openspec_tool),
+        runtime=RuntimeStage(
+            oh_my_zsh=OhMyZshEntry(
+                revision=omz_revision, source=omz_source, update=omz_update,
+            )
+        ),
+    )
+
+    # ── cross-phase duplicate detection ────────────────────────────
+    _check_cross_phase_duplicates(stages, extensions)
 
     return Inventory(
         schema=schema,
-        stages=Stages(
-            base=BaseStage(
-                node=NodeEntry(tag=tag, digest=digest, source=node_source, update=node_update)
-            ),
-            toolchain=ToolchainStage(
-                rust=RustEntry(
-                    version=rust_version, profile=rust_profile,
-                    components=tuple(components), source=rust_source, update=rust_update,
-                    rustup=MappingProxyType(rustup_artifacts),
-                    rustup_source=rustup_source, rustup_update=rustup_update,
-                ),
-                uv=UvEntry(
-                    version=uv_version,
-                    artifacts=MappingProxyType(uv_artifacts),
-                    source=uv_source, update=uv_update,
-                ),
-                python=PythonEntry(
-                    version=py_version, source=py_source, update=py_update, override=py_override,
-                ),
-                ty=TyEntry(version=ty_version, source=ty_source, update=ty_update),
-            ),
-            rtk_prebuilt=RtkPrebuiltStage(rtk=rtk_tool),
-            fd_prebuilt=FdPrebuiltStage(fd=fd_tool),
-            pi_tools=PiToolsStage(pi=pi_tool),
-            openspec_tools=OpenSpecToolsStage(openspec=openspec_tool),
-            runtime=RuntimeStage(
-                oh_my_zsh=OhMyZshEntry(
-                    revision=omz_revision, source=omz_source, update=omz_update,
-                )
-            ),
-        ),
+        stages=stages,
         runtime_pi_extensions=MappingProxyType(extensions),
         cache=_load_cache_config(raw),
     )

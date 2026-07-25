@@ -108,22 +108,22 @@ class TestCliGet(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "1")
 
     def test_scalar_node_tag(self):
-        result = _run("get", "stages.base.node.tag")
+        result = _run("get", "build.stages.base.node.tag")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("trixie", result.stdout)
 
     def test_scalar_python_version(self):
-        result = _run("get", "stages.toolchain.python.version")
+        result = _run("get", "build.stages.toolchain.python.version")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "3.14.6")
 
     def test_scalar_python_source_type(self):
-        result = _run("get", "stages.toolchain.python.source.type")
+        result = _run("get", "build.stages.toolchain.python.source.type")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "uv-python")
 
     def test_scalar_override_constraint(self):
-        result = _run("get", "stages.toolchain.python.override.constraint")
+        result = _run("get", "build.stages.toolchain.python.override.constraint")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(">=3.14.6", result.stdout)
 
@@ -133,7 +133,7 @@ class TestCliGet(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "0.2.0")
 
     def test_container_path_json(self):
-        result = _run("get", "stages.toolchain.python", "--json")
+        result = _run("get", "build.stages.toolchain.python", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
         self.assertIn("version", data)
@@ -150,15 +150,16 @@ class TestCliGet(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
         self.assertIn("schema", data)
-        self.assertIn("stages", data)
+        self.assertIn("build", data)
+        self.assertIn("stages", data["build"])
 
     def test_json_deterministic_ordering(self):
-        result1 = _run("get", "stages.toolchain", "--json")
-        result2 = _run("get", "stages.toolchain", "--json")
+        result1 = _run("get", "build.stages.toolchain", "--json")
+        result2 = _run("get", "build.stages.toolchain", "--json")
         self.assertEqual(result1.stdout, result2.stdout)
 
     def test_tuple_becomes_json_array(self):
-        result = _run("get", "stages.toolchain.rust.components", "--json")
+        result = _run("get", "build.stages.toolchain.rust.components", "--json")
         data = json.loads(result.stdout)
         self.assertIsInstance(data, list)
         self.assertIn("rustfmt", data)
@@ -166,12 +167,12 @@ class TestCliGet(unittest.TestCase):
     # Negatives
 
     def test_unknown_path_exits_four(self):
-        result = _run("get", "stages.toolchain.pythno.version")
+        result = _run("get", "build.stages.toolchain.pythno.version")
         self.assertEqual(result.returncode, 4, result.stderr)
         self.assertIn("pythno", result.stderr)
 
     def test_missing_field_exits_four(self):
-        result = _run("get", "stages.toolchain.python.missing")
+        result = _run("get", "build.stages.toolchain.python.missing")
         self.assertEqual(result.returncode, 4, result.stderr)
         self.assertIn("missing", result.stderr.lower())
 
@@ -339,7 +340,7 @@ class TestCliEnv(unittest.TestCase):
         from docker.versioning.inventory import load_inventory
         result = _run(
             "env", "--json",
-            "--override", "stages.toolchain.python.version=3.14.7",
+            "--override", "build.stages.toolchain.python.version=3.14.7",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
@@ -395,8 +396,8 @@ class TestCliEnv(unittest.TestCase):
 class TestCliOverride(unittest.TestCase):
     def test_override_get_python(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version=3.14.7",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version=3.14.7",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "3.14.7")
@@ -404,7 +405,7 @@ class TestCliOverride(unittest.TestCase):
     def test_override_env_python(self):
         result = _run(
             "env", "--json",
-            "--override", "stages.toolchain.python.version=3.14.7",
+            "--override", "build.stages.toolchain.python.version=3.14.7",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
@@ -412,15 +413,15 @@ class TestCliOverride(unittest.TestCase):
 
     def test_override_effective_inventory(self):
         result = _run(
-            "get", "stages.toolchain.python.version", "--json",
-            "--override", "stages.toolchain.python.version=3.14.7",
+            "get", "build.stages.toolchain.python.version", "--json",
+            "--override", "build.stages.toolchain.python.version=3.14.7",
         )
         data = json.loads(result.stdout)
         self.assertEqual(data, "3.14.7")
 
     def test_source_inventory_unchanged(self):
         """Default inventory still returns 3.14.6 even after override."""
-        result = _run("get", "stages.toolchain.python.version")
+        result = _run("get", "build.stages.toolchain.python.version")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "3.14.6")
 
@@ -428,59 +429,59 @@ class TestCliOverride(unittest.TestCase):
 
     def test_override_rejects_short_version(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version=3.14",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version=3.14",
         )
         self.assertEqual(result.returncode, 6, result.stderr)
         self.assertIn("not a valid", result.stderr.lower())
 
     def test_override_rejects_v_prefix(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version=v3.14.7",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version=v3.14.7",
         )
         self.assertEqual(result.returncode, 6, result.stderr)
 
     def test_override_rejects_prerelease(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version=3.14.7-beta.1",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version=3.14.7-beta.1",
         )
         self.assertEqual(result.returncode, 6, result.stderr)
 
     def test_override_rejects_old_version(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version=3.14.5",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version=3.14.5",
         )
         self.assertEqual(result.returncode, 6, result.stderr)
         self.assertIn("does not satisfy", result.stderr)
 
     def test_override_rejects_latest(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version=latest",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version=latest",
         )
         self.assertEqual(result.returncode, 6, result.stderr)
 
     def test_override_unsupported_path_exits_five(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.ty.version=0.0.62",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.ty.version=0.0.62",
         )
         self.assertEqual(result.returncode, 5, result.stderr)
 
     def test_override_unknown_path_exits_five(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
+            "get", "build.stages.toolchain.python.version",
             "--override", "unknown.path=1.0.0",
         )
         self.assertEqual(result.returncode, 5, result.stderr)
 
     def test_override_malformed_spaces_exits_two(self):
         result = _run(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version =3.14.7",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version =3.14.7",
         )
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("spaces", result.stderr.lower())
@@ -604,14 +605,14 @@ class TestDirectExecutionParity(unittest.TestCase):
         self.assertEqual(direct.returncode, interpreter.returncode)
 
     def test_get_scalar_output_parity(self):
-        direct = self._run_direct("get", "stages.toolchain.python.version")
-        interpreter = self._run_interpreter("get", "stages.toolchain.python.version")
+        direct = self._run_direct("get", "build.stages.toolchain.python.version")
+        interpreter = self._run_interpreter("get", "build.stages.toolchain.python.version")
         self.assertEqual(direct.stdout, interpreter.stdout)
         self.assertEqual(direct.returncode, interpreter.returncode)
 
     def test_get_json_output_parity(self):
-        direct = self._run_direct("get", "stages.toolchain.python.version", "--json")
-        interpreter = self._run_interpreter("get", "stages.toolchain.python.version", "--json")
+        direct = self._run_direct("get", "build.stages.toolchain.python.version", "--json")
+        interpreter = self._run_interpreter("get", "build.stages.toolchain.python.version", "--json")
         self.assertEqual(direct.stdout, interpreter.stdout)
         self.assertEqual(direct.returncode, interpreter.returncode)
 
@@ -642,19 +643,19 @@ class TestDirectExecutionParity(unittest.TestCase):
         self.assertEqual(direct.returncode, interpreter.returncode)
 
     def test_unknown_path_exit_code_parity(self):
-        direct = self._run_direct("get", "stages.toolchain.pythno.version")
-        interpreter = self._run_interpreter("get", "stages.toolchain.pythno.version")
+        direct = self._run_direct("get", "build.stages.toolchain.pythno.version")
+        interpreter = self._run_interpreter("get", "build.stages.toolchain.pythno.version")
         self.assertEqual(direct.returncode, interpreter.returncode)
         self.assertEqual(direct.stderr, interpreter.stderr)
 
     def test_override_malformed_exit_code_parity(self):
         direct = self._run_direct(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version =3.14.7",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version =3.14.7",
         )
         interpreter = self._run_interpreter(
-            "get", "stages.toolchain.python.version",
-            "--override", "stages.toolchain.python.version =3.14.7",
+            "get", "build.stages.toolchain.python.version",
+            "--override", "build.stages.toolchain.python.version =3.14.7",
         )
         self.assertEqual(direct.returncode, interpreter.returncode)
         self.assertIn("spaces", direct.stderr.lower())
@@ -917,7 +918,7 @@ class TestIntegratedRepoFixture(unittest.TestCase):
         from docker.versioning.rendering import write_effective_inventory
 
         eff = apply_overrides(self.inventory, {
-            "stages.toolchain.python.version": "3.99.0",
+            "build.stages.toolchain.python.version": "3.99.0",
         })
         dest = self.tmpdir / "overridden.toml"
         write_effective_inventory(eff, dest)
@@ -926,7 +927,7 @@ class TestIntegratedRepoFixture(unittest.TestCase):
         with open(dest, "rb") as f:
             raw = tomllib.load(f)
         self.assertEqual(
-            raw["stages"]["toolchain"]["python"]["version"],
+            raw["build"]["stages"]["toolchain"]["python"]["version"],
             "3.99.0",
         )
 
@@ -962,7 +963,7 @@ class TestIntegratedRepoFixture(unittest.TestCase):
         from docker.versioning.constraints import Constraint
 
         eff = apply_overrides(self.inventory, {
-            "stages.toolchain.python.version": "3.15.0",
+            "build.stages.toolchain.python.version": "3.15.0",
         })
         dest = self.tmpdir / "roundtrip.toml"
         write_effective_inventory(eff, dest)
@@ -1043,10 +1044,10 @@ def _PYTHON_OVERRIDE_TOML_FOR_INTEGRATION() -> str:
     from tests.versioning.support.inventory_builder import minimal_toml
     return minimal_toml(
         **{
-            "stages.toolchain.python": (
+            "build.stages.toolchain.python": (
                 'version = "3.14.6"\n'
                 "\n"
-                "[stages.toolchain.python.override]\n"
+                "[build.stages.toolchain.python.override]\n"
                 'constraint = ">=3.14.6"\n'
                 "allow_prerelease = false\n"
                 'scheme = "numeric"'

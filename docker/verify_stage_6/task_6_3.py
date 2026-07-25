@@ -27,7 +27,7 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     image = args.image or f"pi-cli-pi:python-{args.python_version}"
     rel_inventory = Path(".docker-generated") / f"python-{args.python_version}.toml"
-    override = f"stages.toolchain.python.version={args.python_version}"
+    override = f"build.stages.toolchain.python.version={args.python_version}"
     ev = EvidenceCollector(args.output_dir, dry_run=args.dry_run)
     ok = False
     try:

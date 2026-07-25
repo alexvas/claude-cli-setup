@@ -33,7 +33,7 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
     */.local/share/uv/python/*/bin/python3*) ;;
     *) echo "python3 is not the uv-managed direct interpreter: $python_realpath" >&2; exit 1 ;;
   esac
-  expected_python="$(python3 "$HELPER" get --inventory "$INVENTORY" stages.toolchain.python.version)"
+  expected_python="$(python3 "$HELPER" get --inventory "$INVENTORY" build.stages.toolchain.python.version)"
   python3 -c "import sys; v=sys.version_info; actual=f\"{v.major}.{v.minor}.{v.micro}\"; assert actual == \"$expected_python\", actual"
   test "$(readlink -f "$(command -v python)")" = "$python_realpath"
   if command -v pip >/dev/null 2>&1; then
@@ -96,25 +96,25 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
       exit 1
     fi
   }
-  check_version rustc stages.toolchain.rust.version
-  check_version cargo stages.toolchain.rust.version
+  check_version rustc build.stages.toolchain.rust.version
+  check_version cargo build.stages.toolchain.rust.version
   # rustfmt and clippy have their own versioning (e.g. 1.8.0-stable, 0.1.88).
   # Component presence is verified earlier via "rustup component list".
-  check_version uv stages.toolchain.uv.version
-  check_version ty stages.toolchain.ty.version
+  check_version uv build.stages.toolchain.uv.version
+  check_version ty build.stages.toolchain.ty.version
   # Node image tags encode major+distro (e.g. "NN-trixie-slim"). Validate that
   # node --version reports the expected major (e.g. v24.X.Y).
-  node_tag="$(python3 "$HELPER" get --inventory "$INVENTORY" stages.base.node.tag)"
+  node_tag="$(python3 "$HELPER" get --inventory "$INVENTORY" build.stages.base.node.tag)"
   node_major="$(printf "%s" "$node_tag" | grep -oE '^[0-9]+')"
   node_actual="$(node --version | grep -oE '^v[0-9]+\.')"
   if [ "$node_actual" != "v${node_major}." ]; then
     echo "NODE MAJOR MISMATCH: expected v${node_major}.X, got $(node --version)" >&2
     exit 1
   fi
-  check_version pi stages.pi-tools.pi.version
-  check_version openspec stages.openspec-tools.openspec.version
-  check_version rtk stages.rtk-prebuilt.rtk.version
-  check_version fd stages.fd-prebuilt.fd.version
+  check_version pi build.stages.pi-tools.pi.version
+  check_version openspec build.stages.openspec-tools.openspec.version
+  check_version rtk build.stages.rtk-prebuilt.rtk.version
+  check_version fd build.stages.fd-prebuilt.fd.version
   echo "version checks ok"
 
   echo "=== pi extension setup script checks ==="

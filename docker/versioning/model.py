@@ -230,10 +230,51 @@ class OhMyZshEntry:
 
 
 @dataclass(frozen=True)
+class NpmArtifact:
+    """Reviewed npm-dist artifact with integrity verification."""
+    url: str
+    integrity: str
+
+
+@dataclass(frozen=True)
+class RuntimeValidation:
+    """Host-side validation metadata for runtime extension packages."""
+    metadata_file: str
+
+    def __post_init__(self) -> None:
+        _require_safe_metadata_path("RuntimeValidation", self.metadata_file)
+
+
+# shared validation used by both model and inventory layers
+_PACKAGE_JSON = "package.json"
+
+
+def _require_safe_metadata_path(source: str, value: str) -> None:
+    """Reject metadata_file values that cross the installer trust boundary."""
+    # Use object.__setattr__ to allow mutation inside frozen __post_init__
+    if value == _PACKAGE_JSON:
+        return
+    if value.startswith("/"):
+        raise ValueError(
+            f"{source}.metadata_file: absolute path {value!r} not allowed; "
+            f"must be 'package.json' or a safe relative path"
+        )
+    segments = value.split("/")
+    if ".." in segments or "" in segments:
+        raise ValueError(
+            f"{source}.metadata_file: {value!r} contains path traversal "
+            f"or empty segments; must be 'package.json' or a safe relative path"
+        )
+
+
+@dataclass(frozen=True)
 class PiExtensionEntry:
     version: str
     source: NpmSource
     update: NpmUpdate
+    artifact: NpmArtifact
+    validation: RuntimeValidation
+    override: OverridePolicy
 
 
 # ---------------------------------------------------------------------------

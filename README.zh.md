@@ -30,7 +30,7 @@ python3 docker/build_wrapper.py build -y
 `./docker/versions.py env` 为底层集成输出 shell-safe 的解析后构建输入。显式 Python 覆盖方式：
 
 ```bash
-./docker/versions.py compose --override stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/versions.py compose --override build.stages.toolchain.python.version=X.Y.Z -- build pi
 ```
 
 约束只接受完整 `X.Y.Z` 版本上的 `==, >, >=, <, <=`。通配符、不完整版本、OR 和 prerelease 会被拒绝，除非策略明确允许。清单固定已审核的非 Debian 输入，但 Debian 仓库和 BuildKit 元数据意味着不能保证逐字节相同的 OCI 镜像。
@@ -58,10 +58,10 @@ python3 docker/build_wrapper.py build -y
 1. 只检查 Pi 并请求可审核建议：
 
    ```bash
-   ./docker/versions.py check-updates --only stages.pi-tools.pi --suggest
+   ./docker/versions.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` 是 **non-mutating**：核对上游发布，然后手动把接受的值及相关元数据应用到 `docker-constructor.toml` 的 `stages.pi-tools.pi`。
+2. `--suggest` 是 **non-mutating**：核对上游发布，然后手动把接受的值及相关元数据应用到 `docker-constructor.toml` 的 `build.stages.pi-tools.pi`。
 3. 验证并审查准确变更：
 
    ```bash

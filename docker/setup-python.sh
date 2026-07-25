@@ -9,7 +9,7 @@ if [[ ! ${PYTHON_VERSION} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 # Minimum-version and prerelease policy are validated by the resolver
-# (stages.toolchain.python.override); this script enforces only that
+# (build.stages.toolchain.python.override); this script enforces only that
 # uv installs the exact requested version.
 
 export PATH="${HOME}/.local/bin:${PATH}"

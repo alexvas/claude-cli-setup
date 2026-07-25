@@ -19,10 +19,10 @@ from tests.versioning.support.inventory_builder import minimal_toml, write_toml
 def _python_override_toml() -> str:
     return minimal_toml(
         **{
-            "stages.toolchain.python": (
+            "build.stages.toolchain.python": (
                 'version = "3.14.6"\n'
                 "\n"
-                "[stages.toolchain.python.override]\n"
+                "[build.stages.toolchain.python.override]\n"
                 'constraint = ">=3.14.6"\n'
                 "allow_prerelease = false\n"
                 'scheme = "numeric"'
@@ -54,7 +54,7 @@ class TestResolveBuildInputs(unittest.TestCase):
 
         env = resolve_build_inputs(
             inventory_path=self.toml_path,
-            overrides={"stages.toolchain.python.version": "3.14.7"},
+            overrides={"build.stages.toolchain.python.version": "3.14.7"},
         )
         self.assertEqual(env["PYTHON_VERSION"], "3.14.7")
 
@@ -99,8 +99,9 @@ class TestResolveBuildInputs(unittest.TestCase):
             import tomllib
             with open(generated, "rb") as f:
                 data = tomllib.load(f)
-            self.assertIn("stages", data)
-            self.assertIn("toolchain", data["stages"])
+            self.assertIn("build", data)
+            stages = data["build"]["stages"]
+            self.assertIn("toolchain", stages)
 
             # EFFECTIVE_VERSIONS_FILE must point to the generated file
             self.assertEqual(
@@ -208,9 +209,9 @@ class TestResolveBuildInputs(unittest.TestCase):
                             "--yes",
                             "--inventory", str(self.toml_path),
                             "--override",
-                            "stages.toolchain.python.version=3.14.6",
+                            "build.stages.toolchain.python.version=3.14.6",
                             "--override",
-                            "stages.toolchain.python.version=3.14.7",
+                            "build.stages.toolchain.python.version=3.14.7",
                         ]
                         with mock.patch.object(sys, "argv", argv):
                             try:

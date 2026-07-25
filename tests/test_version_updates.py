@@ -8,6 +8,8 @@ import json
 import unittest
 
 from docker.versioning.model import (
+    Constraint,
+    OverridePolicy,
     ArtifactEntry,
     CandidateArtifact,
     DockerRegistrySource,
@@ -18,6 +20,7 @@ from docker.versioning.model import (
     GitRefUpdate,
     Inventory,
     NodeEntry,
+    NpmArtifact,
     NpmSource,
     NpmToolEntry,
     NpmUpdate,
@@ -49,6 +52,7 @@ from docker.versioning.model import (
     PiToolsStage,
     OpenSpecToolsStage,
     RuntimeStage,
+    RuntimeValidation,
     Stages,
 )
 from docker.versioning.constraints import parse_constraint
@@ -165,17 +169,17 @@ class TestTargetTraversal(unittest.TestCase):
         targets = build_update_targets(inv)
         paths = {t.path for t in targets}
         expected = {
-            "stages.base.node",
-            "stages.toolchain.rust",
-            "stages.toolchain.rust.rustup",
-            "stages.toolchain.uv",
-            "stages.toolchain.python",
-            "stages.toolchain.ty",
-            "stages.rtk-prebuilt.rtk",
-            "stages.fd-prebuilt.fd",
-            "stages.pi-tools.pi",
-            "stages.openspec-tools.openspec",
-            "stages.runtime.oh-my-zsh",
+            "build.stages.base.node",
+            "build.stages.toolchain.rust",
+            "build.stages.toolchain.rust.rustup",
+            "build.stages.toolchain.uv",
+            "build.stages.toolchain.python",
+            "build.stages.toolchain.ty",
+            "build.stages.rtk-prebuilt.rtk",
+            "build.stages.fd-prebuilt.fd",
+            "build.stages.pi-tools.pi",
+            "build.stages.openspec-tools.openspec",
+            "build.stages.runtime.oh-my-zsh",
         }
         self.assertEqual(paths, expected)
 
@@ -211,8 +215,14 @@ class TestTargetTraversal(unittest.TestCase):
                 runtime=RuntimeStage(oh_my_zsh=OhMyZshEntry(revision="a" * 40, source=GitSource(repository="r"), update=GitRefUpdate(ref="r"))),
             ),
             runtime_pi_extensions=MappingProxyType({
-                "z-ext": PiExtensionEntry(version="1.0.0", source=NpmSource(package="z"), update=NpmUpdate(stable_only=True)),
-                "a-ext": PiExtensionEntry(version="1.0.0", source=NpmSource(package="a"), update=NpmUpdate(stable_only=True)),
+                "z-ext": PiExtensionEntry(version="1.0.0", source=NpmSource(package="z"), update=NpmUpdate(stable_only=True),
+            artifact=NpmArtifact(url="https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric")),
+                "a-ext": PiExtensionEntry(version="1.0.0", source=NpmSource(package="a"), update=NpmUpdate(stable_only=True),
+            artifact=NpmArtifact(url="https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            validation=RuntimeValidation(metadata_file="package.json"),
+            override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric")),
             }),
         )
         targets = build_update_targets(inv)
@@ -262,7 +272,7 @@ class TestCheckUpdates(unittest.TestCase):
             "static-url": StubProvider(),
         }
         results = check_updates(inv, providers=providers, context=self._ctx())
-        ty = [r for r in results if r.path == "stages.toolchain.ty"][0]
+        ty = [r for r in results if r.path == "build.stages.toolchain.ty"][0]
         self.assertEqual(ty.status, UpdateStatus.OUTDATED)
         self.assertTrue(ty.applicable)
         self.assertEqual(ty.candidate, "0.0.62")
@@ -285,7 +295,7 @@ class TestCheckUpdates(unittest.TestCase):
             "static-url": StubProvider(),
         }
         results = check_updates(inv, providers=providers, context=self._ctx())
-        ty = [r for r in results if r.path == "stages.toolchain.ty"][0]
+        ty = [r for r in results if r.path == "build.stages.toolchain.ty"][0]
         self.assertEqual(ty.status, UpdateStatus.UNAVAILABLE)
         self.assertIn("network error", ty.reason)
 
@@ -324,9 +334,9 @@ class TestCheckUpdates(unittest.TestCase):
             "uv-python", "pypi", "npm", "git-ref", "static-url",
         ]}
         results = check_updates(inv, providers=providers, context=self._ctx(),
-                                 only=("stages.toolchain.python",))
+                                 only=("build.stages.toolchain.python",))
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].path, "stages.toolchain.python")
+        self.assertEqual(results[0].path, "build.stages.toolchain.python")
 
     def test_deterministic_json(self):
         inv = _minimal_inventory()
@@ -347,7 +357,7 @@ class TestSuggestions(unittest.TestCase):
     def test_render_suggestions_only_outdated_applicable(self):
         results = [
             UpdateResult(
-                path="stages.toolchain.ty",
+                path="build.stages.toolchain.ty",
                 provider="pypi",
                 current="0.0.61",
                 candidate="0.0.62",
@@ -358,7 +368,7 @@ class TestSuggestions(unittest.TestCase):
                 artifacts={},
             ),
             UpdateResult(
-                path="stages.toolchain.rust",
+                path="build.stages.toolchain.rust",
                 provider="rust-channel",
                 current="1.88.0",
                 candidate="1.89.0",
@@ -369,7 +379,7 @@ class TestSuggestions(unittest.TestCase):
                 artifacts={},
             ),
             UpdateResult(
-                path="stages.base.node",
+                path="build.stages.base.node",
                 provider="docker-registry",
                 current="24-trixie-slim",
                 candidate="sha256:bbb...",
@@ -383,7 +393,7 @@ class TestSuggestions(unittest.TestCase):
         ]
         output = render_suggestions(results)
         self.assertIn("0.0.62", output)
-        self.assertIn("stages.toolchain.ty", output)
+        self.assertIn("build.stages.toolchain.ty", output)
         self.assertIn("sha256:bbb", output)
         # Non-applicable should not appear
         self.assertNotIn("1.89.0", output)  # Rust is not applicable
@@ -394,7 +404,7 @@ class TestSuggestions(unittest.TestCase):
     def test_render_suggestions_json(self):
         results = [
             UpdateResult(
-                path="stages.toolchain.ty",
+                path="build.stages.toolchain.ty",
                 provider="pypi",
                 current="0.0.61",
                 candidate="0.0.62",

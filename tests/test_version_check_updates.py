@@ -654,7 +654,7 @@ class TestZeroProviderRequestsFromOrdinaryCommands(unittest.TestCase):
         import docker.versioning.cli as _cli
         self._purge_module_cache(self._PROVIDERS_MOD, self._UPDATES_MOD)
         code, out, err = _capture(
-            lambda: _cli.main(["get", "stages.toolchain.rust.version"]),
+            lambda: _cli.main(["get", "build.stages.toolchain.rust.version"]),
         )
         self._assert_zero_provider_imports("get")
         self.assertEqual(code, EXIT_OK, f"stderr={err}")
@@ -665,7 +665,7 @@ class TestZeroProviderRequestsFromOrdinaryCommands(unittest.TestCase):
         import docker.versioning.cli as _cli
         self._purge_module_cache(self._PROVIDERS_MOD, self._UPDATES_MOD)
         code, out, err = _capture(
-            lambda: _cli.main(["get", "stages.nonexistent.xyz"]),
+            lambda: _cli.main(["get", "build.stages.nonexistent.xyz"]),
         )
         self._assert_zero_provider_imports("get (missing path)")
         # Should fail with usage error but not import providers

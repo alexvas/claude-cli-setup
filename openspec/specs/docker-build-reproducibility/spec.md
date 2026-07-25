@@ -293,7 +293,7 @@ Every maintained README translation SHALL explain how to inspect, review, apply,
 
 #### Scenario: Updating Pi after a release
 - **WHEN** a user follows the focused Pi update example
-- **THEN** documentation SHALL identify `stages.pi-tools.pi` as the inventory path
+- **THEN** documentation SHALL identify `build.stages.pi-tools.pi` as the inventory path
 - **AND** SHALL show a focused update check with a non-mutating suggestion
 - **AND** SHALL state that the suggested version is reviewed and applied manually to `docker-constructor.toml`
 - **AND** SHALL finish with inventory validation, diff review, image rebuild, and runtime verification

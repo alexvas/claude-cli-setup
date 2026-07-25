@@ -31,10 +31,10 @@ def _python_override_toml() -> str:
     """Return minimal TOML with Python override policy declared."""
     return minimal_toml(
         **{
-            "stages.toolchain.python": (
+            "build.stages.toolchain.python": (
                 'version = "3.14.6"\n'
                 "\n"
-                "[stages.toolchain.python.override]\n"
+                "[build.stages.toolchain.python.override]\n"
                 'constraint = ">=3.14.6"\n'
                 "allow_prerelease = false\n"
                 'scheme = "numeric"'
@@ -123,7 +123,7 @@ class TestRenderBuildEnvironment(unittest.TestCase):
 
     def test_python_override_changes_python_version(self):
         eff = apply_overrides(self.inventory, {
-            "stages.toolchain.python.version": "3.14.7",
+            "build.stages.toolchain.python.version": "3.14.7",
         })
         env = render_build_environment(eff)
         self.assertEqual(env["PYTHON_VERSION"], "3.14.7")
@@ -131,7 +131,7 @@ class TestRenderBuildEnvironment(unittest.TestCase):
     def test_python_override_does_not_change_other_values(self):
         base_env = render_build_environment(self.effective)
         eff = apply_overrides(self.inventory, {
-            "stages.toolchain.python.version": "3.14.7",
+            "build.stages.toolchain.python.version": "3.14.7",
         })
         over_env = render_build_environment(eff)
 
@@ -230,7 +230,8 @@ class TestWriteEffectiveInventory(unittest.TestCase):
         import tomllib
         with open(dest, "rb") as f:
             data = tomllib.load(f)
-        self.assertIn("stages", data)
+        self.assertIn("build", data)
+        self.assertIn("stages", data["build"])
 
     def test_full_load_inventory_round_trip(self):
         """Generated TOML must survive a full ``load_inventory()``
@@ -250,8 +251,9 @@ class TestWriteEffectiveInventory(unittest.TestCase):
         self.assertEqual(raw["schema"], 1)
 
         # stages must be a top-level key
-        self.assertIn("stages", raw)
-        self.assertIn("toolchain", raw["stages"])
+        self.assertIn("build", raw)
+        stages = raw["build"]["stages"]
+        self.assertIn("toolchain", stages)
 
         # load_inventory must succeed (validates types, constraints)
         from docker.versioning.inventory import load_inventory
@@ -263,7 +265,7 @@ class TestWriteEffectiveInventory(unittest.TestCase):
 
     def test_python_override_reflected_in_written_toml(self):
         eff = apply_overrides(self.inventory, {
-            "stages.toolchain.python.version": "3.14.7",
+            "build.stages.toolchain.python.version": "3.14.7",
         })
         dest = self.tmpdir / "versions.toml"
         write_effective_inventory(eff, dest)
@@ -272,7 +274,7 @@ class TestWriteEffectiveInventory(unittest.TestCase):
         with open(dest, "rb") as f:
             data = tomllib.load(f)
         self.assertEqual(
-            data["stages"]["toolchain"]["python"]["version"],
+            data["build"]["stages"]["toolchain"]["python"]["version"],
             "3.14.7",
         )
 

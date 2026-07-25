@@ -55,7 +55,7 @@ def main(argv=None) -> int:
                           inventory=args.bad_base_digest_inventory), cwd=root, timeout=1800)
         for index, value in enumerate(("3.14.5", "3.15.0rc1", "latest"), 1):
             ev.expect_failure(f"invalid-python-{index}", compose_command("build", "pi",
-                              override=f"stages.toolchain.python.version={value}"), cwd=root, timeout=300)
+                              override=f"build.stages.toolchain.python.version={value}"), cwd=root, timeout=300)
 
         custom_env = resolved_env({"DEV_UID": str(args.custom_uid), "DEV_GID": str(args.custom_gid)})
         ev.run("custom-id-build", compose_command("--progress", "plain", "build", "pi"), cwd=root,

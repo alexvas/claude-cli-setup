@@ -32,7 +32,7 @@ class TestNpmProvider(unittest.TestCase):
 
     def _target(self, version="1.2.3", package="@scope/pkg", stable_only=True):
         return UpdateTarget(
-            path="stages.pi-tools.pi",
+            path="build.stages.pi-tools.pi",
             current=version,
             source=NpmSource(package=package),
             update=NpmUpdate(stable_only=stable_only),

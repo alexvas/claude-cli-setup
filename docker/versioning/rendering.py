@@ -259,7 +259,7 @@ def compose_command(args: Sequence[str]) -> tuple[str, ...]:
 def _write_toml(fh: object, data: object, *, _prefix: str = "") -> None:
     """Write plain-data *data* as deterministically-ordered TOML.
 
-    Uses dotted-key table headers (``[stages.toolchain.rust]``) for
+    Uses dotted-key table headers (``[build.stages.toolchain.rust]``) for
     sections and inline ``key = value`` for leaves and small tables.
     """
     if isinstance(data, dict):

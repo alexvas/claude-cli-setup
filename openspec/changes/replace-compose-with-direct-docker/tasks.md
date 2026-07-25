@@ -24,45 +24,45 @@
 
 ### RED
 
-- [ ] 2.1 Add failing closed-schema tests for `build.stages`, full canonical build paths, unknown or misspelled fields, misplaced Pi extensions, and actionable errors.
-- [ ] 2.2 Add failing migration-contract tests proving every existing build dependency appears exactly once under `build`, with unchanged selected versions, revisions, URLs, digests, artifacts, and policies.
+- [x] 2.1 Add failing closed-schema tests for `build.stages`, full canonical build paths, unknown or misspelled fields, misplaced Pi extensions, and actionable errors.
+- [x] 2.2 Add failing migration-contract tests proving every existing build dependency appears exactly once under `build`, with unchanged selected versions, revisions, URLs, digests, artifacts, and policies.
 
 ### GREEN
 
-- [ ] 2.3 Parse and validate build dependencies directly from canonical `build.stages.*` paths and update source/provider compatibility and known-key registrations accordingly.
-- [ ] 2.4 Migrate `docker-constructor.toml`, shared test builders, active TOML fixtures, and Docker-independent verification inputs from `[stages.*]` to `[build.stages.*]`; remove the temporary legacy-layout adapter.
+- [x] 2.3 Parse and validate build dependencies directly from canonical `build.stages.*` paths and update source/provider compatibility and known-key registrations accordingly.
+- [x] 2.4 Migrate `docker-constructor.toml`, shared test builders, active TOML fixtures, and Docker-independent verification inputs from `[stages.*]` to `[build.stages.*]`; remove the temporary legacy-layout adapter.
 
 ### INTROSPECT
 
-- [ ] 2.5 Review Docker-stage naming versus installation-phase ownership, confirming `build.stages.runtime.oh-my-zsh` remains build-owned despite its stage name.
-- [ ] 2.6 Compare pre/post-migration dependency values and reject accidental version changes, duplicated defaults, operational settings, or runtime-extension entries in `build`.
+- [x] 2.5 Review Docker-stage naming versus installation-phase ownership, confirming `build.stages.runtime.oh-my-zsh` remains build-owned despite its stage name.
+- [x] 2.6 Compare pre/post-migration dependency values and reject accidental version changes, duplicated defaults, operational settings, or runtime-extension entries in `build`.
 
 ### VALIDATE
 
-- [ ] 2.7 Run focused build-schema, inventory, fixture, provider/source, and semantic-source tests without Docker or network access.
-- [ ] 2.8 Run type/import checks, `git diff --check`, and strict OpenSpec validation.
+- [x] 2.7 Run focused build-schema, inventory, fixture, provider/source, and semantic-source tests without Docker or network access.
+- [x] 2.8 Run type/import checks, `git diff --check`, and strict OpenSpec validation.
 
 ## 3. Stage 3 — Canonical Runtime Section and Cross-Phase Ownership
 
 ### RED
 
-- [ ] 3.1 Add failing closed-schema tests for `runtime.pi-extensions`, complete typed extension entries, unknown fields, invalid source/provider combinations, and unsupported override policy.
-- [ ] 3.2 Add failing semantic tests for build entries misplaced in runtime, runtime entries misplaced in build, and duplicate dependency identities across phases with both paths in the error.
+- [x] 3.1 Add failing closed-schema tests for `runtime.pi-extensions`, complete typed extension entries, unknown fields, invalid source/provider combinations, and unsupported override policy.
+- [x] 3.2 Add failing semantic tests for build entries misplaced in runtime, runtime entries misplaced in build, and duplicate dependency identities across phases with both paths in the error.
 
 ### GREEN
 
-- [ ] 3.3 Complete typed runtime-section parsing and immutable extension mappings while retaining all reviewed host-side metadata required by later update, override, artifact, and validation workflows.
-- [ ] 3.4 Implement explicit phase-placement and cross-phase identity validation, then migrate all existing Pi extensions into exactly one runtime section without changing selected package versions.
+- [x] 3.3 Complete typed runtime-section parsing and immutable extension mappings while retaining all reviewed host-side metadata required by later update, override, artifact, and validation workflows.
+- [x] 3.4 Implement explicit phase-placement and cross-phase identity validation, then migrate all existing Pi extensions into exactly one runtime section without changing selected package versions.
 
 ### INTROSPECT
 
-- [ ] 3.5 Review identity rules per source type so duplicate detection uses package/repository identity rather than display keys or coincidentally equal versions.
-- [ ] 3.6 Confirm the reviewed runtime source remains broader than the later mounted DTO while containing no operational host settings or session project paths.
+- [x] 3.5 Review identity rules per source type so duplicate detection uses package/repository identity rather than display keys or coincidentally equal versions.
+- [x] 3.6 Confirm the reviewed runtime source remains broader than the later mounted DTO while containing no operational host settings or session project paths.
 
 ### VALIDATE
 
-- [ ] 3.7 Run focused runtime-schema, compatibility, duplicate-identity, immutability, and complete inventory tests without Docker or network access.
-- [ ] 3.8 Run the daemon-independent green loop, type/import checks, `git diff --check`, and strict OpenSpec validation.
+- [x] 3.7 Run focused runtime-schema, compatibility, duplicate-identity, immutability, and complete inventory tests without Docker or network access.
+- [x] 3.8 Run the daemon-independent green loop, type/import checks, `git diff --check`, and strict OpenSpec validation.
 
 ## 4. Stage 4 — Effective Build Projection
 

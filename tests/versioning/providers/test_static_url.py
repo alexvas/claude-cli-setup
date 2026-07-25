@@ -50,7 +50,7 @@ class TestStaticUrlProvider(unittest.TestCase):
 
     def _target(self, sha256=_STORED_SHA256, checksum_url=_CHECKSUM_URL):
         return UpdateTarget(
-            path="stages.toolchain.rust.rustup",
+            path="build.stages.toolchain.rust.rustup",
             current=sha256,
             source=StaticUrlSource(checksum_url=checksum_url),
             update=StaticUrlUpdate(stable_only=True),
@@ -151,7 +151,7 @@ class TestStaticUrlProvider(unittest.TestCase):
 
     def test_skipped_empty_artifacts(self):
         target = UpdateTarget(
-            path="stages.toolchain.rust.rustup",
+            path="build.stages.toolchain.rust.rustup",
             current="",
             source=StaticUrlSource(checksum_url=_CHECKSUM_URL),
             update=StaticUrlUpdate(stable_only=True),
@@ -173,7 +173,7 @@ class TestStaticUrlProvider(unittest.TestCase):
         network.
         """
         target = UpdateTarget(
-            path="stages.toolchain.rust.rustup",
+            path="build.stages.toolchain.rust.rustup",
             current="",
             source=StaticUrlSource(checksum_url="https://unregistered.example.com/CHECKSUM"),
             update=StaticUrlUpdate(stable_only=True),
@@ -195,161 +195,161 @@ class TestStaticUrlProvider(unittest.TestCase):
 _MULTI_ARTIFACT_TOML = """\
 schema = 1
 
-[stages.base.node]
+[build.stages.base.node]
 tag = "24-trixie-slim"
 digest = "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
 
-[stages.base.node.source]
+[build.stages.base.node.source]
 type = "docker-registry"
 registry = "docker.io"
 repository = "library/node"
 
-[stages.base.node.update]
+[build.stages.base.node.update]
 provider = "docker-registry"
 stable_only = true
 track = "tag-digest"
 
-[stages.toolchain.rust]
+[build.stages.toolchain.rust]
 version = "1.88.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
 
-[stages.toolchain.rust.source]
+[build.stages.toolchain.rust.source]
 type = "rust-channel"
 manifest = "https://static.rust-lang.org/dist/channel-rust-1.88.0.toml"
 
-[stages.toolchain.rust.update]
+[build.stages.toolchain.rust.update]
 provider = "rust-channel"
 channel = "stable"
 stable_only = true
 
-[stages.toolchain.rust.rustup.source]
+[build.stages.toolchain.rust.rustup.source]
 type = "static-url"
 checksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"
 
-[stages.toolchain.rust.rustup.update]
+[build.stages.toolchain.rust.rustup.update]
 provider = "static-url"
 stable_only = true
 
-[stages.toolchain.rust.rustup.artifacts.linux-amd64]
+[build.stages.toolchain.rust.rustup.artifacts.linux-amd64]
 url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
 sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
 
-[stages.toolchain.rust.rustup.artifacts.linux-arm64]
+[build.stages.toolchain.rust.rustup.artifacts.linux-arm64]
 url = "https://static.rust-lang.org/rustup/dist/aarch64-unknown-linux-gnu/rustup-init"
 sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa11"
 
-[stages.toolchain.uv]
+[build.stages.toolchain.uv]
 version = "0.11.29"
 
-[stages.toolchain.uv.source]
+[build.stages.toolchain.uv.source]
 type = "github-release"
 repository = "astral-sh/uv"
 tag = "0.11.29"
 
-[stages.toolchain.uv.artifacts.linux-amd64]
+[build.stages.toolchain.uv.artifacts.linux-amd64]
 url = "https://github.com/astral-sh/uv/releases/download/0.11.29/uv-x86_64-unknown-linux-gnu.tar.gz"
 sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-[stages.toolchain.uv.update]
+[build.stages.toolchain.uv.update]
 provider = "github-release"
 stable_only = true
 required_platforms = ["linux-amd64"]
 
-[stages.toolchain.python]
+[build.stages.toolchain.python]
 version = "3.14.6"
 
-[stages.toolchain.python.source]
+[build.stages.toolchain.python.source]
 type = "uv-python"
 implementation = "cpython"
 
-[stages.toolchain.python.update]
+[build.stages.toolchain.python.update]
 provider = "uv-python"
 implementation = "cpython"
 stable_only = true
 
-[stages.toolchain.python.override]
+[build.stages.toolchain.python.override]
 constraint = ">=3.14.6"
 allow_prerelease = false
 scheme = "numeric"
 
-[stages.toolchain.ty]
+[build.stages.toolchain.ty]
 version = "0.0.61"
 
-[stages.toolchain.ty.source]
+[build.stages.toolchain.ty.source]
 type = "pypi"
 package = "ty"
 
-[stages.toolchain.ty.update]
+[build.stages.toolchain.ty.update]
 provider = "pypi"
 stable_only = true
 
-[stages.rtk-prebuilt.rtk]
+[build.stages.rtk-prebuilt.rtk]
 version = "v0.43.0"
 
-[stages.rtk-prebuilt.rtk.source]
+[build.stages.rtk-prebuilt.rtk.source]
 type = "github-release"
 repository = "rtk-ai/rtk"
 tag = "v0.43.0"
 
-[stages.rtk-prebuilt.rtk.artifacts.linux-amd64]
+[build.stages.rtk-prebuilt.rtk.artifacts.linux-amd64]
 url = "https://github.com/rtk-ai/rtk/releases/download/v0.43.0/rtk_amd64.deb"
 sha256 = "eb571d784b3269521722ebe2f0dc2409e89da6bd70bf097ddb21e9d4b3b240b9"
 
-[stages.rtk-prebuilt.rtk.update]
+[build.stages.rtk-prebuilt.rtk.update]
 provider = "github-release"
 stable_only = true
 tag_prefix = "v"
 required_platforms = ["linux-amd64"]
 
-[stages.fd-prebuilt.fd]
+[build.stages.fd-prebuilt.fd]
 version = "v10.4.2"
 
-[stages.fd-prebuilt.fd.source]
+[build.stages.fd-prebuilt.fd.source]
 type = "github-release"
 repository = "sharkdp/fd"
 tag = "v10.4.2"
 
-[stages.fd-prebuilt.fd.artifacts.linux-amd64]
+[build.stages.fd-prebuilt.fd.artifacts.linux-amd64]
 url = "https://github.com/sharkdp/fd/releases/download/v10.4.2/fd_10.4.2_amd64.deb"
 sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
 
-[stages.fd-prebuilt.fd.update]
+[build.stages.fd-prebuilt.fd.update]
 provider = "github-release"
 stable_only = true
 tag_prefix = "v"
 required_platforms = ["linux-amd64"]
 
-[stages.pi-tools.pi]
+[build.stages.pi-tools.pi]
 version = "0.80.10"
 
-[stages.pi-tools.pi.source]
+[build.stages.pi-tools.pi.source]
 type = "npm"
 package = "@earendil-works/pi-coding-agent"
 
-[stages.pi-tools.pi.update]
+[build.stages.pi-tools.pi.update]
 provider = "npm"
 stable_only = true
 
-[stages.openspec-tools.openspec]
+[build.stages.openspec-tools.openspec]
 version = "1.6.0"
 
-[stages.openspec-tools.openspec.source]
+[build.stages.openspec-tools.openspec.source]
 type = "npm"
 package = "@fission-ai/openspec"
 
-[stages.openspec-tools.openspec.update]
+[build.stages.openspec-tools.openspec.update]
 provider = "npm"
 stable_only = true
 
-[stages.runtime.oh-my-zsh]
+[build.stages.runtime.oh-my-zsh]
 revision = "70ad5e3df8f7bed68aa6672029496926e632aedd"
 
-[stages.runtime.oh-my-zsh.source]
+[build.stages.runtime.oh-my-zsh.source]
 type = "git"
 repository = "https://github.com/ohmyzsh/ohmyzsh.git"
 
-[stages.runtime.oh-my-zsh.update]
+[build.stages.runtime.oh-my-zsh.update]
 provider = "git-ref"
 ref = "master"
 

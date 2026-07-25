@@ -28,7 +28,7 @@ class TestRustProvider(unittest.TestCase):
 
     def _target(self, version="1.88.0"):
         return UpdateTarget(
-            path="stages.toolchain.rust",
+            path="build.stages.toolchain.rust",
             current=version,
             source=RustChannelSource(
                 manifest=f"https://static.rust-lang.org/dist/channel-rust-{version}.toml",

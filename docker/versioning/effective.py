@@ -66,7 +66,7 @@ def _apply_python_override(
 
 
 SUPPORTED_OVERRIDES: Mapping[str, object] = {
-    "stages.toolchain.python.version": _apply_python_override,
+    "build.stages.toolchain.python.version": _apply_python_override,
 }
 
 
@@ -182,6 +182,9 @@ def to_plain_data(value: object) -> object:
             if field.name == "runtime_pi_extensions":
                 runtime = result.setdefault("runtime", {})
                 runtime["pi-extensions"] = to_plain_data(v)
+            elif field.name == "stages":
+                build = result.setdefault("build", {})
+                build["stages"] = to_plain_data(v)
             else:
                 result[_toml_name(field.name)] = to_plain_data(v)
         return result
@@ -192,7 +195,7 @@ def to_plain_data(value: object) -> object:
                 continue
             v = getattr(value, field.name)
             # Round-trip: RustEntry.rustup is Mapping[str,ArtifactEntry] in the model
-            # but the canonical TOML path is stages.toolchain.rust.rustup.artifacts.*
+            # but the canonical TOML path is build.stages.toolchain.rust.rustup.artifacts.*
             # rustup_source / rustup_update are also sub-keys of rustup
             if field.name == "rustup":
                 result[_toml_name(field.name)] = {"artifacts": to_plain_data(v)}
