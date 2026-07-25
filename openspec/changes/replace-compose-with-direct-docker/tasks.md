@@ -119,7 +119,7 @@
 ### GREEN
 
 - [x] 6.4 Implement pure build and run renderers that return argument lists and never execute Docker.
-- [ ] 6.5 Implement a separate shell-escaped display renderer without feeding rendered strings back into subprocess execution.
+- [x] 6.5 Implement a separate shell-escaped display renderer without feeding rendered strings back into subprocess execution.
 
 ### INTROSPECT
 

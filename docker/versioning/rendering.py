@@ -536,7 +536,9 @@ def render_command_display(args: tuple[str, ...]) -> str:
     ``subprocess`` — it may contain shell metacharacters that would
     alter the executed command.
     """
-    raise NotImplementedError("render_command_display — RED phase")
+    import shlex
+
+    return shlex.join(list(args))
 
 
 def render_build_environment(
