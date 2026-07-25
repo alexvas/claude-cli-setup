@@ -859,5 +859,40 @@ class TestDevUidGid(unittest.TestCase):
         with self.assertRaises(ValueError):
             _render(dev_gid=-1)
 
+    # ── 6.6 architectural guards ──────────────────────────────────
+
+    def test_result_is_always_tuple(self):
+        """The renderer returns ``tuple[str, ...]`` — never a list,
+        never a string, never None."""
+        result = _render()
+        self.assertIsInstance(result, tuple)
+        self.assertTrue(all(isinstance(t, str) for t in result))
+
+    def test_environment_does_not_affect_output(self):
+        """Setting arbitrary environment variables MUST NOT change the
+        rendered vector.  The renderer reads only its typed inputs."""
+        import os as _os
+        baseline = _render()
+        saved = {}
+        for k in ("COMPOSE_FILE", "DOCKER_HOST", "PI_COMPOSE_PROJECT",
+                  "DOCKER_BUILDKIT", "BUILDKIT_PROGRESS"):
+            saved[k] = _os.environ.get(k)
+            _os.environ[k] = f"injected-{k}-value"
+        try:
+            self.assertEqual(_render(), baseline)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    _os.environ.pop(k, None)
+                else:
+                    _os.environ[k] = v
+
+    def test_vector_never_contains_compose(self):
+        """Guarantee that the new renderer does not produce
+        ``docker compose`` — that is the legacy path."""
+        result = _render()
+        self.assertNotIn("compose", result)
+        self.assertEqual(result[0], "docker")
+        self.assertEqual(result[1], "build")
 
 # end of red-phase tests

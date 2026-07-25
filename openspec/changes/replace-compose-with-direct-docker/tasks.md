@@ -123,7 +123,7 @@
 
 ### INTROSPECT
 
-- [ ] 6.6 Remove Compose terminology, environment interpolation, hidden dependency defaults, and subprocess coupling from the command model.
+- [x] 6.6 Remove Compose terminology, environment interpolation, hidden dependency defaults, and subprocess coupling from the command model.
 - [ ] 6.7 Confirm build arguments and runtime package inputs originate only from their validated phase projections.
 
 ### VALIDATE

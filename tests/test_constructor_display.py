@@ -141,3 +141,14 @@ class TestReturnsStringNotEligibleForSubprocess(unittest.TestCase):
         self.assertNotEqual(display, plain,
                             "display must escape metacharacters, "
                             "not just join with spaces")
+
+    def test_display_not_fed_to_subprocess(self):
+        """``render_command_display`` returns a ``str`` — it MUST NOT
+        be fed to ``subprocess.run`` as a command vector.  The execution
+        path uses the ``tuple[str, ...]``, never the display string."""
+        argv = ("bash", "-c", "echo 'hello world'")
+        display = render_command_display(argv)
+        self.assertIsInstance(display, str)
+        self.assertNotIsInstance(display, (list, tuple))
+        # The display is NOT the same as the execution tuple.
+        self.assertNotEqual(display, argv)

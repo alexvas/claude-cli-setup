@@ -800,3 +800,39 @@ def _collect_env(args: tuple[str, ...]) -> dict[str, str]:
             k, _, v = raw.partition("=")
             env[k] = v
     return env
+
+
+# ── 6.6 architectural guards ──────────────────────────────────────
+
+class TestArchitecturalGuards(unittest.TestCase):
+    """New direct-Docker renderers must not depend on process
+    environment, must return ``tuple[str, ...]``, and must never
+    emit ``docker compose``."""
+
+    def test_result_is_always_tuple(self):
+        result = _render()
+        self.assertIsInstance(result, tuple)
+        self.assertTrue(all(isinstance(t, str) for t in result))
+
+    def test_environment_does_not_affect_output(self):
+        import os as _os
+        baseline = _render()
+        saved = {}
+        for k in ("COMPOSE_FILE", "DOCKER_HOST", "PI_PROJECT_DIR",
+                  "HOME", "USER", "PI_HOME", "DOCKER_RUN_OPTS"):
+            saved[k] = _os.environ.get(k)
+            _os.environ[k] = f"injected-{k}-value"
+        try:
+            self.assertEqual(_render(), baseline)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    _os.environ.pop(k, None)
+                else:
+                    _os.environ[k] = v
+
+    def test_vector_never_contains_compose(self):
+        result = _render()
+        self.assertNotIn("compose", result)
+        self.assertEqual(result[0], "docker")
+        self.assertEqual(result[1], "run")
