@@ -37,7 +37,7 @@ Both build and launch paths will pass lists to `subprocess.run`. Explicit `--bui
 
 ### Preserve the current runtime contract with direct `docker run`
 
-The internal launcher API used by `docker-constructor.py run` will mount host `~/.pi`, mount the main and optional projects 1:1, set the main project as working directory, export `PROJECT_PATH_1..N`, add `host.docker.internal`, allocate `pi-N`, use `--rm` and interactive TTY behavior, and run the same tagged image. There is no replacement Compose abstraction or generated configuration file.
+The internal launcher API used by `docker-constructor.py run` will mount host `~/.pi`, mount the main and optional projects 1:1, set the main project as working directory, export `PROJECT_PATH_1..N`, add `host.docker.internal`, allocate `pi-N`, use `--rm` and interactive TTY behavior, and run the same tagged image. The launcher reads the persisted operational gateway and passes it explicitly as `RunRenderInputs.gateway`; `render_run_vector()` emits the corresponding `--add-host` argument and does not read `.env` or use Docker `--env-file`. There is no replacement Compose abstraction or generated configuration file.
 
 ### Project one reviewed inventory by installation phase
 

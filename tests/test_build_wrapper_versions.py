@@ -1,6 +1,6 @@
 """Tests for ``build_wrapper.py`` version resolution integration.
 
-Mock ``subprocess.run``, ``docker_rootless``, host probing, and
+Mock ``subprocess.run``, ``detect_docker_mode``, host probing, and
 confirmations.  Verify that version values come from ``rendering.py``,
 not from ``.env`` or hardcoded constants.
 """
@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from docker.networking import DockerMode, GatewayDiagnosis, ProbeResult
 from tests.versioning.support.inventory_builder import minimal_toml, write_toml
 
 
@@ -22,6 +23,47 @@ def _python_override_toml() -> str:
             "build.stages.toolchain.python": 'version = "3.14.6"',
         }
     )
+
+
+def _fake_diagnosis(**overrides):
+    """Build a mock ``GatewayDiagnosis`` for use with ``diagnose_gateway``."""
+    defaults = dict(
+        mode=DockerMode.ROOTFUL,
+        probe_port=9999,
+        probe_token="OK",
+        lan_ip=None,
+        chosen_gateway="host-gateway",
+        override_installed=False,
+        override_needed=False,
+    )
+    defaults.update(overrides)
+    d = GatewayDiagnosis(probes=(), **defaults)
+    # Attach probes and host_gateway_ip after construction (Mock may need this)
+    return d
+
+
+def _patch_detect_and_diagnose(bw):
+    """Return a context-manager stack that mocks ``detect_docker_mode``
+    and ``diagnose_gateway`` for a rootful build."""
+    stack = mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL)
+    return stack
+
+
+def _mock_diagnosis(gateway_ip="10.0.0.1"):
+    """Build a mock GatewayDiagnosis return value for diagnose_gateway."""
+    d = mock.MagicMock(spec=GatewayDiagnosis)
+    d.rootless = False
+    d.override_installed = False
+    d.override_needed = False
+    d.probe_port = 9999
+    d.probe_token = "OK"
+    d.lan_ip = None
+    d.chosen_gateway = "host-gateway"
+    d.probes = [ProbeResult("host-gateway", True, gateway_ip, "ok")]
+    type(d).host_gateway_ip = mock.PropertyMock(return_value=gateway_ip)
+    d.chosen_probe.return_value = d.probes[0]
+    return d
 
 
 class TestResolveBuildInputs(unittest.TestCase):
@@ -101,34 +143,23 @@ class TestResolveBuildInputs(unittest.TestCase):
                 env.get("EFFECTIVE_VERSIONS_FILE"),
                 ".docker-generated/docker-constructor.toml",
             )
+
     def test_operational_env_values_preserved_in_compose_env(self):
         """Values from .env (like API keys, HOST_GATEWAY_IP) must survive
         the merge — version values only override conflicting version keys."""
         import docker.build_wrapper as bw
 
-        # Simulate a loaded .env with operational values
         fake_dotenv = {
             "CUSTOM_API_KEY": "secret123",
-            "PYTHON_VERSION": "9.9.9",  # should be overridden
+            "PYTHON_VERSION": "9.9.9",
             "HOST_GATEWAY_IP": "10.0.0.1",
         }
 
-        with mock.patch.object(bw, "docker_rootless", return_value=False):
+        with mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL):
             with mock.patch.object(bw, "load_dotenv", return_value=fake_dotenv):
-                with mock.patch.object(bw, "run_diagnosis") as mock_diag:
-                    mock_diag.return_value = bw.Diagnosis(
-                        rootless=False,
-                        probe_port=9999,
-                        probe_token="OK",
-                        lan_ip=None,
-                        chosen_gateway="host-gateway",
-                    )
-                    mock_diag.return_value.probes = [
-                        bw.ProbeResult("host-gateway", True, "10.0.0.2", "ok"),
-                    ]
-                    type(mock_diag.return_value).host_gateway_ip = (
-                        mock.PropertyMock(return_value="10.0.0.2")
-                    )
+                with mock.patch("docker.build_wrapper.diagnose_gateway") as mock_diag:
+                    mock_diag.return_value = _mock_diagnosis("10.0.0.2")
 
                     with mock.patch.object(bw, "confirm", return_value=True):
                         with mock.patch("subprocess.run") as mock_run:
@@ -149,49 +180,35 @@ class TestResolveBuildInputs(unittest.TestCase):
 
                     self.assertEqual(code, 0)
 
-                    # Extract the env passed to subprocess.run
                     for call in mock_run.call_args_list:
                         args, kwargs = call
                         if "docker" in str(args[0][0]):
                             env = kwargs.get("env", {})
-                            # Operational value preserved
                             self.assertEqual(
                                 env.get("CUSTOM_API_KEY"), "secret123",
                                 ".env operational values must survive",
                             )
-                            # Version value overrides .env value
                             self.assertEqual(
                                 env.get("PYTHON_VERSION"), "3.14.6",
                                 "version value must override .env "
                                 "PYTHON_VERSION=9.9.9",
                             )
-                            # Diagnostic HOST_GATEWAY_IP overrides .env
                             self.assertEqual(
                                 env.get("HOST_GATEWAY_IP"), "10.0.0.2",
                                 "diagnosis must override .env "
                                 "HOST_GATEWAY_IP=10.0.0.1",
                             )
                             break
+
     def test_duplicate_override_rejected_not_last_value_wins(self):
         """Duplicate overrides must be rejected, not silently
         accept the last value."""
         import docker.build_wrapper as bw
 
-        with mock.patch.object(bw, "docker_rootless", return_value=False):
-            with mock.patch.object(bw, "run_diagnosis") as mock_diag:
-                mock_diag.return_value = bw.Diagnosis(
-                    rootless=False,
-                    probe_port=9999,
-                    probe_token="OK",
-                    lan_ip=None,
-                    chosen_gateway="host-gateway",
-                )
-                mock_diag.return_value.probes = [
-                    bw.ProbeResult("host-gateway", True, "10.0.0.1", "ok"),
-                ]
-                type(mock_diag.return_value).host_gateway_ip = (
-                    mock.PropertyMock(return_value="10.0.0.1")
-                )
+        with mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL):
+            with mock.patch("docker.build_wrapper.diagnose_gateway") as mock_diag:
+                mock_diag.return_value = _mock_diagnosis("10.0.0.1")
 
                 with mock.patch.object(bw, "confirm", return_value=True):
                     with mock.patch("subprocess.run") as mock_run:
@@ -221,7 +238,8 @@ class TestResolveBuildInputs(unittest.TestCase):
         not a traceback."""
         import docker.build_wrapper as bw
 
-        with mock.patch.object(bw, "docker_rootless", return_value=False):
+        with mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL):
             with mock.patch("subprocess.run") as mock_run:
                 import sys
                 import io
@@ -263,23 +281,10 @@ class TestBuildWrapperVersionIntegration(unittest.TestCase):
         resolved version environment combined with HOST_GATEWAY_IP."""
         import docker.build_wrapper as bw
 
-        # Mock everything that touches Docker or filesystem
-        with mock.patch.object(bw, "docker_rootless", return_value=False):
-            with mock.patch.object(bw, "run_diagnosis") as mock_diag:
-                mock_diag.return_value = bw.Diagnosis(
-                    rootless=False,
-                    probe_port=9999,
-                    probe_token="OK",
-                    lan_ip=None,
-                    chosen_gateway="host-gateway",
-                )
-                mock_diag.return_value.probes = [
-                    bw.ProbeResult("host-gateway", True, "10.0.0.1", "ok"),
-                ]
-                # Make host_gateway_ip property work
-                type(mock_diag.return_value).host_gateway_ip = mock.PropertyMock(
-                    return_value="10.0.0.1",
-                )
+        with mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL):
+            with mock.patch("docker.build_wrapper.diagnose_gateway") as mock_diag:
+                mock_diag.return_value = _mock_diagnosis("10.0.0.1")
 
                 with mock.patch.object(bw, "confirm", return_value=True):
                     with mock.patch("subprocess.run") as mock_run:
@@ -302,7 +307,6 @@ class TestBuildWrapperVersionIntegration(unittest.TestCase):
 
                         self.assertEqual(code, 0)
 
-                        # Verify compose_build was called with version env
                         compose_calls = [
                             c for c in mock_run.call_args_list
                             if "docker" in str(c.args) and "compose" in str(c.args)
@@ -312,8 +316,6 @@ class TestBuildWrapperVersionIntegration(unittest.TestCase):
                             "docker compose was not invoked",
                         )
 
-                        # The environment passed to subprocess.run must
-                        # include version variables from rendering.py
                         for call in mock_run.call_args_list:
                             args, kwargs = call
                             if "docker" in str(args[0][0]):
@@ -330,21 +332,10 @@ class TestBuildWrapperVersionIntegration(unittest.TestCase):
         value from inventory must win."""
         import docker.build_wrapper as bw
 
-        with mock.patch.object(bw, "docker_rootless", return_value=False):
-            with mock.patch.object(bw, "run_diagnosis") as mock_diag:
-                mock_diag.return_value = bw.Diagnosis(
-                    rootless=False,
-                    probe_port=9999,
-                    probe_token="OK",
-                    lan_ip=None,
-                    chosen_gateway="host-gateway",
-                )
-                mock_diag.return_value.probes = [
-                    bw.ProbeResult("host-gateway", True, "10.0.0.1", "ok"),
-                ]
-                type(mock_diag.return_value).host_gateway_ip = mock.PropertyMock(
-                    return_value="10.0.0.1",
-                )
+        with mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL):
+            with mock.patch("docker.build_wrapper.diagnose_gateway") as mock_diag:
+                mock_diag.return_value = _mock_diagnosis("10.0.0.1")
 
                 with mock.patch.object(bw, "confirm", return_value=True):
                     with mock.patch("subprocess.run") as mock_run:
@@ -387,21 +378,10 @@ class TestBuildWrapperVersionIntegration(unittest.TestCase):
         """build_wrapper must propagate Compose exit code."""
         import docker.build_wrapper as bw
 
-        with mock.patch.object(bw, "docker_rootless", return_value=False):
-            with mock.patch.object(bw, "run_diagnosis") as mock_diag:
-                mock_diag.return_value = bw.Diagnosis(
-                    rootless=False,
-                    probe_port=9999,
-                    probe_token="OK",
-                    lan_ip=None,
-                    chosen_gateway="host-gateway",
-                )
-                mock_diag.return_value.probes = [
-                    bw.ProbeResult("host-gateway", True, "10.0.0.1", "ok"),
-                ]
-                type(mock_diag.return_value).host_gateway_ip = mock.PropertyMock(
-                    return_value="10.0.0.1",
-                )
+        with mock.patch("docker.build_wrapper.detect_docker_mode",
+                        return_value=DockerMode.ROOTFUL):
+            with mock.patch("docker.build_wrapper.diagnose_gateway") as mock_diag:
+                mock_diag.return_value = _mock_diagnosis("10.0.0.1")
 
                 with mock.patch.object(bw, "confirm", return_value=True):
                     with mock.patch("subprocess.run") as mock_run:

@@ -145,12 +145,12 @@
 
 ### INTROSPECT
 
-- [ ] 7.6 Verify the module does not import the facade, mutate global process state implicitly, or execute Docker/systemd outside injected boundaries.
-- [ ] 7.7 Compare extracted behavior with rootful/rootless contracts and eliminate duplicated gateway logic.
+- [x] 7.6 Verify the module does not import the facade, mutate global process state implicitly, or execute Docker/systemd outside injected boundaries.
+- [x] 7.7 Compare extracted behavior with rootful/rootless contracts and eliminate duplicated gateway logic.
 
 ### VALIDATE
 
-- [ ] 7.8 Run networking and doctor API tests, dependency checks, and `git diff --check` without Docker or user systemd.
+- [x] 7.8 Run networking and doctor API tests, dependency checks, and `git diff --check` without Docker or user systemd.
 
 ## 8. Stage 8 — Read-Only Facade Commands
 

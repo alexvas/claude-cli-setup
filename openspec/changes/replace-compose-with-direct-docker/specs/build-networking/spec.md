@@ -52,7 +52,8 @@ The system SHALL make the chosen host gateway mapping available to direct Docker
 
 #### Scenario: Launching after gateway persistence
 - **WHEN** the launcher constructs a direct Docker run after a successful diagnosis
-- **THEN** it SHALL use the persisted operational gateway for Docker's host mapping
+- **THEN** it SHALL read the persisted operational gateway and pass it explicitly as `RunRenderInputs.gateway`
+- **AND** `render_run_vector()` SHALL emit that value through Docker's `--add-host` option without reading `.env` or using `--env-file`
 - **AND** it SHALL NOT expose gateway state as runtime dependency metadata
 
 ### Requirement: Expose host mapping in direct Docker runs
