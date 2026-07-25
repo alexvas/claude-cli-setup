@@ -128,7 +128,7 @@
 
 ### VALIDATE
 
-- [ ] 6.8 Run renderer tests, type/import checks, and `git diff --check` without Docker.
+- [x] 6.8 Run renderer tests, type/import checks, and `git diff --check` without Docker.
 
 ## 7. Stage 7 — Reusable Gateway Networking and Doctor APIs
 
