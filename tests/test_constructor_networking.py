@@ -30,6 +30,8 @@ from docker.networking import (
     OverrideFailure,
     OverrideState,
     ProbeResult,
+    ProcessResult,
+    ProcessRunner,
     RootlessOverridePlan,
     ServiceController,
     ServiceOperation,
@@ -46,7 +48,7 @@ from docker.networking import (
 
 # Re-use the in-memory fake from the GREEN‑phase suite so RED tests never
 # touch real disk or systemd.
-from tests.test_networking import FakeFilesystem
+from tests.test_networking import FakeFilesystem, FakeHostProbeServer
 
 
 # ---------------------------------------------------------------------------
@@ -1434,6 +1436,294 @@ class TestPersistenceRequirements(unittest.TestCase):
             update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=fs)
         self.assertIn("io error", str(ctx.exception))
         self.assertEqual(fs.read_text(self.ENV), "SAFE=1\n")
+
+
+# ======================================================================
+# 7.3 — Fake-boundary contracts (requirements 24–27)
+# ======================================================================
+
+
+class TestProcessResultDTO(unittest.TestCase):
+    """Requirement 25: ``ProcessResult`` structured fake outcome."""
+
+    def test_stores_argv_as_tuple(self):
+        pr = ProcessResult(
+            argv=("docker", "info"), return_code=0,
+            stdout="ok", stderr="",
+        )
+        self.assertEqual(pr.argv, ("docker", "info"))
+        self.assertIsInstance(pr.argv, tuple)
+
+    def test_stores_return_code(self):
+        pr = ProcessResult(
+            argv=("x",), return_code=1, stdout="", stderr="err",
+        )
+        self.assertEqual(pr.return_code, 1)
+
+    def test_stores_stdout_and_stderr_separately(self):
+        pr = ProcessResult(
+            argv=("x",), return_code=0,
+            stdout="out", stderr="err",
+        )
+        self.assertEqual(pr.stdout, "out")
+        self.assertEqual(pr.stderr, "err")
+
+    def test_is_frozen(self):
+        pr = ProcessResult(
+            argv=("x",), return_code=0, stdout="", stderr="",
+        )
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            pr.return_code = 5  # type: ignore[misc]
+
+
+class TestProcessRunnerProtocol(unittest.TestCase):
+    """Requirement 24: ``ProcessRunner`` exists and is injectable."""
+
+    def test_default_runner_has_run_method(self):
+        runner = ProcessRunner()
+        self.assertTrue(callable(runner.run))
+
+    def test_run_accepts_argv_list_and_returns_process_result(self):
+        class _Fake(ProcessRunner):
+            def run(self, argv):
+                return ProcessResult(
+                    argv=tuple(argv), return_code=0,
+                    stdout="fake", stderr="",
+                )
+        result = _Fake().run(["echo", "hello"])
+        self.assertIsInstance(result, ProcessResult)
+        self.assertEqual(result.argv, ("echo", "hello"))
+
+
+class TestFakeBoundaryCoverage(unittest.TestCase):
+    """Requirements 24, 26, 27: every side-effect is behind an
+    injectable boundary so tests never touch real Docker, systemd,
+    or network."""
+
+    def test_filesystem_boundary_exists(self):
+        """``Filesystem`` covers all disk I/O in the module."""
+        self.assertTrue(hasattr(Filesystem, "is_file"))
+        self.assertTrue(hasattr(Filesystem, "read_text"))
+        self.assertTrue(hasattr(Filesystem, "write_text"))
+        self.assertTrue(hasattr(Filesystem, "mkdir"))
+        self.assertTrue(hasattr(Filesystem, "copy"))
+        self.assertTrue(hasattr(Filesystem, "rename"))
+        self.assertTrue(hasattr(Filesystem, "delete"))
+        self.assertTrue(hasattr(Filesystem, "home"))
+
+    def test_service_controller_boundary_exists(self):
+        """``ServiceController`` covers systemctl calls."""
+        self.assertTrue(hasattr(ServiceController, "daemon_reload"))
+        self.assertTrue(hasattr(ServiceController, "restart"))
+
+    def test_clock_boundary_exists(self):
+        """``SystemClock`` covers sleep and timestamp."""
+        self.assertTrue(hasattr(SystemClock, "sleep"))
+        self.assertTrue(hasattr(SystemClock, "timestamp"))
+
+    def test_process_runner_boundary_exists(self):
+        """``ProcessRunner`` covers subprocess execution."""
+        self.assertTrue(hasattr(ProcessRunner, "run"))
+
+    def test_probe_server_injectable(self):
+        """``HostProbeServer`` can be replaced via ``_host_probe_factory``."""
+        from docker.networking import HostProbeServer
+        self.assertTrue(callable(HostProbeServer))
+
+    def test_no_test_imports_subprocess_run_directly(self):
+        """Requirement 26: this test file must not call ``subprocess.run``."""
+        import ast
+        with open(__file__) as f:
+            tree = ast.parse(f.read())
+
+        subprocess_calls: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if (isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "subprocess"
+                        and node.func.attr == "run"):
+                    subprocess_calls.append(f"line {node.lineno}")
+        self.assertEqual(
+            subprocess_calls, [],
+            f"tests must not call subprocess.run directly: {subprocess_calls}",
+        )
+
+    def test_no_network_imports_in_tests(self):
+        """Requirement 27: this test file must not import socket or
+        urllib — networking is behind ``_run`` / ``_host_probe_factory``."""
+        import ast
+        with open(__file__) as f:
+            tree = ast.parse(f.read())
+
+        forbidden = {"socket", "urllib", "urllib.request", "http.client"}
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in forbidden:
+                        violations.append(f"import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and node.module in forbidden:
+                    violations.append(f"from {node.module} import ...")
+        self.assertEqual(
+            violations, [],
+            f"tests must not import network libraries: {violations}",
+        )
+
+
+# ======================================================================
+# 7.3 — Single ProcessRunner injection across all public APIs
+# ======================================================================
+
+# A deterministic fake ProcessRunner that every API-injection test
+# shares.  It consumes canned ``ProcessResult`` values in order so
+# callers can model multi-step orchestration (e.g. ``docker info``
+# followed by ``docker run --add-host ...``).
+
+
+class _FakeProcessRunner(ProcessRunner):
+    """ProcessRunner that consumes canned responses in sequence."""
+
+    def __init__(self, responses: list[ProcessResult]):
+        self._responses = list(responses)  # consumed in order (pop(0))
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def run(self, argv: list[str]) -> ProcessResult:
+        self.calls.append(("run", tuple(argv)))
+        if self._responses:
+            return self._responses.pop(0)
+        return ProcessResult(
+            argv=tuple(argv), return_code=1,
+            stdout="", stderr="no more canned responses",
+        )
+
+
+class TestProcessRunnerInjectionDetectDockerMode(unittest.TestCase):
+    """Requirement 24: ``detect_docker_mode`` must accept ``_runner``."""
+
+    def test_rootful_via_injected_process_runner(self):
+        runner = _FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "info"), return_code=0,
+                stdout="Server Mode: default", stderr="",
+            ),
+        ])
+        # RED: _runner not yet accepted, expect TypeError
+        mode = detect_docker_mode(_runner=runner)
+        self.assertIs(mode, DockerMode.ROOTFUL)
+        self.assertTrue(runner.calls)
+
+    def test_rootless_via_injected_process_runner(self):
+        runner = _FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "info"), return_code=0,
+                stdout="rootless: yes", stderr="",
+            ),
+        ])
+        mode = detect_docker_mode(_runner=runner)
+        self.assertIs(mode, DockerMode.ROOTLESS)
+
+    def test_docker_not_found_via_injected_process_runner(self):
+        runner = _FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "info"), return_code=1,
+                stdout="", stderr="command not found",
+            ),
+        ])
+        with self.assertRaises(DockerDetectionError):
+            detect_docker_mode(_runner=runner)
+
+
+class TestProcessRunnerInjectionDetectLanIp(unittest.TestCase):
+    """Requirement 24: ``detect_lan_ip`` must accept ``_runner``."""
+
+    def test_returns_parsed_ip_via_injected_runner(self):
+        runner = _FakeProcessRunner([
+            ProcessResult(
+                argv=("hostname", "-I"), return_code=0,
+                stdout="10.0.0.42 ", stderr="",
+            ),
+        ])
+        # RED: _runner not yet accepted
+        ip = detect_lan_ip(_runner=runner)
+        self.assertEqual(ip, "10.0.0.42")
+
+
+class TestProcessRunnerInjectionProbeGateway(unittest.TestCase):
+    """Requirement 24: ``probe_gateway`` must accept ``_runner``."""
+
+    def test_probe_uses_injected_runner_for_docker_run(self):
+        runner = _FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "run", "--rm", "--add-host",
+                      "host.docker.internal:10.0.0.1", "alpine/socat:latest",
+                      "sh", "-c", "..."),
+                return_code=0,
+                stdout="RESOLVED_IP=10.0.0.1\nPROBE_OK",
+                stderr="",
+            ),
+        ])
+        # RED: _runner not yet accepted
+        result = probe_gateway("10.0.0.1", 12345, "secret", _runner=runner)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.candidate, "10.0.0.1")
+        self.assertEqual(result.resolved_ip, "10.0.0.1")
+
+
+class TestProcessRunnerInjectionDiagnoseGateway(unittest.TestCase):
+    """Requirement 24: ``diagnose_gateway`` must accept ``_runner``."""
+
+    def test_diagnose_plumbs_runner_through_full_orchestration(self):
+        # diagnose_gateway must thread a single _runner through:
+        #   1. detect_docker_mode  -> docker info
+        #   2. detect_lan_ip       -> hostname -I
+        #   3. probe_gateway × N   -> docker run --add-host ...
+        runner = _FakeProcessRunner([
+            # Call 1: detect_docker_mode
+            ProcessResult(
+                argv=("docker", "info"), return_code=0,
+                stdout="rootless: yes", stderr="",
+            ),
+            # Call 2: detect_lan_ip
+            ProcessResult(
+                argv=("hostname", "-I"), return_code=0,
+                stdout="10.0.0.42", stderr="",
+            ),
+            # Call 3: probe_gateway (docker run --add-host ...)
+            ProcessResult(
+                argv=("docker", "run", "--rm", "--add-host",
+                      "host.docker.internal:172.17.0.1",
+                      "alpine/socat:latest", "sh", "-c", "..."),
+                return_code=0,
+                stdout="RESOLVED_IP=172.17.0.1\nPROBE_OK",
+                stderr="",
+            ),
+        ])
+        # RED: _runner not yet accepted
+        diag = diagnose_gateway(
+            _runner=runner,
+            _host_probe_factory=FakeHostProbeServer,
+        )
+        self.assertIsInstance(diag, GatewayDiagnosis)
+        self.assertIs(diag.mode, DockerMode.ROOTLESS)
+        self.assertEqual(diag.lan_ip, "10.0.0.42")
+
+
+class TestProcessRunnerInjectionServiceController(unittest.TestCase):
+    """Requirement 24: ``ServiceController`` must accept ``_runner``."""
+
+    def test_service_controller_uses_injected_runner(self):
+        runner = _FakeProcessRunner([
+            ProcessResult(
+                argv=("systemctl", "--user", "daemon-reload"),
+                return_code=0, stdout="", stderr="",
+            ),
+        ])
+        # RED: __init__ does not accept _runner yet
+        svc = ServiceController(_runner=runner)
+        svc.daemon_reload()
+        self.assertTrue(runner.calls)
 
 
 if __name__ == "__main__":

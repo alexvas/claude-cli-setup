@@ -136,7 +136,7 @@
 
 - [x] 7.1 Add failing tests for rootful/rootless detection, candidate ordering, successful and failed probes, and structured diagnosis results.
 - [x] 7.2 Add failing tests for rootless override planning/application, explicit consent, existing operational gateway persistence, and process/filesystem/service failures.
-- [ ] 7.3 Use injected process, filesystem, HTTP-probe, and service-control fakes so tests require neither Docker nor systemd.
+- [x] 7.3 Use injected process, filesystem, HTTP-probe, and service-control fakes so tests require neither Docker nor systemd.
 
 ### GREEN
 

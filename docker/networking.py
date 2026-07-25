@@ -238,6 +238,45 @@ class SystemClock:
 
 
 # ---------------------------------------------------------------------------
+# Process-runner boundary (requirement 24)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    """Explicit fake-process outcome — never wraps a live ``subprocess``.
+
+    Tests construct these directly; the production ``ProcessRunner``
+    returns them so every caller (detection, probing, LAN-IP) can be
+    tested with determistic outcomes.
+    """
+    argv: tuple[str, ...]
+    return_code: int
+    stdout: str
+    stderr: str
+
+
+class ProcessRunner:
+    """Injectable process-execution boundary.
+
+    Subclass and override ``run`` for in-memory fakes that return
+    ``ProcessResult`` instead of invoking a real subprocess.
+    """
+
+    def run(self, argv: list[str]) -> ProcessResult:
+        """Execute *argv* and return a structured result."""
+        proc = subprocess.run(
+            argv, text=True, capture_output=True, check=False,
+        )
+        return ProcessResult(
+            argv=tuple(argv),
+            return_code=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Host probe server
 # ---------------------------------------------------------------------------
 
