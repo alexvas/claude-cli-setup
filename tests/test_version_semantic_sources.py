@@ -403,6 +403,9 @@ class TestStaleVersionTomlReferences(unittest.TestCase):
     change that documents the migration."""
 
     _STALE_PATTERN = re.compile(r"\bversions\.toml\b")
+    _NEGATIVE_PATTERN = re.compile(
+        r"SHALL\s+(?:NOT\s+|reject\b)", re.IGNORECASE
+    )
 
     def _scan_files(self) -> list[pathlib.Path]:
         """Yield every file under scan roots that exists."""
@@ -459,6 +462,10 @@ class TestStaleVersionTomlReferences(unittest.TestCase):
                     path.read_text(encoding="utf-8").splitlines(), 1
                 ):
                     if not self._STALE_PATTERN.search(line):
+                        continue
+                    # Negative clauses (SHALL NOT fall back, SHALL reject) are
+                    # intentional and describe the contract being enforced here.
+                    if self._NEGATIVE_PATTERN.search(line):
                         continue
                     if allowlisted:
                         continue

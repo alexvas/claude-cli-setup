@@ -299,11 +299,76 @@ class CacheConfig:
 
 
 @dataclass(frozen=True)
+class BuildInventory:
+    """Immutable container for build-phase dependencies."""
+    stages: Stages
+
+    def __post_init__(self):
+        # stages is already a frozen dataclass, so it is immutable
+        # at the top level.  This post_init is a guardrail for
+        # Stage 2 when the field becomes the canonical name.
+        if not isinstance(self.stages, Stages):
+            raise TypeError(
+                f"BuildInventory.stages must be a Stages instance, "
+                f"got {type(self.stages).__name__}"
+            )
+
+
+@dataclass(frozen=True)
+class RuntimeInventory:
+    """Immutable container for runtime-phase Pi extensions."""
+    pi_extensions: Mapping[str, PiExtensionEntry]
+
+    def __post_init__(self):
+        # Always copy into a fresh dict and wrap in MappingProxyType.
+        # Never trust an incoming MappingProxyType backed by a still-
+        # reachable mutable dict.
+        object.__setattr__(
+            self, "pi_extensions",
+            MappingProxyType(dict(self.pi_extensions)),
+        )
+
+
+@dataclass(frozen=True)
 class Inventory:
+    # Field names are intentionally the legacy names stages /
+    # runtime_pi_extensions so existing consumers (construction,
+    # dataclasses.replace, serialization, CLI, effective, rendering,
+    # orchestration, updates, build-wrapper) continue to work without
+    # migration.  The canonical build / runtime properties below
+    # satisfy the Stage‑1 typed‑container contract.  Field names are
+    # migrated to build / runtime in Stage 2 together with the
+    # repository TOML and all fixtures.
     schema: int
     stages: Stages
     runtime_pi_extensions: Mapping[str, PiExtensionEntry]
     cache: CacheConfig | None = None
+
+    def __post_init__(self):
+        # Normalize runtime_pi_extensions so direct construction
+        # (bypassing load_inventory) cannot expose mutable state.
+        # Uses the same logic as RuntimeInventory.__post_init__.
+        object.__setattr__(
+            self, "runtime_pi_extensions",
+            MappingProxyType(dict(self.runtime_pi_extensions)),
+        )
+
+    # ------------------------------------------------------------------
+    # Stage‑1 canonical accessors (thin typed wrappers)
+    # ------------------------------------------------------------------
+    # These satisfy the contract that inventory.build and
+    # inventory.runtime return BuildInventory / RuntimeInventory
+    # without changing any existing call site.
+
+    @property
+    def build(self) -> BuildInventory:
+        """Canonical phase container for build-stage dependencies."""
+        return BuildInventory(stages=self.stages)
+
+    @property
+    def runtime(self) -> RuntimeInventory:
+        """Canonical phase container for runtime Pi extensions."""
+        return RuntimeInventory(pi_extensions=self.runtime_pi_extensions)
 
 
 # ---------------------------------------------------------------------------

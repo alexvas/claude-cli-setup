@@ -26,6 +26,7 @@ if __package__:
     from .versioning.model import (
         ArtifactEntry,
         BaseStage,
+        BuildInventory,
         DockerRegistrySource,
         DockerRegistryUpdate,
         FdPrebuiltStage,
@@ -48,6 +49,7 @@ if __package__:
         PyPiUpdate,
         PythonEntry,
         RtkPrebuiltStage,
+        RuntimeInventory,
         RuntimeStage,
         RustChannelSource,
         RustChannelUpdate,
@@ -78,6 +80,7 @@ else:
     from versioning.model import (  # type: ignore[import-not-found]
         ArtifactEntry,
         BaseStage,
+        BuildInventory,
         DockerRegistrySource,
         DockerRegistryUpdate,
         FdPrebuiltStage,
@@ -100,6 +103,7 @@ else:
         PyPiUpdate,
         PythonEntry,
         RtkPrebuiltStage,
+        RuntimeInventory,
         RuntimeStage,
         RustChannelSource,
         RustChannelUpdate,

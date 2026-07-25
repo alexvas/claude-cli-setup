@@ -759,9 +759,45 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     if schema != 1:
         raise InventoryError(f"schema: unsupported version {schema}, only 1 is supported")
 
-    # --- top-level unknown keys ---
-    known_top = {"schema", "stages", "runtime", "cache"}
-    _check_unknown_keys(raw, (), allowed=known_top)
+    # --- detect canonical or legacy layout ---
+    has_build = "build" in raw
+    has_stages = "stages" in raw
+
+    if has_build and has_stages:
+        raise InventoryError(
+            "cannot use both 'build' and 'stages' top-level keys; "
+            "move all content under [build.stages]"
+        )
+
+    if has_build:
+        # Canonical layout — build + runtime are required
+        known_top = {"schema", "build", "runtime", "cache"}
+        _check_unknown_keys(raw, (), allowed=known_top)
+
+        if "runtime" not in raw:
+            raise InventoryError("runtime: missing required key")
+        # runtime must be a table, not a scalar
+        if not isinstance(raw["runtime"], dict):
+            raise InventoryError(
+                f"runtime: expected table, got {type(raw['runtime']).__name__}"
+            )
+
+        build_raw = r.tbl(("build",))
+        _check_unknown_keys(build_raw, ("build",), allowed={"stages"})
+        if "stages" not in build_raw:
+            raise InventoryError("build.stages: missing required key")
+
+        # Unwrap build.stages → top-level stages for internal processing
+        raw = dict(raw)
+        raw["stages"] = build_raw["stages"]
+        del raw["build"]
+        r = _PathReader(raw)
+    elif has_stages:
+        # Legacy layout — internal adapter, removed in Stage 2
+        known_top = {"schema", "stages", "runtime", "cache"}
+        _check_unknown_keys(raw, (), allowed=known_top)
+    else:
+        raise InventoryError("build: missing required key — expected [build.stages] table")
 
     # --- base ---
     _check_unknown_keys(r.tbl(("stages",)), ("stages",))
