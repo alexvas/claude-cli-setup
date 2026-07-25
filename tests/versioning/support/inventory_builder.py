@@ -163,8 +163,7 @@ sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
 [runtime.pi-extensions.pi-read.source]
 {g("runtime.pi-extensions.pi-read.source", 'type = "npm"\npackage = "@arcanemachine/pi-read"')}
 
-[runtime.pi-extensions.pi-read.artifact]
-{g("runtime.pi-extensions.pi-read.artifact", 'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"\nintegrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="')}
+{g("runtime.pi-extensions.pi-read.artifacts", '[runtime.pi-extensions.pi-read.artifacts."0.2.0"]\nurl = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"\nintegrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="')}
 
 [runtime.pi-extensions.pi-read.update]
 {g("runtime.pi-extensions.pi-read.update", 'provider = "npm"\nstable_only = true')}
@@ -182,7 +181,7 @@ version = "0.9.1"
 type = "npm"
 package = "@llblab/pi-codex-usage"
 
-[runtime.pi-extensions.pi-codex-usage.artifact]
+[runtime.pi-extensions.pi-codex-usage.artifacts."0.9.1"]
 url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz"
 integrity = "sha512-r5iMe57KgKPWSvx5/fKCwT+s/haysaEs40OMdTtisAFR1njppvNAhlgNOBl7+nDm6j88XTee3m0Rp3s/kinIQg=="
 
@@ -205,7 +204,7 @@ version = "1.0.0"
 type = "npm"
 package = "pi-proxy"
 
-[runtime.pi-extensions.pi-proxy.artifact]
+[runtime.pi-extensions.pi-proxy.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
 integrity = "sha512-UHr/AQV2S0rISwRsD5jmKAo9ZQlZxU9Csh72sGYYDhbkSo44P+XzfRG96OuYYy2G3Iis0a75w3Cp9KYtjpbZxw=="
 

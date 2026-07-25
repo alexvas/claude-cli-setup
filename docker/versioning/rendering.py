@@ -258,6 +258,20 @@ def compose_command(args: Sequence[str]) -> tuple[str, ...]:
 # Deterministic TOML serialization
 # ---------------------------------------------------------------------------
 
+_TOML_BARE_KEY_RE = __import__("re").compile(r'^[A-Za-z0-9_-]+$')
+
+
+def _toml_key(k: str) -> str:
+    """Quote *k* if it contains characters not allowed in TOML bare keys.
+
+    Uses TOML basic-string quoting with proper escape of backslash and
+    double-quote characters.
+    """
+    if _TOML_BARE_KEY_RE.match(k):
+        return k
+    escaped = k.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
 
 def _write_toml(fh: object, data: object, *, _prefix: str = "") -> None:
     """Write plain-data *data* as deterministically-ordered TOML.
@@ -307,6 +321,7 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
 
     # --- scalars ---
     for k, v in scalars:
+        qk = _toml_key(k)
         if isinstance(v, dict):
             # Inline table — omit None values (TOML has no null literal)
             parts = []
@@ -314,40 +329,42 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
                 sv = v[sk]
                 if sv is None:
                     continue
-                parts.append(f"{sk} = {_toml_value(sv)}")
+                parts.append(f"{_toml_key(sk)} = {_toml_value(sv)}")
             if parts:
-                fh.write(f"{k} = {{ ")
+                fh.write(f"{qk} = {{ ")
                 fh.write(", ".join(parts))
                 fh.write(" }\n")
             # else: empty inline table → omit entirely
         elif isinstance(v, str):
-            fh.write(f"{k} = {_toml_str(v)}\n")
+            fh.write(f"{qk} = {_toml_str(v)}\n")
         elif isinstance(v, bool):
-            fh.write(f"{k} = {'true' if v else 'false'}\n")
+            fh.write(f"{qk} = {'true' if v else 'false'}\n")
         elif isinstance(v, (int, float)):
-            fh.write(f"{k} = {v}\n")
+            fh.write(f"{qk} = {v}\n")
         elif v is None:
-            fh.write(f"# {k} = <absent>\n")
+            fh.write(f"# {qk} = <absent>\n")
         else:
-            fh.write(f"{k} = {_toml_str(str(v))}\n")
+            fh.write(f"{qk} = {_toml_str(str(v))}\n")
 
     # --- nested dicts (table headers) ---
     # Emit arrays BEFORE nested tables so that ``components = [...]``
     # lines are not captured into a preceding ``[subsection]``.
     for k, v in arrays:
-        full = f"{prefix}.{k}" if prefix else str(k)
+        qk = _toml_key(k)
+        full = f"{prefix}.{qk}" if prefix else qk
         if all(isinstance(i, dict) for i in v):
             for item in v:
                 fh.write(f"\n[[{full}]]\n")
                 _write_inline_dict(fh, item)
         else:
-            fh.write(f"{k} = [")
+            fh.write(f"{qk} = [")
             fh.write(", ".join(_toml_value(i) for i in v))
             fh.write("]\n")
 
     # --- nested dicts (table headers) ---
     for k, v in nested:
-        full = f"{prefix}.{k}" if prefix else str(k)
+        qk = _toml_key(k)
+        full = f"{prefix}.{qk}" if prefix else qk
         fh.write(f"\n[{full}]\n")
         _write_dict(fh, v, full)
 

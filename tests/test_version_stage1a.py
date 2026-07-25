@@ -387,7 +387,8 @@ class TestPiExtensionContract(unittest.TestCase):
         toml = minimal_toml(
             **{
                 "runtime.pi-extensions.pi-read": 'version = "0.3.0-beta.1"',
-                "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_0_3_0,
+                "runtime.pi-extensions.pi-read.artifacts":
+                    '[runtime.pi-extensions.pi-read.artifacts."0.3.0-beta.1"]\n' + _EXT_ARTIFACT_0_3_0,
             }
         )
         path = write_toml(toml)
@@ -1073,7 +1074,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_extension_accepts_x_y_z(self):
         toml = minimal_toml(**{
             "runtime.pi-extensions.pi-read": 'version = "1.2.3"\n',
-            "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_1_2_3,
+            "runtime.pi-extensions.pi-read.artifacts":
+                '[runtime.pi-extensions.pi-read.artifacts."1.2.3"]\n' + _EXT_ARTIFACT_1_2_3,
         })
         path = write_toml(toml)
         try:
@@ -1085,7 +1087,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_extension_accepts_semver_prerelease(self):
         toml = minimal_toml(**{
             "runtime.pi-extensions.pi-read": 'version = "0.2.0-beta.1"\n',
-            "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_0_2_0,
+            "runtime.pi-extensions.pi-read.artifacts":
+                '[runtime.pi-extensions.pi-read.artifacts."0.2.0-beta.1"]\n' + _EXT_ARTIFACT_0_2_0,
         })
         path = write_toml(toml)
         try:
@@ -1097,7 +1100,8 @@ class TestExactVersionValidation(unittest.TestCase):
     def test_extension_accepts_build_suffix(self):
         toml = minimal_toml(**{
             "runtime.pi-extensions.pi-read": 'version = "1.0.0+build.1"\n',
-            "runtime.pi-extensions.pi-read.artifact": _EXT_ARTIFACT_1_0_0,
+            "runtime.pi-extensions.pi-read.artifacts":
+                '[runtime.pi-extensions.pi-read.artifacts."1.0.0+build.1"]\n' + _EXT_ARTIFACT_1_0_0,
         })
         path = write_toml(toml)
         try:

@@ -47,8 +47,10 @@ graph TD
 
 #### Scenario: Describing runtime npm extensions
 - **WHEN** the runtime section declares a selected Pi extension
-- **THEN** its reviewed source entry SHALL contain package, version, artifact/integrity, update, override, and validation metadata required by host and runtime workflows
-- **AND** its effective runtime DTO SHALL omit host-only update and override metadata
+- **THEN** its reviewed source entry SHALL contain package, selected default version, a reviewed artifact catalog keyed by exact version, update, override, and validation metadata required by host and runtime workflows
+- **AND** every catalog entry SHALL contain the exact artifact identity and integrity for its version key
+- **AND** the selected default version SHALL have a matching catalog entry
+- **AND** its effective runtime DTO SHALL contain only the selected artifact and SHALL omit unselected catalog entries plus host-only update and override metadata
 
 #### Scenario: Building with default selections
 - **WHEN** the canonical build command runs without overrides
@@ -68,7 +70,10 @@ graph TD
 
 #### Scenario: Preparing runtime dependency configuration
 - **WHEN** a runtime container is launched with default selections or supported runtime overrides
-- **THEN** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, artifact identity, checksum/integrity, and validation metadata
+- **THEN** default resolution SHALL select the reviewed artifact catalog entry whose exact version key matches the selected default version
+- **AND** override resolution SHALL validate the requested version against reviewed policy and select only the catalog entry with that exact version key
+- **AND** an override with no matching reviewed catalog entry SHALL be rejected before projection creation without network discovery, URL synthesis, or reuse of another version's integrity
+- **AND** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, selected artifact identity, checksum/integrity, and validation metadata
 - **AND** it SHALL mount that projection read-only at `/run/pi-cli/docker-constructor.runtime.toml`
 - **AND** neither `docker-constructor.toml` nor an effective build projection SHALL be copied or mounted into the container
 

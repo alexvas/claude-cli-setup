@@ -30,6 +30,7 @@ from .model import (
     GitHubReleaseUpdate,
     GitRefUpdate,
     GitSource,
+    InvalidArtifactKey,
     Inventory,
     NodeEntry,
     NpmArtifact,
@@ -60,6 +61,9 @@ from .model import (
     UvEntry,
     UvPythonSource,
     UvPythonUpdate,
+    _MOVING_VERSION_TAGS,
+    _SEMVER_RE,
+    _validate_npm_tarball_url as _validate_npm_tarball_url_model,
 )
 
 
@@ -70,43 +74,11 @@ from .model import (
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 NODE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
-_MOVING_VERSION_TAGS = frozenset({"latest", "stable", "next", "dev", "canary", "nightly"})
-
-# Semver pattern for extensions: X.Y.Z with optional prerelease/build.
-# Must match https://semver.org — rejects malformed suffixes like "-!!!" or "-01".
-_SEMVER_RE = re.compile(
-    r"""
-    ^
-    (0|[1-9]\d*)               # major
-    \.
-    (0|[1-9]\d*)               # minor
-    \.
-    (0|[1-9]\d*)               # patch
-    (?:
-        -                      # prerelease hyphen
-        (                      # prerelease identifiers
-            (?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)
-            (?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*
-        )
-    )?
-    (?:
-        \+                     # build plus sign
-        (                      # build identifiers
-            [0-9a-zA-Z-]+
-            (?:\.[0-9a-zA-Z-]+)*
-        )
-    )?
-    $
-    """,
-    re.VERBOSE,
-)
-
 VERSION_STRICT_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 PREBUILT_VERSION_RE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
 # Moving version tags forbidden everywhere (Rust selectors, npm tags, etc.)
 _MOVING_RUST_SELECTORS = frozenset({"stable", "beta", "nightly"})
-_MOVING_VERSION_TAGS = frozenset({"latest", "stable", "next", "dev", "canary", "nightly"})
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +327,36 @@ def _validate_extension_version(version: str, path: str) -> None:
         )
 
 
+def _validate_artifact_catalog_key(key: str, path: str) -> None:
+    """Reject artifact-catalog keys that are moving tags or invalid semver.
+
+    Unlike *_validate_extension_version* (which validates the default
+    ``version`` field), this validates every key inside the
+    ``[runtime.pi-extensions.<name>.artifacts]`` table so that malformed
+    entries never escape to the model layer.
+    """
+    lower = key.lower()
+    if lower in _MOVING_VERSION_TAGS:
+        raise InventoryError(
+            f"{path}: moving version tag {key!r} is not allowed"
+        )
+    if not _SEMVER_RE.match(key):
+        raise InventoryError(
+            f"{path}: invalid semver version {key!r}"
+        )
+
+
+def _validate_npm_tarball_url(
+    url: str, package: str, version_key: str, path: str
+) -> None:
+    """Thin wrapper — calls model validator, maps ``InvalidArtifactKey``
+    to ``InventoryError`` with the canonical TOML path."""
+    try:
+        _validate_npm_tarball_url_model(url, package, version_key)
+    except InvalidArtifactKey as exc:
+        raise InventoryError(f"{path}.url: {exc}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Runtime extension artifact & validation helpers
 # ---------------------------------------------------------------------------
@@ -365,67 +367,77 @@ _INTEGRITY_RE = re.compile(r"^sha(256|384|512)-([A-Za-z0-9+/]+=*)$")
 _INTEGRITY_LENGTHS: dict[str, int] = {"256": 32, "384": 48, "512": 64}
 
 
-def _load_extension_artifact(
-    r: _RawReader, ext_path: tuple[str, ...], package: str, version: str
-) -> NpmArtifact:
-    """Load and validate [runtime.pi-extensions.<name>.artifact]."""
+def _load_extension_artifacts(
+    r: _RawReader, ext_path: tuple[str, ...], package: str
+) -> Mapping[str, NpmArtifact]:
+    """Load and validate [runtime.pi-extensions.<name>.artifacts] sub-table."""
     path_dot = ".".join(ext_path)
     try:
-        artifact_raw = r.tbl(ext_path + ("artifact",))
+        artifacts_table = r.tbl(ext_path + ("artifacts",))
     except InventoryError as e:
         if "missing" in str(e).lower():
             raise InventoryError(
-                f"{path_dot}.artifact: missing required section"
+                f"{path_dot}.artifacts: missing required section"
             ) from e
         raise
 
-    url = require_string(r.root, ext_path + ("artifact", "url"))
-    if not url.startswith("https://"):
+    if not artifacts_table:
         raise InventoryError(
-            f"{path_dot}.artifact.url: must use HTTPS, got {url!r}"
+            f"{path_dot}.artifacts: must contain at least one version entry"
         )
 
-    integrity = require_string(r.root, ext_path + ("artifact", "integrity"))
-    m = _INTEGRITY_RE.match(integrity)
-    if not m:
-        raise InventoryError(
-            f"{path_dot}.artifact.integrity: "
-            f"expected sha256-/sha384-/sha512- with base64, got {integrity!r}"
+    result: dict[str, NpmArtifact] = {}
+    for version_key, artifact_raw in artifacts_table.items():
+        if not isinstance(artifact_raw, dict):
+            raise InventoryError(
+                f"{path_dot}.artifacts.{version_key}: expected table"
+            )
+        _validate_artifact_catalog_key(
+            version_key, f"{path_dot}.artifacts.{version_key}"
+        )
+        _check_unknown_keys(
+            artifact_raw,
+            ext_path + ("artifacts", version_key),
         )
 
-    algorithm = m.group(1)
-    payload = m.group(2)
-    try:
-        decoded = base64.b64decode(payload, validate=True)
-    except Exception as exc:
-        raise InventoryError(
-            f"{path_dot}.artifact.integrity: invalid base64 ({exc})"
-        ) from exc
+        url = require_string(r.root, ext_path + ("artifacts", version_key, "url"))
 
-    expected_len = _INTEGRITY_LENGTHS[algorithm]
-    if len(decoded) != expected_len:
-        raise InventoryError(
-            f"{path_dot}.artifact.integrity: "
-            f"expected {expected_len} bytes for sha{algorithm}, "
-            f"got {len(decoded)}"
+        integrity = require_string(r.root, ext_path + ("artifacts", version_key, "integrity"))
+        m = _INTEGRITY_RE.match(integrity)
+        if not m:
+            raise InventoryError(
+                f"{path_dot}.artifacts.{version_key}.integrity: "
+                f"expected sha256-/sha384-/sha512- with base64, got {integrity!r}"
+            )
+
+        algorithm = m.group(1)
+        payload = m.group(2)
+        try:
+            decoded = base64.b64decode(payload, validate=True)
+        except Exception as exc:
+            raise InventoryError(
+                f"{path_dot}.artifacts.{version_key}.integrity: invalid base64 ({exc})"
+            ) from exc
+
+        expected_len = _INTEGRITY_LENGTHS[algorithm]
+        if len(decoded) != expected_len:
+            raise InventoryError(
+                f"{path_dot}.artifacts.{version_key}.integrity: "
+                f"expected {expected_len} bytes for sha{algorithm}, "
+                f"got {len(decoded)}"
+            )
+
+        # Verify the URL is an exact npm registry tarball path:
+        #   https://registry.npmjs.org/<package>/-/<pkg_name>-<version>.tgz
+        # Substring matching is not enough — the version must appear as the
+        # tarball filename suffix, not in a query string or unrelated path.
+        _validate_npm_tarball_url(
+            url, package, version_key, f"{path_dot}.artifacts.{version_key}",
         )
 
-    # Verify package name and version appear in URL as a coarse consistency check
-    expected_stem = f"/{package}/-/"
-    if expected_stem not in url:
-        raise InventoryError(
-            f"{path_dot}.artifact.url: expected npm tarball for {package!r}, "
-            f"got {url!r}"
-        )
-    # Strip build metadata (e.g. "1.0.0+build.1" → "1.0.0") for URL matching;
-    # npm tarball URLs never include build metadata.
-    base_version = version.split("+", 1)[0]
-    if base_version not in url:
-        raise InventoryError(
-            f"{path_dot}.artifact.url: URL does not contain version {base_version!r}"
-        )
+        result[version_key] = NpmArtifact(url=url, integrity=integrity)
 
-    return NpmArtifact(url=url, integrity=integrity)
+    return MappingProxyType(result)
 
 
 
@@ -549,9 +561,9 @@ _register(("build", "stages", "runtime", "oh-my-zsh", "update"), "provider", "re
 
 # Runtime pi-extensions (dynamic — allowed keys defined per entry)
 _register(("runtime",), "pi-extensions")
-_register(("runtime", "pi-extensions", "__ANY__"), "version", "source", "update", "artifact", "validation", "override")
+_register(("runtime", "pi-extensions", "__ANY__"), "version", "source", "update", "artifacts", "validation", "override")
 _register(("runtime", "pi-extensions", "__ANY__", "source"), "type", "package")
-_register(("runtime", "pi-extensions", "__ANY__", "artifact"), "url", "integrity")
+_register(("runtime", "pi-extensions", "__ANY__", "artifacts", "__ANY__"), "url", "integrity")
 _register(("runtime", "pi-extensions", "__ANY__", "update"), "provider", "stable_only")
 _register(("runtime", "pi-extensions", "__ANY__", "validation"), "metadata_file")
 _register(("runtime", "pi-extensions", "__ANY__", "override"), "constraint", "allow_prerelease", "scheme")
@@ -1127,11 +1139,15 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
                 f"expected 'npm' for pi extensions, got {ext_source.type!r}"
             )
 
-        # ── artifact ───────────────────────────────────────────────
-        ext_artifact = _load_extension_artifact(
-            r, ("runtime", "pi-extensions", name), ext_source.package, ext_version
+        # ── artifacts ──────────────────────────────────────────────
+        ext_artifacts = _load_extension_artifacts(
+            r, ("runtime", "pi-extensions", name), ext_source.package
         )
-        _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "artifact",)), ("runtime", "pi-extensions", name, "artifact",))
+        if ext_version not in ext_artifacts:
+            raise InventoryError(
+                f"runtime.pi-extensions.{name}: default version {ext_version!r} "
+                f"must have a matching entry in artifacts"
+            )
 
         # ── update ─────────────────────────────────────────────────
         ext_update = _load_update(r, ("runtime", "pi-extensions", name))
@@ -1193,7 +1209,7 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
         extensions[name] = PiExtensionEntry(
             version=ext_version,
             source=ext_source,
-            artifact=ext_artifact,
+            artifacts=ext_artifacts,
             update=ext_update,
             validation=ext_validation,
             override=ext_override,

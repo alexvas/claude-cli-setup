@@ -19,6 +19,7 @@ from docker.versioning.effective import (
 from docker.versioning.inventory import load_inventory
 from docker.versioning.rendering import (
     EffectiveInventoryOutputError,
+    _write_toml,
     compose_command,
     render_build_environment,
     write_effective_inventory,
@@ -399,6 +400,53 @@ class TestComposeCommand(unittest.TestCase):
             cmd,
             ("docker", "compose", "--progress", "plain", "build", "pi"),
         )
+
+
+class TestTomlKeyEscaping(unittest.TestCase):
+    """Round-trip tests for ``_toml_key`` / ``_write_toml`` with special chars."""
+
+    def _round_trip(self, data: dict) -> dict:
+        import io, tomllib
+        buf = io.StringIO()
+        _write_toml(buf, data)
+        return tomllib.loads(buf.getvalue())
+
+    def test_version_keys_survive_round_trip(self):
+        """Dotted version keys like "0.2.0" must survive write→parse."""
+        data = {"artifacts": {"0.2.0": {"url": "x", "integrity": "y"}}}
+        result = self._round_trip(data)
+        self.assertIn("0.2.0", result["artifacts"])
+        self.assertEqual(result["artifacts"]["0.2.0"]["url"], "x")
+
+    def test_prerelease_keys_survive_round_trip(self):
+        data = {"artifacts": {"0.2.0-beta.1": {"url": "x"}}}
+        result = self._round_trip(data)
+        self.assertIn("0.2.0-beta.1", result["artifacts"])
+
+    def test_build_suffix_keys_survive_round_trip(self):
+        data = {"artifacts": {"1.0.0+build.1": {"url": "x"}}}
+        result = self._round_trip(data)
+        self.assertIn("1.0.0+build.1", result["artifacts"])
+
+    def test_quotes_in_key_escaped(self):
+        """Keys containing double-quote must be escaped in TOML output."""
+        data = {"key_with_\"_quote": "val"}
+        result = self._round_trip(data)
+        self.assertEqual(result['key_with_"_quote'], "val")
+
+    def test_backslash_in_key_escaped(self):
+        data = {"key\\with\\backslash": "val"}
+        result = self._round_trip(data)
+        self.assertEqual(result["key\\with\\backslash"], "val")
+
+    def test_bare_key_unquoted(self):
+        """Bare keys must not be quoted."""
+        import io
+        buf = io.StringIO()
+        _write_toml(buf, {"simple_key": "val"})
+        raw = buf.getvalue()
+        self.assertIn("simple_key", raw)
+        self.assertNotIn('"simple_key"', raw)
 
 
 if __name__ == "__main__":

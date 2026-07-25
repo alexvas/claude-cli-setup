@@ -13,6 +13,7 @@ from typing import ClassVar
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from docker.versioning.inventory import InventoryError, ConstraintSyntaxError  # noqa: E402
+from docker.versioning.model import InvalidArtifactKey               # noqa: E402
 from docker.versions import load_inventory               # noqa: E402
 
 
@@ -42,7 +43,7 @@ version = "1.2.3"
 type = "npm"
 package = "@example/pi-test"
 
-[runtime.pi-extensions.pi-test.artifact]
+[runtime.pi-extensions.pi-test.artifacts."1.2.3"]
 url = "https://registry.npmjs.org/@example/pi-test/-/pi-test-1.2.3.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 
@@ -58,6 +59,21 @@ scheme = "numeric"
 [runtime.pi-extensions.pi-test.validation]
 metadata_file = "package.json"
 """
+
+# extra artifact entries appended to _RUNTIME_SNIPPET for catalog-key tests
+_EXTRA_ARTIFACT_HEADER = '[runtime.pi-extensions.pi-test.artifacts."{key}"]'
+_EXTRA_ARTIFACT_BODY = (
+    'url = "https://registry.npmjs.org/@example/pi-test/-/pi-test-{key}.tgz"\n'
+    'integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="'
+)
+
+
+def _add_artifact(key: str) -> str:
+    """Append an extra artifact entry with *key* to ``_RUNTIME_SNIPPET``."""
+    header = _EXTRA_ARTIFACT_HEADER.format(key=key)
+    body = _EXTRA_ARTIFACT_BODY.format(key=key)
+    return _RUNTIME_SNIPPET + f"\n{header}\n{body}\n"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -106,14 +122,16 @@ class TestClosedRuntimeSchema(_TmpMixin, unittest.TestCase):
         self.assertEqual(ext.version, "0.2.0")
         self.assertEqual(ext.source.package, "@arcanemachine/pi-read")
         self.assertEqual(ext.source.type, "npm")
-        self.assertIsNotNone(ext.artifact)
+        self.assertIsNotNone(ext.artifacts)
+        self.assertIn(ext.version, ext.artifacts)
+        art = ext.artifacts[ext.version]
         self.assertEqual(
-            ext.artifact.url,
+            art.url,
             "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz",
         )
         self.assertTrue(
-            ext.artifact.integrity.startswith("sha512-"),
-            f"unexpected integrity format: {ext.artifact.integrity!r}",
+            art.integrity.startswith("sha512-"),
+            f"unexpected integrity format: {art.integrity!r}",
         )
         self.assertEqual(ext.update.provider, "npm")
         self.assertTrue(ext.update.stable_only)
@@ -127,7 +145,8 @@ class TestClosedRuntimeSchema(_TmpMixin, unittest.TestCase):
         ext = inv.runtime_pi_extensions["pi-test"]
         self.assertEqual(ext.version, "1.2.3")
         self.assertEqual(ext.source.package, "@example/pi-test")
-        self.assertIsNotNone(ext.artifact)
+        self.assertIsNotNone(ext.artifacts)
+        self.assertIn(ext.version, ext.artifacts)
         self.assertIsNotNone(ext.validation)
 
     def test_three_extensions_all_present(self):
@@ -247,7 +266,7 @@ class TestClosedRuntimeSchema(_TmpMixin, unittest.TestCase):
 [runtime.pi-extensions.no-ver.source]
 type = "npm"
 package = "no-ver"
-[runtime.pi-extensions.no-ver.artifact]
+[runtime.pi-extensions.no-ver.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/no-ver/-/no-ver-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 [runtime.pi-extensions.no-ver.update]
@@ -283,7 +302,7 @@ metadata_file = "package.json"
         toml += """
 [runtime.pi-extensions.no-src]
 version = "1.0.0"
-[runtime.pi-extensions.no-src.artifact]
+[runtime.pi-extensions.no-src.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 [runtime.pi-extensions.no-src.update]
@@ -324,7 +343,7 @@ metadata_file = "package.json"
     # ── artifact validation ─────────────────────────────────────────────
 
     def test_missing_artifact_section_rejected(self):
-        """Runtime extension without [*.artifact] must be rejected."""
+        """Runtime extension without [*.artifacts] must be rejected."""
         toml = _read_canonical()
         toml += """
 [runtime.pi-extensions.no-art]
@@ -340,7 +359,7 @@ metadata_file = "package.json"
 """
         with self.assertRaises(InventoryError) as ctx:
             load_inventory(self._write(toml))
-        self.assertIn("no-art.artifact", str(ctx.exception).lower())
+        self.assertIn("no-art.artifacts", str(ctx.exception).lower())
 
     def test_missing_validation_section_rejected(self):
         """Runtime extension without [*.validation] must be rejected."""
@@ -351,7 +370,7 @@ version = "1.0.0"
 [runtime.pi-extensions.no-val.source]
 type = "npm"
 package = "no-val"
-[runtime.pi-extensions.no-val.artifact]
+[runtime.pi-extensions.no-val.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/no-val/-/no-val-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 [runtime.pi-extensions.no-val.update]
@@ -391,7 +410,7 @@ version = "1.0.0"
 [runtime.pi-extensions.scalar-val.source]
 type = "npm"
 package = "scalar-val"
-[runtime.pi-extensions.scalar-val.artifact]
+[runtime.pi-extensions.scalar-val.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/scalar-val/-/scalar-val-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 [runtime.pi-extensions.scalar-val.update]
@@ -449,7 +468,7 @@ validation = 42
             sha256_valid,
         )
         inv = load_inventory(self._write(toml))
-        self.assertEqual(inv.runtime_pi_extensions["pi-test"].artifact.integrity, sha256_valid)  # type: ignore[union-attr]
+        self.assertEqual(inv.runtime_pi_extensions["pi-test"].artifacts["1.2.3"].integrity, sha256_valid)  # type: ignore[union-attr]
 
     def test_non_https_artifact_url_rejected(self):
         toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
@@ -504,6 +523,8 @@ validation = 42
             'version = "1.2.3"', 'version = "0.9.0"'
         ).replace(
             'pi-test-1.2.3.tgz', 'pi-test-0.9.0.tgz'
+        ).replace(
+            'artifacts."1.2.3"', 'artifacts."0.9.0"'
         )
         with self.assertRaises(ConstraintSyntaxError) as ctx:
             load_inventory(self._write(toml))
@@ -539,8 +560,103 @@ validation = 42
         )
         with self.assertRaises(InventoryError) as ctx:
             load_inventory(self._write(toml))
-        self.assertIn("runtime.pi-extensions.pi-test.artifact.integrity",
+        self.assertIn("runtime.pi-extensions.pi-test.artifacts",
                        str(ctx.exception))
+
+    # ── artifact-map key validation ──────────────────────────────────
+
+    def test_artifact_key_malformed_semver_rejected(self):
+        toml = _read_canonical() + _add_artifact("not/a/version")
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        msg = str(ctx.exception)
+        self.assertIn("not/a/version", msg)
+        self.assertIn("invalid semver", msg)
+
+    def test_artifact_key_moving_tag_rejected(self):
+        for tag in ("latest", "stable", "next", "dev", "canary", "nightly"):
+            with self.subTest(tag=tag):
+                toml = _read_canonical() + _add_artifact(tag)
+                with self.assertRaises(InventoryError) as ctx:
+                    load_inventory(self._write(toml))
+                msg = str(ctx.exception)
+                self.assertIn(tag, msg)
+                self.assertIn("moving", msg)
+
+    def test_artifact_key_version_not_in_url_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            'pi-test-1.2.3.tgz', 'pi-test-9.9.9.tgz'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("expected tarball", str(ctx.exception).lower())
+
+    def test_artifact_key_non_semver_prerelease_rejected(self):
+        """Prerelease identifiers must follow semver rules (no leading zeros)."""
+        toml = _read_canonical() + _add_artifact("1.2.3-01")
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        msg = str(ctx.exception)
+        self.assertIn("1.2.3-01", msg)
+        self.assertIn("invalid semver", msg)
+
+    def test_artifact_key_build_with_bang_rejected(self):
+        toml = _read_canonical() + _add_artifact("1.2.3+build!")
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        msg = str(ctx.exception)
+        self.assertIn("1.2.3+build!", msg)
+        self.assertIn("invalid semver", msg)
+
+    # ── strict npm tarball URL validation ────────────────────────────
+
+    def test_url_version_in_query_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            'pi-test-1.2.3.tgz', 'pi-test-1.2.3.tgz?version=1.2.3'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("query/fragment not allowed", str(ctx.exception).lower())
+
+    def test_url_fragment_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            'pi-test-1.2.3.tgz', 'pi-test-1.2.3.tgz#1.2.3'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("query/fragment not allowed", str(ctx.exception).lower())
+
+    def test_url_wrong_package_stem_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            '@example/pi-test/-/', '@evil/wrong-package/-/'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("expected npm tarball", str(ctx.exception).lower())
+
+    def test_url_missing_tarball_stem_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            '/@example/pi-test/-/', '/@example/pi-test/v/'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("expected npm tarball", str(ctx.exception).lower())
+
+    def test_url_not_tgz_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            'pi-test-1.2.3.tgz', 'pi-test-1.2.3.tar.gz'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("expected .tgz", str(ctx.exception).lower())
+
+    def test_url_wrong_tarball_name_rejected(self):
+        toml = _read_canonical() + _RUNTIME_SNIPPET.replace(
+            'pi-test-1.2.3.tgz', 'wrong-name-1.2.3.tgz'
+        )
+        with self.assertRaises(InventoryError) as ctx:
+            load_inventory(self._write(toml))
+        self.assertIn("expected tarball", str(ctx.exception).lower())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -603,7 +719,7 @@ version = "0.63.0"
 [runtime.pi-extensions.pi-duplicate.source]
 type = "npm"
 package = "@earendil-works/pi-coding-agent"
-[runtime.pi-extensions.pi-duplicate.artifact]
+[runtime.pi-extensions.pi-duplicate.artifacts."0.63.0"]
 url = "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.63.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 [runtime.pi-extensions.pi-duplicate.update]
@@ -631,7 +747,7 @@ version = "1.2.9"
 [runtime.pi-extensions.pi-test-renamed.source]
 type = "npm"
 package = "@example/pi-test"
-[runtime.pi-extensions.pi-test-renamed.artifact]
+[runtime.pi-extensions.pi-test-renamed.artifacts."1.2.9"]
 url = "https://registry.npmjs.org/@example/pi-test/-/pi-test-1.2.9.tgz"
 integrity = "sha512-/////////////////////////////////////////////////////////////////////////////////////w=="
 [runtime.pi-extensions.pi-test-renamed.update]
@@ -659,7 +775,7 @@ version = "1.2.3"
 [runtime.pi-extensions.pi-other.source]
 type = "npm"
 package = "@other/different-pkg"
-[runtime.pi-extensions.pi-other.artifact]
+[runtime.pi-extensions.pi-other.artifacts."1.2.3"]
 url = "https://registry.npmjs.org/@other/different-pkg/-/different-pkg-1.2.3.tgz"
 integrity = "sha512-/////////////////////////////////////////////////////////////////////////////////////w=="
 [runtime.pi-extensions.pi-other.update]
@@ -685,7 +801,7 @@ version = "1.2.3"
 [runtime.pi-extensions.pi-test-dup.source]
 type = "npm"
 package = "@example/pi-test"
-[runtime.pi-extensions.pi-test-dup.artifact]
+[runtime.pi-extensions.pi-test-dup.artifacts."1.2.3"]
 url = "https://registry.npmjs.org/@example/pi-test/-/pi-test-1.2.3.tgz"
 integrity = "sha512-/////////////////////////////////////////////////////////////////////////////////////w=="
 [runtime.pi-extensions.pi-test-dup.update]

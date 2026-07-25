@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Expose only effective runtime dependency metadata to the container
-The project SHALL derive a narrow effective runtime projection from the reviewed `runtime` section of `docker-constructor.toml` after applying validated runtime overrides. The projection SHALL contain only effective package identity, version, artifact identity, checksum/integrity, and validation metadata required for runtime installation and SHALL exclude the reviewed source, build section, and host-only runtime metadata.
+The project SHALL derive a narrow effective runtime projection from the reviewed `runtime` section of `docker-constructor.toml` after applying validated runtime overrides. Each reviewed runtime extension SHALL own an artifact catalog keyed by exact version, with exact artifact identity and integrity in every entry, and its selected default version SHALL have a matching catalog entry. The projection SHALL contain only effective package identity, version, the selected artifact identity, checksum/integrity, and validation metadata required for runtime installation and SHALL exclude the reviewed source, unselected artifact alternatives, build section, and host-only runtime metadata.
 
 #### Scenario: Mounting runtime dependency configuration
 - **WHEN** the constructor facade launches a container
@@ -17,7 +17,10 @@ The project SHALL derive a narrow effective runtime projection from the reviewed
 #### Scenario: Applying a runtime override
 - **WHEN** a supported runtime override is supplied to `run`
 - **THEN** the resolver SHALL validate it against policy in the reviewed runtime source entry
-- **AND** the mounted projection SHALL contain the effective overridden version and matching artifact integrity
+- **AND** it SHALL select the reviewed artifact catalog entry whose exact version key matches the effective overridden version
+- **AND** the mounted projection SHALL contain that version and its matching artifact identity and integrity
+- **AND** an otherwise policy-valid version with no matching reviewed catalog entry SHALL be rejected before projection creation
+- **AND** the resolver SHALL NOT discover artifacts over the network, synthesize artifact URLs, or reuse integrity from another version
 - **AND** the reviewed `docker-constructor.toml` SHALL remain unchanged
 
 #### Scenario: Installing Pi extensions at runtime

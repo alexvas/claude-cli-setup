@@ -11,11 +11,49 @@ All containers exposed after validation are immutable:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 from .constraints import Constraint, NumericVersion  # re-export for convenience
+
+# ---------------------------------------------------------------------------
+# Shared semver validation (used by both model and inventory layers)
+# ---------------------------------------------------------------------------
+
+_MOVING_VERSION_TAGS = frozenset({"latest", "stable", "next", "dev", "canary", "nightly"})
+
+# Semver pattern: X.Y.Z with optional prerelease/build.
+# Must match https://semver.org — rejects malformed suffixes like "-!!!" or "-01".
+_SEMVER_RE = re.compile(
+    r"""
+    ^
+    (0|[1-9]\d*)               # major
+    \.
+    (0|[1-9]\d*)               # minor
+    \.
+    (0|[1-9]\d*)               # patch
+    (?:
+        -                      # prerelease hyphen
+        (                      # prerelease identifiers
+            (?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)
+            (?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*
+        )
+    )?
+    (?:
+        \+                     # build hyphen
+        [0-9a-zA-Z-]+          # build identifiers
+        (?:\.[0-9a-zA-Z-]+)*
+    )?
+    $
+    """,
+    re.VERBOSE,
+)
+
+
+class InvalidArtifactKey(ValueError):
+    """Raised when an artifact-map key is not a valid, non-moving semver."""
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +267,131 @@ class OhMyZshEntry:
     update: GitRefUpdate
 
 
+def _validate_artifact_key(key: str, ext_name: str) -> None:
+    """Reject artifact-map keys that are not exact non-moving semver."""
+    if key.lower() in _MOVING_VERSION_TAGS:
+        raise InvalidArtifactKey(
+            f"PiExtensionEntry({ext_name!r}): artifact key {key!r} "
+            f"is a moving tag, not an exact semver"
+        )
+    if not _SEMVER_RE.match(key):
+        raise InvalidArtifactKey(
+            f"PiExtensionEntry({ext_name!r}): artifact key {key!r} "
+            f"is not a valid semver"
+        )
+
+
+def _validate_npm_tarball_url(
+    url: str, package: str, version_key: str,
+) -> None:
+    """Validate *url* is an exact npm registry tarball for *package*.
+
+    Expected format::
+
+        https://registry.npmjs.org/<package>/-/<pkg_name>-<version>.tgz
+
+    where ``<pkg_name>`` is the last path segment of *package*.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise InvalidArtifactKey(
+            f"npm tarball URL must use HTTPS, got {url!r}"
+        )
+
+    url_path = parsed.path
+
+    # Package stem: /@scope/name/-/  or  /name/-/
+    expected_stem = f"/{package}/-/"
+    if expected_stem not in url_path:
+        raise InvalidArtifactKey(
+            f"expected npm tarball for {package!r}, got {url!r}"
+        )
+
+    # Extract the part after /-/
+    _, _, tarball_name = url_path.partition(expected_stem)
+    if not tarball_name:
+        raise InvalidArtifactKey(
+            f"missing tarball filename after /-/, got {url!r}"
+        )
+
+    # Tarball must end with .tgz
+    if not tarball_name.endswith(".tgz"):
+        raise InvalidArtifactKey(
+            f"expected .tgz tarball, got {tarball_name!r}"
+        )
+
+    # Strip build metadata for filename matching (npm tarballs never include it)
+    base_version = version_key.split("+", 1)[0]
+
+    # The last path segment of the package (e.g. "pi-read" from "@arcanemachine/pi-read")
+    pkg_name = package.rsplit("/", 1)[-1]
+
+    # Expected filename: <pkg_name>-<base_version>.tgz
+    expected_filename = f"{pkg_name}-{base_version}.tgz"
+    if tarball_name != expected_filename:
+        raise InvalidArtifactKey(
+            f"expected tarball {expected_filename!r} "
+            f"for {package!r} version {base_version!r}, got {tarball_name!r}"
+        )
+
+    # No query / fragment allowed — prevents version-leak via ?ref=1.2.3
+    if parsed.query or parsed.fragment:
+        raise InvalidArtifactKey(
+            f"query/fragment not allowed in reviewed artifact URL, "
+            f"got {url!r}"
+        )
+
+
+def _validate_runtime_projection(projection: object) -> None:
+    """Closed-DTO validator — rejects anything not in the
+    ``EffectiveRuntimeProjection`` / ``EffectivePiExtensionEntry`` schema.
+
+    The runtime projection is mounted read-only at container start;
+    it MUST NOT carry build entries, update providers, override policy,
+    source metadata, or unselected artifacts.
+    """
+    from dataclasses import fields, is_dataclass
+
+    # Import deferred to avoid circular dependency at module level
+    allowed = {
+        "extensions": dict,
+        # EffectivePiExtensionEntry fields:
+        "package": str,
+        "version": str,
+        "artifact": NpmArtifact,
+        "metadata_file": str,
+    }
+    disallowed = [
+        "source", "update", "override", "validation", "artifacts",
+        "build", "stages", "platform", "node", "rust", "uv",
+        "python_version", "ty_version", "rtk", "fd",
+        "pi_version", "openspec_version", "oh_my_zsh_revision",
+    ]
+
+    def _reject_disallowed_fields(obj: object, prefix: str) -> None:
+        if not is_dataclass(obj):
+            return
+        for f in fields(obj):
+            if f.name in disallowed:
+                raise ValueError(
+                    f"{prefix}.{f.name}: disallowed in runtime projection"
+                )
+            if f.name not in allowed:
+                raise ValueError(
+                    f"{prefix}.{f.name}: unrecognized field in runtime projection"
+                )
+            val = getattr(obj, f.name)
+            if isinstance(val, dict):
+                for sub_k, sub_v in val.items():
+                    _reject_disallowed_fields(
+                        sub_v, f"{prefix}.{f.name}.{sub_k}"
+                    )
+
+    _reject_disallowed_fields(projection, "")
+
+
 @dataclass(frozen=True)
 class NpmArtifact:
     """Reviewed npm-dist artifact with integrity verification."""
@@ -272,9 +435,29 @@ class PiExtensionEntry:
     version: str
     source: NpmSource
     update: NpmUpdate
-    artifact: NpmArtifact
+    artifacts: Mapping[str, NpmArtifact]
     validation: RuntimeValidation
     override: OverridePolicy
+
+    def __post_init__(self) -> None:
+        if not self.artifacts:
+            raise ValueError(
+                f"PiExtensionEntry({self.source.package!r}): "
+                f"artifacts must contain at least one entry"
+            )
+        if self.version not in self.artifacts:
+            raise ValueError(
+                f"PiExtensionEntry: default version {self.version!r} "
+                f"must have a matching entry in artifacts"
+            )
+        # Validate every artifact-map key is an exact non-moving semver
+        # and that the tarball URL exactly matches the package + version.
+        ext_name = self.source.package
+        for key, artifact in self.artifacts.items():
+            _validate_artifact_key(key, ext_name)
+            _validate_npm_tarball_url(artifact.url, ext_name, key)
+        # Ensure immutability even when a plain dict is passed
+        object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +507,43 @@ class EffectiveBuildProjection:
     pi_version: str
     openspec_version: str
     oh_my_zsh_revision: str
+
+
+@dataclass(frozen=True)
+class EffectivePiExtensionEntry:
+    """Single Pi extension entry in the effective runtime projection.
+
+    Contains only the fields required for container-side installation:
+    package identity, effective version, the selected artifact with
+    integrity, and validation metadata.  No source, update, override,
+    or unselected artifacts are included.
+    """
+    package: str
+    version: str
+    artifact: NpmArtifact
+    metadata_file: str
+
+    def __post_init__(self) -> None:
+        _validate_npm_tarball_url(self.artifact.url, self.package, self.version)
+
+
+@dataclass(frozen=True)
+class EffectiveRuntimeProjection:
+    """Container-only effective runtime projection.
+
+    This DTO is mounted read-only at
+    ``/run/pi-cli/docker-constructor.runtime.toml``.  It SHALL NOT
+    contain build entries, update providers, override policy,
+    source metadata, or unselected artifacts.
+    """
+    extensions: Mapping[str, EffectivePiExtensionEntry]
+
+    def __post_init__(self) -> None:
+        _validate_runtime_projection(self)
+        object.__setattr__(
+            self, "extensions",
+            MappingProxyType(dict(self.extensions)),
+        )
 
 
 # --------------------------------------------------------------------------

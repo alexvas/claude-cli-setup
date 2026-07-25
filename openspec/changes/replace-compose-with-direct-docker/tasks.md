@@ -90,23 +90,23 @@
 
 ### RED
 
-- [ ] 5.1 Add failing resolver tests for default and overridden Pi-extension versions, matching artifact identity/integrity, and preservation of the reviewed source.
-- [ ] 5.2 Add failing closed-DTO tests proving the runtime projection rejects build entries, update providers, update/override policy, and unrelated source metadata.
-- [ ] 5.3 Add failing lifecycle tests for atomic private files under `.docker-generated/runtime/`, concurrent override isolation, and cleanup after success or failure.
+- [x] 5.1 Add failing resolver tests for default and overridden Pi-extension versions, matching artifact identity/integrity, and preservation of the reviewed source.
+- [x] 5.2 Add failing closed-DTO tests proving the runtime projection rejects build entries, update providers, update/override policy, and unrelated source metadata.
+- [x] 5.3 Add failing lifecycle tests for atomic private files under `.docker-generated/runtime/`, concurrent override isolation, and cleanup after success or failure.
 
 ### GREEN
 
-- [ ] 5.4 Implement a pure typed runtime resolver that applies validated runtime overrides and explicitly selects only installer-required DTO fields.
-- [ ] 5.5 Implement private per-launch runtime projection creation, validation, stable identity reporting, and cleanup through injected filesystem boundaries.
+- [x] 5.4 Implement a pure typed runtime resolver that applies validated runtime overrides and explicitly selects only installer-required DTO fields.
+- [x] 5.5 Implement private per-launch runtime projection creation, validation, stable identity reporting, and cleanup through injected filesystem boundaries.
 
 ### INTROSPECT
 
-- [ ] 5.6 Review the source-to-DTO mapping field by field and eliminate implicit whole-section copying or generic dictionary passthrough.
-- [ ] 5.7 Confirm concurrent launches cannot rewrite each other's mounted input and runtime resolution never mutates `docker-constructor.toml`.
+- [x] 5.6 Review the source-to-DTO mapping field by field and eliminate implicit whole-section copying or generic dictionary passthrough.
+- [x] 5.7 Confirm concurrent launches cannot rewrite each other's mounted input and runtime resolution never mutates `docker-constructor.toml`.
 
 ### VALIDATE
 
-- [ ] 5.8 Run runtime resolver, schema, concurrency, and fake-filesystem tests without Docker or network access.
+- [x] 5.8 Run runtime resolver, schema, concurrency, and fake-filesystem tests without Docker or network access.
 
 ## 6. Stage 6 — Pure Direct-Docker Command Rendering
 

@@ -184,7 +184,8 @@ version = "0.9.1"
 type = "npm"
 package = "@llblab/pi-codex-usage"
 
-[runtime.pi-extensions.pi-codex-usage.artifact]
+[runtime.pi-extensions.pi-codex-usage.artifacts]
+[runtime.pi-extensions.pi-codex-usage.artifacts."0.9.1"]
 url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz"
 integrity = "sha512-r5iMe57KgKPWSvx5/fKCwT+s/haysaEs40OMdTtisAFR1njppvNAhlgNOBl7+nDm6j88XTee3m0Rp3s/kinIQg=="
 
@@ -207,7 +208,8 @@ version = "1.0.0"
 type = "npm"
 package = "pi-proxy"
 
-[runtime.pi-extensions.pi-proxy.artifact]
+[runtime.pi-extensions.pi-proxy.artifacts]
+[runtime.pi-extensions.pi-proxy.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
 integrity = "sha512-UHr/AQV2S0rISwRsD5jmKAo9ZQlZxU9Csh72sGYYDhbkSo44P+XzfRG96OuYYy2G3Iis0a75w3Cp9KYtjpbZxw=="
 
@@ -230,7 +232,8 @@ version = "0.2.0"
 type = "npm"
 package = "@arcanemachine/pi-read"
 
-[runtime.pi-extensions.pi-read.artifact]
+[runtime.pi-extensions.pi-read.artifacts]
+[runtime.pi-extensions.pi-read.artifacts."0.2.0"]
 url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
 integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="
 
@@ -310,7 +313,8 @@ version = "1.0.0"
 type = "npm"
 package = "pi-test"
 
-[runtime.pi-extensions.pi-test.artifact]
+[runtime.pi-extensions.pi-test.artifacts]
+[runtime.pi-extensions.pi-test.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pi-test/-/pi-test-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 
@@ -381,7 +385,8 @@ version = "1.0.0"
 type = "npm"
 package = "pi-test"
 
-[runtime.pi-extensions.pi-test.artifact]
+[runtime.pi-extensions.pi-test.artifacts]
+[runtime.pi-extensions.pi-test.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pi-test/-/pi-test-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 
@@ -571,7 +576,7 @@ class TestDirectConstructionImmutability(unittest.TestCase):
                 version="1.0.0",
                 source=NpmSource(package="test"),
                 update=NpmUpdate(stable_only=True),
-                artifact=NpmArtifact(url="https://registry.npmjs.org/test/-/test-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+                artifacts={"1.0.0": NpmArtifact(url="https://registry.npmjs.org/test/-/test-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
                 validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
             ),
@@ -583,7 +588,7 @@ class TestDirectConstructionImmutability(unittest.TestCase):
             version="9.9.9",
             source=NpmSource(package="evil"),
             update=NpmUpdate(stable_only=True),
-            artifact=NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            artifacts={"9.9.9": NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
             validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
         )
@@ -599,7 +604,7 @@ class TestDirectConstructionImmutability(unittest.TestCase):
                 version="1.0.0",
                 source=NpmSource(package="safe"),
                 update=NpmUpdate(stable_only=True),
-                artifact=NpmArtifact(url="https://registry.npmjs.org/safe/-/safe-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+                artifacts={"1.0.0": NpmArtifact(url="https://registry.npmjs.org/safe/-/safe-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
                 validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
             ),
@@ -615,7 +620,7 @@ class TestDirectConstructionImmutability(unittest.TestCase):
             version="9.9.9",
             source=NpmSource(package="evil"),
             update=NpmUpdate(stable_only=True),
-            artifact=NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            artifacts={"9.9.9": NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
             validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
         )
@@ -639,7 +644,7 @@ class TestDirectConstructionImmutability(unittest.TestCase):
                 version="1.0.0",
                 source=NpmSource(package="ext-a"),
                 update=NpmUpdate(stable_only=True),
-                artifact=NpmArtifact(url="https://registry.npmjs.org/ext-a/-/ext-a-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+                artifacts={"1.0.0": NpmArtifact(url="https://registry.npmjs.org/ext-a/-/ext-a-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
                 validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
             ),
@@ -658,7 +663,7 @@ class TestDirectConstructionImmutability(unittest.TestCase):
             version="9.9.9",
             source=NpmSource(package="evil"),
             update=NpmUpdate(stable_only=True),
-            artifact=NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            artifacts={"9.9.9": NpmArtifact(url="https://registry.npmjs.org/evil/-/evil-9.9.9.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
             validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric"),
         )

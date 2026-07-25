@@ -216,11 +216,11 @@ class TestTargetTraversal(unittest.TestCase):
             ),
             runtime_pi_extensions=MappingProxyType({
                 "z-ext": PiExtensionEntry(version="1.0.0", source=NpmSource(package="z"), update=NpmUpdate(stable_only=True),
-            artifact=NpmArtifact(url="https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            artifacts={"1.0.0": NpmArtifact(url="https://registry.npmjs.org/z/-/z-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
             validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric")),
                 "a-ext": PiExtensionEntry(version="1.0.0", source=NpmSource(package="a"), update=NpmUpdate(stable_only=True),
-            artifact=NpmArtifact(url="https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="),
+            artifacts={"1.0.0": NpmArtifact(url="https://registry.npmjs.org/a/-/a-1.0.0.tgz", integrity="sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==")},
             validation=RuntimeValidation(metadata_file="package.json"),
             override=OverridePolicy(constraint=parse_constraint(">=1.0.0"), allow_prerelease=False, scheme="numeric")),
             }),

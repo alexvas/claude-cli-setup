@@ -190,7 +190,8 @@ version = "0.2.0"
 type = "npm"
 package = "@arcanemachine/pi-read"
 
-[runtime.pi-extensions.pi-read.artifact]
+[runtime.pi-extensions.pi-read.artifacts]
+[runtime.pi-extensions.pi-read.artifacts."0.2.0"]
 url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
 integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="
 
@@ -267,7 +268,8 @@ version = "1.0.0"
 type = "npm"
 package = "pi-test"
 
-[runtime.pi-extensions.pi-test.artifact]
+[runtime.pi-extensions.pi-test.artifacts]
+[runtime.pi-extensions.pi-test.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pi-test/-/pi-test-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 
@@ -311,7 +313,8 @@ version = "1.0.0"
 type = "npm"
 package = "pi-test"
 
-[runtime.pi-extensions.pi-test.artifact]
+[runtime.pi-extensions.pi-test.artifacts]
+[runtime.pi-extensions.pi-test.artifacts."1.0.0"]
 url = "https://registry.npmjs.org/pi-test/-/pi-test-1.0.0.tgz"
 integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 
