@@ -24,6 +24,7 @@ from docker.networking import (
     GatewayDiagnosis,
     OverrideFailure,
     OverrideState,
+    PersistenceResult,
     ProbeResult,
     ProcessResult,
     ProcessRunner,
@@ -34,7 +35,8 @@ from docker.networking import (
     apply_rootless_override,
     candidate_gateways,
     diagnose_gateway,
-    inspect_rootless_override,
+    persist_gateway,
+    plan_rootless_override,
     probe_gateway,
     update_env_file,
 )
@@ -205,7 +207,7 @@ class TestInspectRootlessOverrideInMemory(unittest.TestCase):
             str(self.src): self.OVERRIDE_CONTENT,
             str(self.dest): self.OVERRIDE_CONTENT,
         })
-        plan = inspect_rootless_override(
+        plan = plan_rootless_override(
             _fs=fs,
             _override_src=self.src,
             _override_dest=self.dest,
@@ -215,7 +217,7 @@ class TestInspectRootlessOverrideInMemory(unittest.TestCase):
 
     def test_not_installed_when_dest_missing(self):
         fs = FakeFilesystem(files={str(self.src): self.OVERRIDE_CONTENT})
-        plan = inspect_rootless_override(
+        plan = plan_rootless_override(
             _fs=fs,
             _override_src=self.src,
             _override_dest=self.dest,
@@ -228,7 +230,7 @@ class TestInspectRootlessOverrideInMemory(unittest.TestCase):
             str(self.src): self.OVERRIDE_CONTENT,
             str(self.dest): self.OTHER_CONTENT,
         })
-        plan = inspect_rootless_override(
+        plan = plan_rootless_override(
             _fs=fs,
             _override_src=self.src,
             _override_dest=self.dest,
@@ -238,7 +240,7 @@ class TestInspectRootlessOverrideInMemory(unittest.TestCase):
 
     def test_plan_exposes_src_and_dest_paths(self):
         fs = FakeFilesystem(files={str(self.src): self.OVERRIDE_CONTENT})
-        plan = inspect_rootless_override(
+        plan = plan_rootless_override(
             _fs=fs,
             _override_src=self.src,
             _override_dest=self.dest,
@@ -252,7 +254,7 @@ class TestInspectRootlessOverrideInMemory(unittest.TestCase):
             "/nonexistent/src.conf": "c",
             "/nonexistent/dest.conf": "c",
         })
-        plan = inspect_rootless_override(
+        plan = plan_rootless_override(
             _fs=fs,
             _override_src=Path("/nonexistent/src.conf"),
             _override_dest=Path("/nonexistent/dest.conf"),
@@ -268,7 +270,7 @@ class TestInspectRootlessOverrideInMemory(unittest.TestCase):
             home=Path("/custom/home"),
             files={str(src): "c", str(expected_dest): "c"},
         )
-        plan = inspect_rootless_override(
+        plan = plan_rootless_override(
             _fs=fs,
             _override_src=src,
             # _override_dest omitted — must use fs.home
@@ -864,6 +866,164 @@ class TestImportBoundary(unittest.TestCase):
                 if isinstance(node.func, ast.Attribute):
                     if "ArgumentParser" in getattr(node.func, "attr", ""):
                         self.fail("must not create ArgumentParser")
+
+
+class TestPersistGateway(unittest.TestCase):
+    """``persist_gateway`` writes HOST_GATEWAY_IP and returns result."""
+
+    def setUp(self):
+        self.path = Path("/tmp/test.env")
+
+    def test_writes_gateway_and_reports_success(self):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, "10.0.0.1", _fs=fs)
+        self.assertTrue(result.written)
+        self.assertEqual(result.gateway, "10.0.0.1")
+        self.assertEqual(result.path, self.path)
+        self.assertIsNone(result.error)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.1", fs.read_text(self.path))
+
+    def test_empty_gateway_returns_error_not_raises(self):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, "", _fs=fs)
+        self.assertFalse(result.written)
+        self.assertEqual(result.gateway, "")
+        self.assertIsNotNone(result.error)
+        self.assertIn("non-empty", result.error)
+
+    def test_whitespace_gateway_returns_error(self):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, "   ", _fs=fs)
+        self.assertFalse(result.written)
+        self.assertIn("non-empty", result.error)
+
+    # -- dotenv injection / semantic rejection ------------------------------
+
+    def _assert_gateway_rejected(self, value: str):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, value, _fs=fs)
+        self.assertFalse(result.written,
+                         f"gateway {value!r} must be rejected")
+        self.assertIn("not a valid IP", result.error or "")
+        # Filesystem must be untouched.
+        self.assertEqual(fs.writes, [], f"no writes for {value!r}")
+        self.assertEqual(fs.renames, [], f"no renames for {value!r}")
+
+    def test_newline_in_gateway_rejected(self):
+        self._assert_gateway_rejected("10.0.0.1\nHOST_GATEWAY_IP=evil")
+
+    def test_equals_in_gateway_rejected(self):
+        self._assert_gateway_rejected("10.0.0.1 = foo")
+
+    def test_hash_in_gateway_rejected(self):
+        self._assert_gateway_rejected("10.0.0.1  # comment")
+
+    def test_internal_whitespace_rejected(self):
+        self._assert_gateway_rejected("10.0.0.1 extra")
+
+    def test_tab_rejected(self):
+        self._assert_gateway_rejected("10.0.0.1\textra")
+
+    def test_dollar_home_rejected(self):
+        self._assert_gateway_rejected("$HOME")
+
+    def test_subshell_rejected(self):
+        self._assert_gateway_rejected("$(whoami)")
+
+    def test_semicolon_injection_rejected(self):
+        self._assert_gateway_rejected("10.0.0.1;foo")
+
+    def test_arbitrary_text_rejected(self):
+        self._assert_gateway_rejected("something-else")
+
+    # -- valid gateways accepted --------------------------------------------
+
+    def test_host_gateway_literal_accepted(self):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, "host-gateway", _fs=fs)
+        self.assertTrue(result.written)
+        self.assertIsNone(result.error)
+
+    def test_ipv4_accepted(self):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, "192.168.1.1", _fs=fs)
+        self.assertTrue(result.written)
+
+    def test_ipv6_accepted(self):
+        fs = FakeFilesystem()
+        result = persist_gateway(self.path, "::1", _fs=fs)
+        self.assertTrue(result.written)
+
+
+class TestProbeTimeoutParameter(unittest.TestCase):
+    """``probe_timeout`` controls wget --timeout in the probe script."""
+
+    def test_default_timeout_is_three_seconds(self):
+        seen: list[list[str]] = []
+
+        class _Rec(ProcessRunner):
+            def run(self, argv):
+                seen.append(list(argv))
+                return ProcessResult(argv=tuple(argv), return_code=0,
+                                     stdout="PROBE_OK", stderr="")
+
+        probe_gateway("gw", 9999, "T", _runner=_Rec())
+        script = seen[0][-1]  # last arg is the script
+        self.assertIn("--timeout=3", script,
+                      "default probe timeout must be 3 seconds")
+
+    def test_custom_timeout_is_interpolated(self):
+        seen: list[list[str]] = []
+
+        class _Rec(ProcessRunner):
+            def run(self, argv):
+                seen.append(list(argv))
+                return ProcessResult(argv=tuple(argv), return_code=0,
+                                     stdout="PROBE_OK", stderr="")
+
+        probe_gateway("gw", 9999, "T", probe_timeout=10, _runner=_Rec())
+        script = seen[0][-1]
+        self.assertIn("--timeout=10", script)
+
+    # -- invalid timeout values reject before runner -------------------------
+
+    def _assert_timeout_rejected(self, value):
+        called = []
+
+        class _Rec(ProcessRunner):
+            def run(self, argv):
+                called.append(argv)
+                return ProcessResult(argv=tuple(argv), return_code=0,
+                                     stdout="PROBE_OK", stderr="")
+
+        result = probe_gateway("gw", 9999, "T", probe_timeout=value,
+                               _runner=_Rec())
+        self.assertFalse(result.ok)
+        self.assertIn("probe_timeout", result.detail,
+                      f"timeout {value!r} must be rejected")
+        self.assertEqual(called, [],
+                         f"runner must not be called for timeout {value!r}")
+
+    def test_zero_timeout_rejected(self):
+        self._assert_timeout_rejected(0)
+
+    def test_negative_timeout_rejected(self):
+        self._assert_timeout_rejected(-1)
+
+    def test_bool_true_rejected(self):
+        self._assert_timeout_rejected(True)
+
+    def test_bool_false_rejected(self):
+        self._assert_timeout_rejected(False)
+
+    def test_float_rejected(self):
+        self._assert_timeout_rejected(3.0)
+
+    def test_str_rejected(self):
+        self._assert_timeout_rejected("3; rm -rf /")
+
+    def test_large_timeout_rejected(self):
+        self._assert_timeout_rejected(301)
 
 
 if __name__ == "__main__":

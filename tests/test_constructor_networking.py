@@ -28,6 +28,7 @@ from docker.networking import (
     GatewayDiagnosis,
     OverrideFailure,
     OverrideState,
+    PersistenceResult,
     ProbeResult,
     ProcessResult,
     ProcessRunner,
@@ -40,7 +41,8 @@ from docker.networking import (
     detect_docker_mode,
     detect_lan_ip,
     diagnose_gateway,
-    inspect_rootless_override,
+    persist_gateway,
+    plan_rootless_override,
     probe_gateway,
     update_env_file,
 )
@@ -1060,7 +1062,7 @@ class TestRootlessOverridePlanEnhancedFields(unittest.TestCase):
 
 
 class TestOverridePlanningResolution(unittest.TestCase):
-    """Requirement 16: ``inspect_rootless_override`` produces correct
+    """Requirement 16: ``plan_rootless_override`` produces correct
     plans for each state."""
 
     SRC_CONTENT = "[Service]\nPort=forward\n"
@@ -1068,7 +1070,7 @@ class TestOverridePlanningResolution(unittest.TestCase):
 
     def _plan(self, *, rootless=True, src_content=SRC_CONTENT,
               dest_content=None):
-        """Build an in-memory plan via ``inspect_rootless_override``
+        """Build an in-memory plan via ``plan_rootless_override``
         by controlling what the filesystem returns.  Returns the plan.
         The fake filesystem is constructed so that:
         - src always exists with ``src_content``
@@ -1091,7 +1093,7 @@ class TestOverridePlanningResolution(unittest.TestCase):
             def home(self):
                 return Path("/fake/home")
 
-        return inspect_rootless_override(
+        return plan_rootless_override(
             _mode=DockerMode.ROOTLESS if rootless else DockerMode.ROOTFUL,
             _fs=_PlanFS(),
             _override_src=src,
@@ -1180,7 +1182,7 @@ class TestOverridePlanningResolution(unittest.TestCase):
             def delete(self, path):
                 calls.append(f"DELETE({path})")
 
-        inspect_rootless_override(
+        plan_rootless_override(
             _fs=_RecordingFS(),
             _override_src=Path("/fake/src.conf"),
             _override_dest=Path("/fake/home/.config/systemd/user/docker.service.d/override.conf"),

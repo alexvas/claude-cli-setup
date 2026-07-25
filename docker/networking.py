@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import enum
 import http.server
+import ipaddress
 import os
 import re
 import shutil
@@ -167,6 +168,15 @@ class OverrideFailure:
     path_or_command: str
     detail: str
     persistence_applied: bool
+
+
+@dataclass(frozen=True)
+class PersistenceResult:
+    """Result of persisting a gateway IP to the environment file."""
+    path: Path
+    gateway: str
+    written: bool
+    error: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +400,7 @@ def detect_lan_ip(
 # ---------------------------------------------------------------------------
 
 
-def inspect_rootless_override(
+def plan_rootless_override(
     *,
     _mode: Optional[DockerMode] = None,
     _fs: Optional[Filesystem] = None,
@@ -580,7 +590,7 @@ def candidate_gateways(
 _PROBE_SCRIPT = (
     "getent hosts host.docker.internal | awk '{print $1}' | head -1 | "
     "while read ip; do echo RESOLVED_IP=$ip; done; "
-    'body=$(wget -qO- --timeout=3 http://host.docker.internal:_PORT_ 2>/dev/null) && '
+    'body=$(wget -qO- --timeout=_TIMEOUT_ http://host.docker.internal:_PORT_ 2>/dev/null) && '
     'echo "$body" | grep -qx "_TOKEN_" && echo PROBE_OK'
 )
 
@@ -592,6 +602,17 @@ _UNSAFE_TOKEN_CHARS = re.compile(r'[^A-Za-z0-9._-]')
 # PROBE_OK must appear as a standalone line (not embedded in other text).
 _PROBE_OK_LINE = re.compile(r'(?m)^PROBE_OK$')
 
+# Gateway values must be "host-gateway" or a valid IPv4/IPv6 address.
+
+def _is_valid_gateway(value: str) -> bool:
+    if value == "host-gateway":
+        return True
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
 
 def probe_gateway(
     candidate: str,
@@ -599,6 +620,7 @@ def probe_gateway(
     token: str,
     *,
     probe_image: str = _DEFAULT_PROBE_IMAGE,
+    probe_timeout: int = 3,
     _runner: Optional[ProcessRunner] = None,
 ) -> ProbeResult:
     """Probe a single gateway candidate by running a throwaway container.
@@ -618,10 +640,17 @@ def probe_gateway(
     if _UNSAFE_TOKEN_CHARS.search(token):
         return ProbeResult(candidate, False, None,
                            f"token contains unsafe characters: {token!r}")
+    # probe_timeout must be a plain int (not bool), 1–300 seconds.
+    if isinstance(probe_timeout, bool) or not isinstance(probe_timeout, int):
+        return ProbeResult(candidate, False, None,
+                           f"probe_timeout must be int, got {type(probe_timeout).__name__}")
+    if probe_timeout < 1 or probe_timeout > 300:
+        return ProbeResult(candidate, False, None,
+                           f"probe_timeout out of range: {probe_timeout}")
 
     runner = _runner if _runner is not None else ProcessRunner()
     add_host = f"host.docker.internal:{candidate}"
-    script = _PROBE_SCRIPT.replace("_PORT_", str(probe_port)).replace("_TOKEN_", token)
+    script = _PROBE_SCRIPT.replace("_PORT_", str(probe_port)).replace("_TOKEN_", token).replace("_TIMEOUT_", str(probe_timeout))
     cmd = [
         "docker", "run", "--rm",
         "--add-host", add_host,
@@ -667,6 +696,7 @@ def _choose_gateway(probes: tuple[ProbeResult, ...]) -> Optional[str]:
 def diagnose_gateway(
     *,
     probe_image: str = _DEFAULT_PROBE_IMAGE,
+    probe_timeout: int = 3,
     _runner: Optional[ProcessRunner] = None,
     _host_probe_factory: Optional[Callable[[], HostProbeServer]] = None,
     _fs: Optional[Filesystem] = None,
@@ -685,7 +715,7 @@ def diagnose_gateway(
 
     mode = detect_docker_mode(_runner=runner)
     lan_ip = detect_lan_ip(_runner=runner)
-    plan = inspect_rootless_override(
+    plan = plan_rootless_override(
         _mode=mode,
         _fs=_fs,
         _override_src=_override_src,
@@ -699,7 +729,9 @@ def diagnose_gateway(
         for cand in candidate_gateways(mode, lan_ip):
             probes.append(
                 probe_gateway(cand, probe_port, server.token,
-                              probe_image=probe_image, _runner=runner)
+                              probe_image=probe_image,
+                              probe_timeout=probe_timeout,
+                              _runner=runner)
             )
 
         chosen = _choose_gateway(tuple(probes))
@@ -790,3 +822,42 @@ def update_env_file(
                 fs.delete(tmp)
             except OSError:
                 pass
+
+
+def persist_gateway(
+    path: Path,
+    gateway: str,
+    *,
+    _fs: Optional[Filesystem] = None,
+) -> PersistenceResult:
+    """Persist the operational gateway IP to an env file.
+
+    Thin wrapper around ``update_env_file`` that returns a
+    ``PersistenceResult`` instead of raising on invalid input.
+
+    The gateway value must be a single non-empty token — no whitespace,
+    newlines, ``=``, or ``#`` — to prevent dotenv entry injection.
+    """
+    if not gateway or not gateway.strip():
+        return PersistenceResult(
+            path=path, gateway=gateway, written=False,
+            error="gateway must be non-empty",
+        )
+    # Reject values that are neither host-gateway nor a valid IP address.
+    if not _is_valid_gateway(gateway):
+        return PersistenceResult(
+            path=path, gateway=gateway, written=False,
+            error=f"gateway is not a valid IP or 'host-gateway': {gateway!r}",
+        )
+    try:
+        update_env_file(path, {"HOST_GATEWAY_IP": gateway}, _fs=_fs)
+    except (OSError, ValueError) as exc:
+        return PersistenceResult(
+            path=path, gateway=gateway, written=False,
+            error=str(exc),
+        )
+    return PersistenceResult(path=path, gateway=gateway, written=True)
+
+
+# Backward-compatible alias — prefer ``plan_rootless_override``.
+inspect_rootless_override = plan_rootless_override
