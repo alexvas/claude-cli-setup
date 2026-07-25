@@ -103,6 +103,8 @@ def _render(*, build_context: str = ".",
             pull: bool = False,
             progress: str = "auto",
             dockerfile: str | None = None,
+            dev_uid: int = 1000,
+            dev_gid: int = 1000,
             ) -> tuple[str, ...]:
     if projection is None:
         projection = _projection()
@@ -118,6 +120,8 @@ def _render(*, build_context: str = ".",
         pull=pull,
         progress=progress,
         dockerfile=dockerfile,
+        dev_uid=dev_uid,
+        dev_gid=dev_gid,
     ))
 
 
@@ -376,6 +380,8 @@ class TestBuildArgMapping(unittest.TestCase):
             "PI_VERSION",
             "OPENSPEC_VERSION",
             "OH_MY_ZSH_VERSION",
+            "DEV_UID",
+            "DEV_GID",
         }
         self.assertEqual(set(pairs.keys()), expected)
 
@@ -493,6 +499,51 @@ class TestMissingOrEmptyValues(unittest.TestCase):
 
     def test_empty_rust_version_rejected(self):
         proj = _projection(rust_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_rust_profile_rejected(self):
+        proj = _projection(rust_profile="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_rust_components_rejected(self):
+        proj = _projection(rust_components=())
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_uv_version_rejected(self):
+        proj = _projection(uv_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_ty_version_rejected(self):
+        proj = _projection(ty_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_rtk_version_rejected(self):
+        proj = _projection(rtk_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_fd_version_rejected(self):
+        proj = _projection(fd_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_pi_version_rejected(self):
+        proj = _projection(pi_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_openspec_version_rejected(self):
+        proj = _projection(openspec_version="")
+        with self.assertRaises(EffectiveConfigError):
+            _render(projection=proj)
+
+    def test_empty_oh_my_zsh_revision_rejected(self):
+        proj = _projection(oh_my_zsh_revision="")
         with self.assertRaises(EffectiveConfigError):
             _render(projection=proj)
 
@@ -665,6 +716,40 @@ class TestBuildImageValidation(unittest.TestCase):
             _render(image_tag="   ")
 
 
+class TestBuildInputValidation(unittest.TestCase):
+    """Reject invalid build renderer inputs that are not tied to
+    the projection."""
+
+    def test_empty_target_stage_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(target_stage="")
+
+    def test_whitespace_target_stage_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(target_stage="   ")
+
+    def test_empty_build_context_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(build_context="")
+
+    def test_whitespace_build_context_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(build_context="   ")
+
+    def test_unsupported_progress_mode_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(progress="fancy")
+
+    def test_progress_auto_accepted(self):
+        _render(progress="auto")  # must not raise
+
+    def test_progress_plain_accepted(self):
+        _render(progress="plain")  # must not raise
+
+    def test_progress_tty_accepted(self):
+        _render(progress="tty")  # must not raise
+
+
 class TestBuildArgumentAtomicity(unittest.TestCase):
     """No argument may contain shell-joined text."""
 
@@ -720,6 +805,59 @@ class TestBuildArgumentAtomicity(unittest.TestCase):
             tuple(args[rc_idx:rc_idx + 1]),
             ("RUST_COMPONENTS=rls rust-analysis rustfmt",),
         )
+
+
+class TestDevUidGid(unittest.TestCase):
+    """DEV_UID and DEV_GID are emitted as explicit build args with
+    sensible defaults, not derived from the projection."""
+
+    def test_default_dev_uid_gid(self):
+        args = _render()
+        pairs = _arg_pairs(args)
+        self.assertEqual(pairs["DEV_UID"], "1000")
+        self.assertEqual(pairs["DEV_GID"], "1000")
+
+    def test_custom_dev_uid(self):
+        args = _render(dev_uid=501)
+        pairs = _arg_pairs(args)
+        self.assertEqual(pairs["DEV_UID"], "501")
+        self.assertEqual(pairs["DEV_GID"], "1000")
+
+    def test_custom_dev_gid(self):
+        args = _render(dev_gid=20)
+        pairs = _arg_pairs(args)
+        self.assertEqual(pairs["DEV_UID"], "1000")
+        self.assertEqual(pairs["DEV_GID"], "20")
+
+    def test_custom_dev_uid_and_gid(self):
+        args = _render(dev_uid=501, dev_gid=20)
+        pairs = _arg_pairs(args)
+        self.assertEqual(pairs["DEV_UID"], "501")
+        self.assertEqual(pairs["DEV_GID"], "20")
+
+    def test_dev_uid_after_projection_args(self):
+        """DEV_UID must appear after the last projection-derived
+        --build-arg and before the build context."""
+        args = _render()
+        oh_my_idx = None
+        dev_uid_idx = None
+        for i, token in enumerate(args):
+            if token == "--build-arg" and args[i + 1].startswith("OH_MY_ZSH_VERSION="):
+                oh_my_idx = i
+            if token == "--build-arg" and args[i + 1].startswith("DEV_UID="):
+                dev_uid_idx = i
+        self.assertIsNotNone(oh_my_idx)
+        self.assertIsNotNone(dev_uid_idx)
+        self.assertLess(oh_my_idx, dev_uid_idx,
+                        "DEV_UID must come after projection build args")
+
+    def test_negative_dev_uid_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(dev_uid=-1)
+
+    def test_negative_dev_gid_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(dev_gid=-1)
 
 
 # end of red-phase tests

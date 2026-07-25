@@ -592,6 +592,28 @@ class TestMountSecurity(unittest.TestCase):
         with self.assertRaises(ValueError):
             _render(projection_host_path="/tmp/outside-proj.toml")
 
+    def test_false_positive_substring_rejected(self):
+        """A path whose string contains '.docker-generated/runtime/'
+        but not as actual directory components must be rejected.
+        E.g. /tmp/not.docker-generated/runtime/file.toml is a sibling
+        directory, not a child of .docker-generated/."""
+        with self.assertRaises(ValueError):
+            _render(
+                projection_host_path=(
+                    "/tmp/not.docker-generated/runtime/file.toml"
+                ),
+            )
+
+    def test_relative_projection_host_path_rejected(self):
+        """A relative projection path must be rejected — the caller
+        must supply an absolute path."""
+        with self.assertRaises(ValueError):
+            _render(
+                projection_host_path=(
+                    ".docker-generated/runtime/proj.toml"
+                ),
+            )
+
     def test_noncanonical_projection_container_path_rejected(self):
         """The container-side projection destination is fixed at
         ``/run/pi-cli/docker-constructor.runtime.toml``.  Passing any
@@ -619,31 +641,50 @@ class TestMountSecurity(unittest.TestCase):
             ),
         )
 
-    def test_duplicate_destination_mounts_rejected(self):
-        """Two mounts with the same dst= would collide inside the
-        container.  The renderer must validate uniqueness."""
-        # The main project and Pi home could collide if they share
-        # a destination.  Test by making an optional project path
-        # equal to the Pi home host — since Pi home maps to a fixed
-        # dst, this won't collide.  But two identical project dsts
-        # would collide.
-        #
-        # The simplest collision: main project is also an optional
-        # project — already tested as TestProjectValidation.
-        # test_duplicate_project_paths_rejected.
-        #
-        # For a direct dst collision, the renderer must detect that
-        # two different src paths map to the same dst.  With 1:1
-        # project mounts this can't happen unless the same path is
-        # reused (caught above).  The real risk is Pi home colliding
-        # with a project whose host path happens to be /home/dev/.pi
-        # — but Pi home dst is always /home/dev/.pi, so a project
-        # at /home/dev/.pi would collide.  Test that.
+
+class TestDestinationCollisions(unittest.TestCase):
+    """Reject mount destination collisions across the complete
+    destination set before rendering."""
+
+    def test_main_project_collides_with_pi_home(self):
         with self.assertRaises(ValueError):
             _render(
                 main_project="/home/dev/.pi",
                 pi_home_host="/home/alice/.pi",
             )
+
+    def test_optional_project_collides_with_pi_home(self):
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/main",
+                optional_projects=("/home/dev/.pi",),
+                pi_home_host="/home/alice/.pi",
+            )
+
+    def test_main_project_collides_with_projection_dst(self):
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/run/pi-cli/docker-constructor.runtime.toml",
+            )
+
+    def test_optional_project_collides_with_projection_dst(self):
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/main",
+                optional_projects=(
+                    "/run/pi-cli/docker-constructor.runtime.toml",
+                ),
+            )
+
+    def test_no_collision_between_pi_home_and_projection(self):
+        """Pi home dst (/home/dev/.pi) and projection dst
+        (/run/pi-cli/...) are distinct — must not raise."""
+        _render(
+            pi_home_host="/home/alice/.pi",
+            projection_container_path=(
+                "/run/pi-cli/docker-constructor.runtime.toml"
+            ),
+        )
 
 
 class TestDeterministicOrderingEdge(unittest.TestCase):

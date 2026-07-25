@@ -81,6 +81,16 @@ class BuildRenderInputs:
     the Dockerfile is not at the repository root.
     """
 
+    dev_uid: int = 1000
+    """Host user UID injected as ``DEV_UID`` build argument.
+
+    Controls file ownership inside the built image so that the ``dev``
+    container user matches the host user's UID.
+    """
+
+    dev_gid: int = 1000
+    """Host user GID injected as ``DEV_GID`` build argument."""
+
 
 @dataclass(frozen=True)
 class RunRenderInputs:
@@ -148,6 +158,247 @@ class RunRenderInputs:
     """
 
 
+# ── platform helpers ────────────────────────────────────────────────
+
+# Mapping from internal platform names to Docker platform strings.
+_PLATFORM_MAP: Mapping[str, str] = MappingProxyType({
+    "linux-amd64": "linux/amd64",
+    "linux-arm64": "linux/arm64",
+})
+
+
+def _docker_platform(internal: str) -> str:
+    """Translate an internal platform name to a Docker platform string."""
+    try:
+        return _PLATFORM_MAP[internal]
+    except KeyError:
+        raise EffectiveConfigError(
+            f"unknown platform: {internal!r}"
+        )
+
+
+# ── build-arg emission (ordered, no generic traversal) ──────────────
+
+# Deterministic order matching every Dockerfile ARG declaration.
+_BUILD_ARG_ORDER: tuple[tuple[str, str], ...] = (
+    ("NODE_BASE_IMAGE", "node.image"),
+    ("RUST_VERSION", "rust.version"),
+    ("RUST_PROFILE", "rust.profile"),
+    ("RUST_COMPONENTS", "rust.components"),
+    ("RUSTUP_URL", "rust.rustup.url"),
+    ("RUSTUP_SHA256", "rust.rustup.sha256"),
+    ("UV_VERSION", "uv.version"),
+    ("UV_URL", "uv.artifact.url"),
+    ("UV_SHA256", "uv.artifact.sha256"),
+    ("PYTHON_VERSION", "python_version"),
+    ("TY_VERSION", "ty_version"),
+    ("RTK_VERSION", "rtk.version"),
+    ("RTK_URL", "rtk.artifact.url"),
+    ("RTK_SHA256", "rtk.artifact.sha256"),
+    ("FD_VERSION", "fd.version"),
+    ("FD_URL", "fd.artifact.url"),
+    ("FD_SHA256", "fd.artifact.sha256"),
+    ("PI_VERSION", "pi_version"),
+    ("OPENSPEC_VERSION", "openspec_version"),
+    ("OH_MY_ZSH_VERSION", "oh_my_zsh_revision"),
+)
+
+
+def _resolve_build_arg(proj: EffectiveBuildProjection, path: str) -> str:
+    """Resolve a dotted path against the projection to a string value.
+
+    ``tuple[str, ...]`` fields (e.g. ``rust.components``) are joined
+    with a single space.
+    """
+    parts = path.split(".")
+    obj: object = proj
+    for part in parts:
+        obj = getattr(obj, part)
+    if isinstance(obj, tuple):
+        return " ".join(obj)
+    return str(obj)
+
+
+def _emit_build_args(args: list[str], proj: EffectiveBuildProjection) -> None:
+    """Append ``--build-arg NAME=VALUE`` pairs to *args* in
+    ``_BUILD_ARG_ORDER``."""
+    for arg_name, field_path in _BUILD_ARG_ORDER:
+        raw = _resolve_build_arg(proj, field_path)
+        args.extend(("--build-arg", f"{arg_name}={raw}"))
+
+
+# ── validation ──────────────────────────────────────────────────────
+
+
+def _validate_build_projection(proj: EffectiveBuildProjection) -> None:
+    """Reject projection fields that are missing or empty."""
+    # Every scalar version/revision field must be non-empty.
+    for label, value in (
+        ("NODE_BASE_IMAGE", proj.node.image),
+        ("RUST_VERSION", proj.rust.version),
+        ("RUST_PROFILE", proj.rust.profile),
+        ("UV_VERSION", proj.uv.version),
+        ("PYTHON_VERSION", proj.python_version),
+        ("TY_VERSION", proj.ty_version),
+        ("RTK_VERSION", proj.rtk.version),
+        ("FD_VERSION", proj.fd.version),
+        ("PI_VERSION", proj.pi_version),
+        ("OPENSPEC_VERSION", proj.openspec_version),
+        ("OH_MY_ZSH_VERSION", proj.oh_my_zsh_revision),
+    ):
+        if not value.strip():
+            raise EffectiveConfigError(f"{label} is empty")
+
+    # Rust components must not be empty.
+    if not proj.rust.components:
+        raise EffectiveConfigError("RUST_COMPONENTS is empty")
+
+    # Every artifact must have a non-empty URL and SHA256.
+    for label, art in (
+        ("RUSTUP", proj.rust.rustup),
+        ("UV", proj.uv.artifact),
+        ("RTK", proj.rtk.artifact),
+        ("FD", proj.fd.artifact),
+    ):
+        if not art.url.strip():
+            raise EffectiveConfigError(f"{label}_URL is empty")
+        if not art.sha256.strip():
+            raise EffectiveConfigError(f"{label}_SHA256 is empty")
+
+
+# ── run-vector helpers ──────────────────────────────────────────────
+
+_PROJECTION_CANONICAL_CONTAINER_PATH: str = (
+    "/run/pi-cli/docker-constructor.runtime.toml"
+)
+
+
+def _validate_run_inputs(inputs: RunRenderInputs) -> None:
+    """Validate all ``RunRenderInputs`` fields before rendering."""
+    # Required string fields must be non-empty.
+    for label, value in (
+        ("image", inputs.image),
+        ("container_name", inputs.container_name),
+        ("main_project", inputs.main_project),
+    ):
+        if not value.strip():
+            raise ValueError(f"{label} must not be empty")
+
+    # Optional projects must not contain empty entries.
+    for i, p in enumerate(inputs.optional_projects):
+        if not p.strip():
+            raise ValueError(f"optional_projects[{i}] is empty")
+
+    # At most 2 optional projects.
+    if len(inputs.optional_projects) > 2:
+        raise ValueError(
+            f"at most 2 optional projects supported, got "
+            f"{len(inputs.optional_projects)}"
+        )
+
+    # Duplicate project paths (main vs optional, or among optionals).
+    all_projects = [inputs.main_project] + list(inputs.optional_projects)
+    seen: set[str] = set()
+    for p in all_projects:
+        if p in seen:
+            raise ValueError(f"duplicate project path: {p}")
+        seen.add(p)
+
+    # Project and Pi-home paths must be absolute.
+    for label, value in (
+        ("main_project", inputs.main_project),
+        ("pi_home_host", inputs.pi_home_host),
+    ):
+        if not value.startswith("/"):
+            raise ValueError(f"{label} must be an absolute path, got {value!r}")
+    for i, p in enumerate(inputs.optional_projects):
+        if not p.startswith("/"):
+            raise ValueError(
+                f"optional_projects[{i}] must be an absolute path, got {p!r}"
+            )
+
+    # Projection container path must be canonical.
+    if inputs.projection_container_path != _PROJECTION_CANONICAL_CONTAINER_PATH:
+        raise ValueError(
+            f"projection_container_path must be "
+            f"{_PROJECTION_CANONICAL_CONTAINER_PATH!r}, "
+            f"got {inputs.projection_container_path!r}"
+        )
+
+    # Projection host path must be under .docker-generated/runtime/ and
+    # must not be a forbidden file.
+    _validate_projection_host_path(inputs.projection_host_path)
+
+    # Destination mount collisions: every dst must be unique across
+    # Pi home, projection, and all project mounts.
+    all_dsts: set[str] = {_CONTAINER_PI_HOME, inputs.projection_container_path}
+    for p in all_projects:
+        if p in all_dsts:
+            raise ValueError(
+                f"project path {p!r} collides with a fixed mount destination"
+            )
+        all_dsts.add(p)
+
+
+def _validate_projection_host_path(host_path: str) -> None:
+    """Reject projection host paths that are forbidden or outside
+    the allowed ``.docker-generated/runtime/`` directory."""
+    import os
+
+    # Must be absolute.
+    if not host_path.startswith("/"):
+        raise ValueError(
+            f"projection_host_path must be absolute, got {host_path!r}"
+        )
+
+    normalized = os.path.normpath(host_path)
+    parts = normalized.split(os.sep)
+
+    # Must have at least: /, .docker-generated, runtime, <file>
+    if len(parts) < 3:
+        raise ValueError(
+            f"projection_host_path must be under .docker-generated/runtime/, "
+            f"got {host_path!r}"
+        )
+
+    # The parent directory must be named '.docker-generated' and its
+    # child must be 'runtime'.
+    if parts[-3] != ".docker-generated" or parts[-2] != "runtime":
+        raise ValueError(
+            f"projection_host_path must be under .docker-generated/runtime/, "
+            f"got {host_path!r}"
+        )
+
+    # Reject effective build projection.
+    if "build.effective" in parts[-1]:
+        raise ValueError(
+            f"projection_host_path must not reference effective build "
+            f"projection, got {host_path!r}"
+        )
+
+    # Reject docker-constructor.toml explicitly (the reviewed source).
+    if parts[-1] == "docker-constructor.toml":
+        raise ValueError(
+            f"projection_host_path must not be docker-constructor.toml, "
+            f"got {host_path!r}"
+        )
+
+
+def _emit_run_mount(
+    args: list[str],
+    type_: str,
+    src: str,
+    dst: str,
+    *,
+    readonly: bool = False,
+) -> None:
+    """Append a ``--mount`` argument to *args*."""
+    parts = [f"type={type_}", f"src={src}", f"dst={dst}"]
+    if readonly:
+        parts.append("readonly")
+    args.extend(("--mount", ",".join(parts)))
+
+
 # ── existing rendering functions ────────────────────────────────────
 
 
@@ -163,7 +414,61 @@ def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
             or empty, or the command platform does not match the
             projection platform.
     """
-    raise NotImplementedError("render_build_vector — RED phase")
+    # 1.  Validate platform match between command and projection.
+    expected_platform = _docker_platform(inputs.projection.platform)
+    if inputs.platform != expected_platform:
+        raise EffectiveConfigError(
+            f"platform mismatch: command expects {inputs.platform!r}, "
+            f"projection built for {expected_platform!r}"
+        )
+
+    # 2.  Validate required projection fields and image tag.
+    _validate_build_projection(inputs.projection)
+    if not inputs.image_tag.strip():
+        raise ValueError("image_tag must not be empty")
+    if not inputs.target_stage.strip():
+        raise ValueError("target_stage must not be empty")
+    if not inputs.build_context.strip():
+        raise ValueError("build_context must not be empty")
+    if inputs.progress not in ("auto", "plain", "tty"):
+        raise ValueError(
+            f"unsupported progress mode {inputs.progress!r}; "
+            f"expected 'auto', 'plain', or 'tty'"
+        )
+
+    # 3.  Build the deterministic argument vector.
+    args: list[str] = ["docker", "build"]
+
+    # Flags — always in this order.
+    args.extend(("--tag", inputs.image_tag))
+    args.extend(("--target", inputs.target_stage))
+    args.extend(("--platform", inputs.platform))
+    args.extend(("--progress", inputs.progress))
+
+    if inputs.dockerfile is not None:
+        args.extend(("--file", inputs.dockerfile))
+
+    if not inputs.cache.enabled:
+        args.append("--no-cache")
+
+    if inputs.pull:
+        args.append("--pull")
+
+    # Build arguments — deterministic order matching the Dockerfile ARGs.
+    _emit_build_args(args, inputs.projection)
+
+    # DEV_UID / DEV_GID — host-user identity, not from the projection.
+    if inputs.dev_uid < 0:
+        raise ValueError(f"dev_uid must be >= 0, got {inputs.dev_uid}")
+    if inputs.dev_gid < 0:
+        raise ValueError(f"dev_gid must be >= 0, got {inputs.dev_gid}")
+    args.extend(("--build-arg", f"DEV_UID={inputs.dev_uid}"))
+    args.extend(("--build-arg", f"DEV_GID={inputs.dev_gid}"))
+
+    # Build context is always the final positional argument.
+    args.append(inputs.build_context)
+
+    return tuple(args)
 
 
 def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
@@ -173,7 +478,54 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     The renderer never invokes Docker, discovers projects, probes
     gateways, or prompts the user.
     """
-    raise NotImplementedError("render_run_vector — RED phase")
+    # 1.  Validate all inputs before rendering.
+    _validate_run_inputs(inputs)
+
+    # 2.  Build the deterministic argument vector.
+    args: list[str] = ["docker", "run", "--rm"]
+
+    # --name
+    args.extend(("--name", inputs.container_name))
+
+    # TTY / stdin flags
+    if inputs.tty:
+        args.append("--tty")
+    if inputs.stdin_open:
+        args.append("--interactive")
+
+    # Mounts — ordered: Pi home, projection, main project, optional projects.
+    _emit_run_mount(args, "bind", inputs.pi_home_host, _CONTAINER_PI_HOME)
+    _emit_run_mount(
+        args, "bind",
+        inputs.projection_host_path,
+        inputs.projection_container_path,
+        readonly=True,
+    )
+    _emit_run_mount(args, "bind", inputs.main_project, inputs.main_project)
+    for p in inputs.optional_projects:
+        _emit_run_mount(args, "bind", p, p)
+
+    # Working directory
+    args.extend(("--workdir", inputs.main_project))
+
+    # Environment: PROJECT_PATH_*
+    all_projects = (inputs.main_project,) + inputs.optional_projects
+    for i, proj_path in enumerate(all_projects, start=1):
+        args.extend(("--env", f"PROJECT_PATH_{i}={proj_path}"))
+
+    if inputs.chown_on_start is not None:
+        args.extend(("--env", f"CHOWN_WORK_ON_START={inputs.chown_on_start}"))
+
+    # Gateway
+    args.extend(("--add-host", f"host.docker.internal:{inputs.gateway}"))
+
+    # Image
+    args.append(inputs.image)
+
+    # Command passthrough
+    args.extend(inputs.command)
+
+    return tuple(args)
 
 
 def render_command_display(args: tuple[str, ...]) -> str:
