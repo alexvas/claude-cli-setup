@@ -1,0 +1,581 @@
+"""Docker host-gateway diagnosis and rootless-override management.
+
+Detects Docker rootful/rootless mode, discovers LAN IPs, probes gateway
+candidates through an ephemeral HTTP server, and manages rootless
+port-forward overrides.  Every side-effecting operation accepts an
+injectable ``_run``, ``_filesystem``, or factory argument so tests can
+substitute fakes without Docker or systemd.
+
+This module does **not** own argument parsing, user prompts, terminal
+output, exit-code selection, inventory resolution, or build/run
+orchestration.
+"""
+
+from __future__ import annotations
+
+import enum
+import http.server
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Iterable, Optional
+
+# ---------------------------------------------------------------------------
+# Default filesystem locations
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PROBE_IMAGE = "alpine:3.20"
+_DEFAULT_OVERRIDE_SRC = Path(__file__).resolve().parent / "rootless-docker.override.conf"
+# Dest is resolved through Filesystem.home at call time so tests can
+# inject a fake home directory without touching the real filesystem.
+_OVERRIDE_DEST_REL = Path(".config/systemd/user/docker.service.d/override.conf")
+
+
+# ---------------------------------------------------------------------------
+# Domain types
+# ---------------------------------------------------------------------------
+
+
+class DockerMode(enum.Enum):
+    """Docker daemon operational mode."""
+    ROOTFUL = "rootful"
+    ROOTLESS = "rootless"
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """Result of probing a single gateway candidate."""
+
+    candidate: str
+    ok: bool
+    resolved_ip: Optional[str]
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not self.candidate:
+            raise ValueError("candidate must be non-empty")
+        # detail may be empty for a clean success; truncate is caller's job
+
+
+@dataclass(frozen=True)
+class GatewayDiagnosis:
+    """Structured result of a full gateway diagnosis run.
+
+    Immutable: callers cannot mutate fields after construction.
+    ``host_gateway_ip`` resolves to the successful probe's resolved IP,
+    falling back to the candidate string when the resolved IP is
+    unavailable.  Returns ``None`` when no candidate succeeded.
+    """
+
+    mode: DockerMode
+    probe_port: int
+    probe_token: str
+    lan_ip: Optional[str]
+    probes: tuple[ProbeResult, ...]
+    chosen_gateway: Optional[str]
+    override_installed: bool
+    override_needed: bool
+
+    @property
+    def rootless(self) -> bool:
+        """Convenience accessor for callers migrating from ``bool``."""
+        return self.mode is DockerMode.ROOTLESS
+
+    @property
+    def host_gateway_ip(self) -> Optional[str]:
+        """Concrete IP for the chosen gateway (if one succeeded)."""
+        if self.chosen_gateway is None:
+            return None
+        for p in self.probes:
+            if p.candidate == self.chosen_gateway and p.ok:
+                return p.resolved_ip or p.candidate
+        return None
+
+    def chosen_probe(self) -> Optional[ProbeResult]:
+        """Return the ``ProbeResult`` for the chosen gateway, if any."""
+        if self.chosen_gateway is None:
+            return None
+        for p in self.probes:
+            if p.candidate == self.chosen_gateway and p.ok:
+                return p
+        return None
+
+
+@dataclass(frozen=True)
+class RootlessOverridePlan:
+    """Description of the current rootless-override state.
+
+    ``installed`` is ``True`` when the destination file exists and its
+    content matches the source template.
+    """
+
+    installed: bool
+    needed: bool  # rootless Docker without a matching override
+    src: Path
+    dest: Path
+
+
+# ---------------------------------------------------------------------------
+# Domain errors
+# ---------------------------------------------------------------------------
+
+
+class DockerDetectionError(RuntimeError):
+    """Docker daemon could not be reached or its mode could not be
+    determined."""
+
+
+# ---------------------------------------------------------------------------
+# Abstract side-effect boundaries (injectable for testing)
+# ---------------------------------------------------------------------------
+
+
+class Filesystem:
+    """Filesystem operations needed by the networking module.
+
+    Subclass and override methods to create an in-memory fake for
+    tests that must not touch the real disk.
+    """
+
+    def is_file(self, path: Path) -> bool:
+        return path.is_file()
+
+    def read_text(self, path: Path, encoding: str = "utf-8") -> str:
+        return path.read_text(encoding=encoding)
+
+    def write_text(self, path: Path, content: str, encoding: str = "utf-8") -> None:
+        path.write_text(content, encoding=encoding)
+
+    def mkdir(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+
+    def copy(self, src: Path, dest: Path) -> None:
+        shutil.copy2(src, dest)
+
+    def rename(self, src: Path, dest: Path) -> None:
+        src.rename(dest)
+
+    def delete(self, path: Path) -> None:
+        path.unlink(missing_ok=True)
+
+    @property
+    def home(self) -> Path:
+        return Path.home()
+
+
+class ServiceController:
+    """systemd user-service control.
+
+    Subclass and override methods to create an in-memory fake for
+    tests that must not invoke real systemctl.
+    """
+
+    def __init__(self, _run: Optional[_RunFunc] = None) -> None:
+        self._run = _run if _run is not None else _default_run
+
+    def daemon_reload(self) -> None:
+        self._run(["systemctl", "--user", "daemon-reload"])
+
+    def restart(self, unit: str) -> None:
+        self._run(["systemctl", "--user", "restart", unit])
+
+
+class SystemClock:
+    """Clock / sleep operations.
+
+    Subclass and override for tests that must control time.
+    """
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def timestamp(self) -> float:
+        return time.time()
+
+
+# ---------------------------------------------------------------------------
+# Host probe server
+# ---------------------------------------------------------------------------
+
+
+class HostProbeServer:
+    """Ephemeral HTTP server on ``0.0.0.0:RAND`` returning a fixed token.
+
+    The server is created once per diagnosis run and torn down in a
+    ``finally`` block so the port is released regardless of probe
+    outcome.
+    """
+
+    def __init__(self, *, _clock: Optional[SystemClock] = None) -> None:
+        clock = _clock or SystemClock()
+        self.token = f"OK_{int(clock.timestamp())}"
+        self.port = 0
+        self._httpd: Optional[http.server.ThreadingHTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> int:
+        token = self.token
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(token.encode())
+
+            def log_message(self, _format: str, *args: object) -> None:
+                pass  # suppress access-log noise
+
+        self._httpd = http.server.ThreadingHTTPServer(("0.0.0.0", 0), _Handler)
+        self.port = int(self._httpd.server_address[1])
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+        return self.port
+
+    def stop(self) -> None:
+        if self._httpd is not None:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+            self._httpd = None
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+
+
+# ---------------------------------------------------------------------------
+# Detection helpers
+# ---------------------------------------------------------------------------
+
+_RunFunc = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
+
+
+def _default_run(cmd: list[str]) -> "subprocess.CompletedProcess[str]":
+    """Default subprocess runner used unless a fake is injected."""
+    return subprocess.run(
+        cmd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def detect_docker_mode(
+    *,
+    _run: Optional[_RunFunc] = None,
+) -> DockerMode:
+    """Return the Docker daemon operational mode.
+
+    Raises ``DockerDetectionError`` when ``docker info`` fails or the
+    ``docker`` binary is not found.
+    """
+    run = _run if _run is not None else _default_run
+    try:
+        proc = run(["docker", "info"])
+    except FileNotFoundError:
+        raise DockerDetectionError("docker not found on PATH")
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        raise DockerDetectionError(detail)
+    if "rootless" in proc.stdout.lower():
+        return DockerMode.ROOTLESS
+    return DockerMode.ROOTFUL
+
+
+def detect_lan_ip(
+    *,
+    _run: Optional[_RunFunc] = None,
+) -> Optional[str]:
+    """Discover a plausible LAN IP via ``hostname -I`` or ``ip route``.
+
+    Returns ``None`` when no address can be determined.  Process
+    failures are handled gracefully — this function never raises.
+    """
+    run = _run if _run is not None else _default_run
+    try:
+        proc = run(["hostname", "-I"])
+        out = proc.stdout.strip()
+        if out:
+            return out.split()[0]
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        pass
+    try:
+        proc = run(["ip", "-4", "route", "show", "default"])
+        m = re.search(r"\bsrc\s+(\d+\.\d+\.\d+\.\d+)\b", proc.stdout)
+        if m:
+            return m.group(1)
+    except (FileNotFoundError, OSError):
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Rootless override
+# ---------------------------------------------------------------------------
+
+
+def inspect_rootless_override(
+    *,
+    _fs: Optional[Filesystem] = None,
+    _override_src: Optional[Path] = None,
+    _override_dest: Optional[Path] = None,
+) -> RootlessOverridePlan:
+    """Return a plan describing the current rootless-override state.
+
+    The plan does **not** apply or prompt; the caller decides whether to
+    act on it.
+    """
+    fs = _fs or Filesystem()
+    src = _override_src if _override_src is not None else _DEFAULT_OVERRIDE_SRC
+    dest = _override_dest if _override_dest is not None else fs.home / _OVERRIDE_DEST_REL
+
+    installed = False
+    if fs.is_file(dest):
+        try:
+            installed = fs.read_text(dest) == fs.read_text(src)
+        except OSError:
+            pass
+    return RootlessOverridePlan(
+        installed=installed,
+        needed=not installed,
+        src=src,
+        dest=dest,
+    )
+
+
+def apply_rootless_override(
+    plan: RootlessOverridePlan,
+    *,
+    consent: bool,
+    _fs: Optional[Filesystem] = None,
+    _svc: Optional[ServiceController] = None,
+    _clock: Optional[SystemClock] = None,
+) -> None:
+    """Install the rootless port-forward override and restart Docker.
+
+    ``consent`` must be ``True`` for the function to perform any
+    filesystem or service operation.  When ``consent`` is ``False``
+    this function returns immediately — no override is installed, no
+    systemctl commands are issued.
+    """
+    if not consent:
+        return
+    fs = _fs or Filesystem()
+    svc = _svc or ServiceController()
+    clock = _clock or SystemClock()
+
+    if not fs.is_file(plan.src):
+        raise FileNotFoundError(f"Override source not found: {plan.src}")
+
+    fs.mkdir(plan.dest.parent)
+    fs.copy(plan.src, plan.dest)
+    svc.daemon_reload()
+    svc.restart("docker.service")
+    clock.sleep(3)
+
+
+# ---------------------------------------------------------------------------
+# Gateway selection and probing
+# ---------------------------------------------------------------------------
+
+
+def candidate_gateways(
+    mode: DockerMode,
+    lan_ip: Optional[str],
+) -> tuple[str, ...]:
+    """Return the ordered list of gateway candidates to probe.
+
+    Rootless: ``10.0.2.2`` first (VirtualBox default), then LAN IP,
+    then ``host-gateway``.
+    Rootful: ``host-gateway`` first, then LAN IP.
+    """
+    if mode is DockerMode.ROOTLESS:
+        order: list[str] = ["10.0.2.2"]
+        if lan_ip and lan_ip not in order:
+            order.append(lan_ip)
+        if "host-gateway" not in order:
+            order.append("host-gateway")
+        return tuple(order)
+    order = ["host-gateway"]
+    if lan_ip and lan_ip not in order:
+        order.append(lan_ip)
+    return tuple(order)
+
+
+def probe_gateway(
+    candidate: str,
+    probe_port: int,
+    token: str,
+    *,
+    probe_image: str = _DEFAULT_PROBE_IMAGE,
+    _run: Optional[_RunFunc] = None,
+) -> ProbeResult:
+    """Probe a single gateway candidate by running a throwaway container.
+
+    The container resolves ``host.docker.internal`` via ``--add-host``,
+    fetches the probe token from the host ephemeral server, and reports
+    the resolved IP.
+    """
+    run = _run if _run is not None else _default_run
+    add_host = f"host.docker.internal:{candidate}"
+    script = (
+        "getent hosts host.docker.internal | awk '{print $1}' | head -1 | "
+        "while read ip; do echo RESOLVED_IP=$ip; done; "
+        f"body=$(wget -qO- --timeout=3 http://host.docker.internal:{probe_port} 2>/dev/null) && "
+        f'echo "$body" | grep -qx "{token}" && echo PROBE_OK'
+    )
+    cmd = [
+        "docker", "run", "--rm",
+        "--add-host", add_host,
+        probe_image,
+        "sh", "-c", script,
+    ]
+    try:
+        proc = run(cmd)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        ok = "PROBE_OK" in out
+        resolved: Optional[str] = None
+        m = re.search(r"RESOLVED_IP=(\S+)", out)
+        if m:
+            resolved = m.group(1)
+        detail = out.strip()[-200:] if out.strip() else f"exit {proc.returncode}"
+        return ProbeResult(candidate, ok, resolved, detail)
+    except Exception as exc:
+        return ProbeResult(candidate, False, None, str(exc)[:200])
+
+
+def _choose_gateway(probes: tuple[ProbeResult, ...]) -> Optional[str]:
+    """Pick the first successful candidate."""
+    for probe in probes:
+        if probe.ok:
+            return probe.candidate
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Full diagnosis orchestration
+# ---------------------------------------------------------------------------
+
+
+def diagnose_gateway(
+    *,
+    probe_image: str = _DEFAULT_PROBE_IMAGE,
+    _run: Optional[_RunFunc] = None,
+    _host_probe_factory: Optional[Callable[[], HostProbeServer]] = None,
+    _fs: Optional[Filesystem] = None,
+    _override_src: Optional[Path] = None,
+    _override_dest: Optional[Path] = None,
+) -> GatewayDiagnosis:
+    """Run full gateway diagnosis: detection, probing, override inspection.
+
+    Returns a structured ``GatewayDiagnosis``.  Callers present the
+    result to the user and decide whether to apply overrides.  This
+    function never installs an override — it only reports whether one
+    is needed.
+    """
+    run = _run if _run is not None else _default_run
+    host_factory = _host_probe_factory or HostProbeServer
+
+    mode = detect_docker_mode(_run=run)
+    lan_ip = detect_lan_ip(_run=run)
+    plan = inspect_rootless_override(
+        _fs=_fs,
+        _override_src=_override_src,
+        _override_dest=_override_dest,
+    )
+
+    server = host_factory()
+    try:
+        probe_port = server.start()
+        probes: list[ProbeResult] = []
+        for cand in candidate_gateways(mode, lan_ip):
+            probes.append(
+                probe_gateway(cand, probe_port, server.token,
+                              probe_image=probe_image, _run=run)
+            )
+
+        chosen = _choose_gateway(tuple(probes))
+        return GatewayDiagnosis(
+            mode=mode,
+            probe_port=probe_port,
+            probe_token=server.token,
+            lan_ip=lan_ip,
+            probes=tuple(probes),
+            chosen_gateway=chosen,
+            override_installed=plan.installed,
+            override_needed=(mode is DockerMode.ROOTLESS) and plan.needed,
+        )
+    finally:
+        server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Operational persistence
+# ---------------------------------------------------------------------------
+
+
+def update_env_file(
+    path: Path,
+    updates: dict[str, str],
+    *,
+    remove_keys: Iterable[str] = (),
+    _fs: Optional[Filesystem] = None,
+    _tmp_suffix: Optional[str] = None,
+) -> None:
+    """Persist operational key=value pairs to a dotenv file.
+
+    Preserves existing non-removed entries, overwrites matching keys,
+    and appends new keys at the end.  Writes to a unique temporary
+    file in the same directory, then atomically renames onto ``path``
+    so concurrent callers never share a temporary file.  The temporary
+    file is cleaned up in a ``finally`` block even when the rename
+    fails.
+    """
+    fs = _fs or Filesystem()
+    unique = (
+        _tmp_suffix
+        if _tmp_suffix is not None
+        else f"{os.getpid()}.{int(time.time() * 1_000_000)}"
+    )
+    tmp = path.with_name(f"{path.name}.tmp.{unique}")
+
+    lines: list[str] = []
+    if fs.is_file(path):
+        lines = fs.read_text(path).splitlines()
+
+    remove = set(remove_keys)
+    seen: set[str] = set()
+    new_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        key = ""
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+        if key in remove:
+            continue
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in seen:
+            new_lines.append(f"{key}={value}")
+
+    content = "\n".join(new_lines) + "\n"
+
+    try:
+        fs.write_text(tmp, content)
+        fs.rename(tmp, path)
+    finally:
+        if fs.is_file(tmp):
+            try:
+                fs.delete(tmp)
+            except OSError:
+                pass

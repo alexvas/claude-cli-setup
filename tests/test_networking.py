@@ -1,0 +1,693 @@
+"""GREEN-phase tests for ``docker.networking`` — Stage 7.2, 7.6, 7.7.
+
+Covers rootless-override planning/application, operational persistence,
+full diagnosis with injected boundaries, and import-boundary checks.
+All tests use **in-memory fakes** for filesystem, service control, and
+process execution — no real disk, no Docker, no systemd.
+
+See ``tests/test_constructor_networking.py`` for the RED‑phase 7.1
+diagnosis tests (detection, candidates, probes, DTOs).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import subprocess
+import unittest
+from pathlib import Path
+from typing import Optional
+from unittest import mock
+
+from docker.networking import (
+    DockerMode,
+    Filesystem,
+    GatewayDiagnosis,
+    ProbeResult,
+    RootlessOverridePlan,
+    ServiceController,
+    SystemClock,
+    _choose_gateway,
+    apply_rootless_override,
+    candidate_gateways,
+    diagnose_gateway,
+    inspect_rootless_override,
+    probe_gateway,
+    update_env_file,
+)
+
+
+# ---------------------------------------------------------------------------
+# In-memory fakes
+# ---------------------------------------------------------------------------
+
+def _completed(rc: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess([], rc, stdout=stdout, stderr=stderr)
+
+
+class FakeFilesystem(Filesystem):
+    """In-memory filesystem for override planning/application tests."""
+
+    def __init__(self, *, home: Path = Path("/fake/home"),
+                 files: dict[str, str] | None = None) -> None:
+        self._files: dict[str, str] = dict(files or {})
+        self._home = home
+        self.mkdirs: list[Path] = []
+        self.copies: list[tuple[Path, Path]] = []
+        self.renames: list[tuple[Path, Path]] = []
+        self.writes: list[Path] = []
+        self.deletes: list[Path] = []
+
+    @property
+    def home(self) -> Path:
+        return self._home
+
+    def is_file(self, path: Path) -> bool:
+        return str(path) in self._files
+
+    def read_text(self, path: Path, encoding: str = "utf-8") -> str:
+        return self._files[str(path)]
+
+    def write_text(self, path: Path, content: str, encoding: str = "utf-8") -> None:
+        self._files[str(path)] = content
+        self.writes.append(path)
+
+    def mkdir(self, path: Path) -> None:
+        self.mkdirs.append(path)
+
+    def copy(self, src: Path, dest: Path) -> None:
+        if not self.is_file(src):
+            raise FileNotFoundError(f"Source not found: {src}")
+        self._files[str(dest)] = self._files[str(src)]
+        self.copies.append((src, dest))
+
+    def rename(self, src: Path, dest: Path) -> None:
+        content = self._files.pop(str(src), None)
+        if content is None:
+            raise FileNotFoundError(f"Source not found for rename: {src}")
+        self._files[str(dest)] = content
+        self.renames.append((src, dest))
+
+    def delete(self, path: Path) -> None:
+        self._files.pop(str(path), None)
+        self.deletes.append(path)
+
+    def clear_writes(self) -> None:
+        self.writes.clear()
+        self.renames.clear()
+
+
+class FakeServiceController(ServiceController):
+    """In-memory service controller — records calls, never invokes systemctl."""
+
+    def __init__(self, *, fail_daemon_reload: Optional[Exception] = None,
+                 fail_restart: Optional[Exception] = None) -> None:
+        super().__init__(_run=None)  # no real subprocess
+        self._fail_daemon_reload = fail_daemon_reload
+        self._fail_restart = fail_restart
+        self.reloads: list[None] = []
+        self.restarts: list[str] = []
+
+    def daemon_reload(self) -> None:
+        self.reloads.append(None)
+        if self._fail_daemon_reload:
+            raise self._fail_daemon_reload
+
+    def restart(self, unit: str) -> None:
+        self.restarts.append(unit)
+        if self._fail_restart:
+            raise self._fail_restart
+
+
+class FakeClock(SystemClock):
+    """Controllable clock for tests."""
+
+    def __init__(self, *, ts: float = 1000.0) -> None:
+        self._ts = ts
+        self.sleeps: list[float] = []
+
+    def timestamp(self) -> float:
+        return self._ts
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
+
+class FakeHostProbeServer:
+    """Fake ``HostProbeServer`` for diagnosis tests."""
+
+    def __init__(self, port: int = 12345, token: str = "FAKE_TOKEN"):
+        self.port = port
+        self.token = token
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> int:
+        self.started = True
+        return self.port
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+# ---------------------------------------------------------------------------
+# 7.2 — Rootless override planning (in-memory filesystem)
+# ---------------------------------------------------------------------------
+
+
+class TestInspectRootlessOverrideInMemory(unittest.TestCase):
+    """Override planning with in-memory ``Filesystem`` fake."""
+
+    OVERRIDE_CONTENT = "[Service]\nPort=forward\n"
+    OTHER_CONTENT = "[Service]\nPort=other\n"
+
+    def setUp(self):
+        self.src = Path("/fake/override.conf")
+        self.dest = Path("/fake/home/.config/systemd/user/docker.service.d/override.conf")
+
+    def test_installed_when_dest_matches_src(self):
+        fs = FakeFilesystem(files={
+            str(self.src): self.OVERRIDE_CONTENT,
+            str(self.dest): self.OVERRIDE_CONTENT,
+        })
+        plan = inspect_rootless_override(
+            _fs=fs,
+            _override_src=self.src,
+            _override_dest=self.dest,
+        )
+        self.assertTrue(plan.installed)
+        self.assertFalse(plan.needed)
+
+    def test_not_installed_when_dest_missing(self):
+        fs = FakeFilesystem(files={str(self.src): self.OVERRIDE_CONTENT})
+        plan = inspect_rootless_override(
+            _fs=fs,
+            _override_src=self.src,
+            _override_dest=self.dest,
+        )
+        self.assertFalse(plan.installed)
+        self.assertTrue(plan.needed)
+
+    def test_not_installed_when_content_differs(self):
+        fs = FakeFilesystem(files={
+            str(self.src): self.OVERRIDE_CONTENT,
+            str(self.dest): self.OTHER_CONTENT,
+        })
+        plan = inspect_rootless_override(
+            _fs=fs,
+            _override_src=self.src,
+            _override_dest=self.dest,
+        )
+        self.assertFalse(plan.installed)
+        self.assertTrue(plan.needed)
+
+    def test_plan_exposes_src_and_dest_paths(self):
+        fs = FakeFilesystem(files={str(self.src): self.OVERRIDE_CONTENT})
+        plan = inspect_rootless_override(
+            _fs=fs,
+            _override_src=self.src,
+            _override_dest=self.dest,
+        )
+        self.assertEqual(plan.src, self.src)
+        self.assertEqual(plan.dest, self.dest)
+
+    def test_uses_injected_fs_not_real_disk(self):
+        """Plan uses only the injected fs; a missing real file is fine."""
+        fs = FakeFilesystem(files={
+            "/nonexistent/src.conf": "c",
+            "/nonexistent/dest.conf": "c",
+        })
+        plan = inspect_rootless_override(
+            _fs=fs,
+            _override_src=Path("/nonexistent/src.conf"),
+            _override_dest=Path("/nonexistent/dest.conf"),
+        )
+        self.assertTrue(plan.installed)
+
+    def test_default_dest_resolved_through_fs_home(self):
+        """When ``_override_dest`` is not given, the default is computed
+        from ``fs.home``, not the real ``Path.home()``."""
+        src = Path("/fake/override.conf")
+        expected_dest = Path("/custom/home/.config/systemd/user/docker.service.d/override.conf")
+        fs = FakeFilesystem(
+            home=Path("/custom/home"),
+            files={str(src): "c", str(expected_dest): "c"},
+        )
+        plan = inspect_rootless_override(
+            _fs=fs,
+            _override_src=src,
+            # _override_dest omitted — must use fs.home
+        )
+        self.assertEqual(plan.dest, expected_dest)
+        self.assertTrue(plan.installed)
+
+
+# ---------------------------------------------------------------------------
+# 7.2 — Rootless override application (in-memory fakes)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyRootlessOverrideInMemory(unittest.TestCase):
+    """Override application with in-memory filesystem, service control, clock."""
+
+    OVERRIDE_CONTENT = "[Service]\nPort=forward\n"
+
+    def setUp(self):
+        self.src = Path("/fake/override.conf")
+        self.dest = Path("/fake/home/.config/systemd/user/docker.service.d/override.conf")
+        self.fs = FakeFilesystem(files={str(self.src): self.OVERRIDE_CONTENT})
+        self.svc = FakeServiceController()
+        self.clock = FakeClock()
+
+        self.plan = RootlessOverridePlan(
+            installed=False, needed=True,
+            src=self.src, dest=self.dest,
+        )
+
+    # -- consent -------------------------------------------------------------
+
+    def test_consent_false_performs_zero_operations(self):
+        apply_rootless_override(self.plan, consent=False,
+                                _fs=self.fs, _svc=self.svc, _clock=self.clock)
+        self.assertEqual(self.fs.copies, [])
+        self.assertEqual(self.fs.mkdirs, [])
+        self.assertEqual(self.svc.reloads, [])
+        self.assertEqual(self.svc.restarts, [])
+        self.assertEqual(self.clock.sleeps, [])
+
+    def test_consent_false_bypasses_missing_src(self):
+        plan = RootlessOverridePlan(
+            installed=False, needed=True,
+            src=Path("/nonexistent/override.conf"), dest=self.dest,
+        )
+        # Must not raise
+        apply_rootless_override(plan, consent=False,
+                                _fs=self.fs, _svc=self.svc, _clock=self.clock)
+
+    def test_consent_true_with_missing_src_raises(self):
+        plan = RootlessOverridePlan(
+            installed=False, needed=True,
+            src=Path("/nonexistent/override.conf"), dest=self.dest,
+        )
+        with self.assertRaises(FileNotFoundError):
+            apply_rootless_override(plan, consent=True,
+                                    _fs=self.fs, _svc=self.svc, _clock=self.clock)
+
+    # -- happy path ----------------------------------------------------------
+
+    def test_copies_src_to_dest(self):
+        apply_rootless_override(self.plan, consent=True,
+                                _fs=self.fs, _svc=self.svc, _clock=self.clock)
+        self.assertEqual(len(self.fs.copies), 1)
+        self.assertEqual(self.fs.copies[0], (self.src, self.dest))
+        # Dest should now exist in the in-memory fs
+        self.assertTrue(self.fs.is_file(self.dest))
+
+    def test_creates_dest_parent_directory(self):
+        apply_rootless_override(self.plan, consent=True,
+                                _fs=self.fs, _svc=self.svc, _clock=self.clock)
+        self.assertEqual(len(self.fs.mkdirs), 1)
+        self.assertEqual(self.fs.mkdirs[0], self.dest.parent)
+
+    # -- service control -----------------------------------------------------
+
+    def test_reloads_daemon_before_restart(self):
+        apply_rootless_override(self.plan, consent=True,
+                                _fs=self.fs, _svc=self.svc, _clock=self.clock)
+        self.assertEqual(len(self.svc.reloads), 1)
+        self.assertEqual(len(self.svc.restarts), 1)
+        self.assertEqual(self.svc.restarts[0], "docker.service")
+
+    def test_daemon_reload_failure_propagates(self):
+        svc = FakeServiceController(fail_daemon_reload=OSError("systemctl not found"))
+        with self.assertRaises(OSError) as ctx:
+            apply_rootless_override(self.plan, consent=True,
+                                    _fs=self.fs, _svc=svc, _clock=self.clock)
+        self.assertIn("systemctl not found", str(ctx.exception))
+        # Copy happened, reload failed before restart
+        self.assertEqual(len(self.fs.copies), 1)
+
+    def test_restart_failure_propagates_after_reload(self):
+        svc = FakeServiceController(fail_restart=OSError("docker not running"))
+        with self.assertRaises(OSError) as ctx:
+            apply_rootless_override(self.plan, consent=True,
+                                    _fs=self.fs, _svc=svc, _clock=self.clock)
+        self.assertIn("docker not running", str(ctx.exception))
+        self.assertEqual(len(svc.reloads), 1)
+        self.assertEqual(len(svc.restarts), 1)
+
+    # -- clock ---------------------------------------------------------------
+
+    def test_sleeps_after_restart(self):
+        apply_rootless_override(self.plan, consent=True,
+                                _fs=self.fs, _svc=self.svc, _clock=self.clock)
+        self.assertEqual(self.clock.sleeps, [3.0])
+
+    # -- no prompt -----------------------------------------------------------
+
+    def test_does_not_call_input(self):
+        with mock.patch("builtins.input") as mock_input:
+            apply_rootless_override(self.plan, consent=True,
+                                    _fs=self.fs, _svc=self.svc, _clock=self.clock)
+        mock_input.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 7.2 — Operational persistence (in-memory filesystem, atomic writes)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateEnvFile(unittest.TestCase):
+    """Operational dotenv persistence through ``Filesystem`` fake."""
+
+    ENV = Path("/fake/project/.env")
+
+    def setUp(self):
+        self.fs = FakeFilesystem(files={})
+
+    def test_creates_new_file_with_updates(self):
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.55"}, _fs=self.fs)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.55", self.fs.read_text(self.ENV))
+
+    def test_overwrites_existing_key(self):
+        self.fs._files[str(self.ENV)] = "HOST_GATEWAY_IP=10.0.0.1\n"
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.99", content)
+        self.assertNotIn("10.0.0.1", content)
+
+    def test_preserves_unrelated_keys(self):
+        self.fs._files[str(self.ENV)] = (
+            "PI_HOME=/home/dev/.pi\nHOST_GATEWAY_IP=10.0.0.1\n"
+        )
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertIn("PI_HOME=/home/dev/.pi", content)
+
+    def test_removes_requested_keys(self):
+        self.fs._files[str(self.ENV)] = (
+            "SOCKS_HOST=localhost:1080\nHOST_GATEWAY_IP=10.0.0.1\n"
+        )
+        update_env_file(self.ENV, {}, remove_keys=["SOCKS_HOST"], _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertNotIn("SOCKS_HOST", content)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.1", content)
+
+    def test_ignores_comments_and_empty_lines(self):
+        self.fs._files[str(self.ENV)] = (
+            "# comment\n\nHOST_GATEWAY_IP=10.0.0.1\n"
+        )
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        lines = content.splitlines()
+        self.assertIn("# comment", lines)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.99", content)
+
+    def test_appends_new_keys(self):
+        self.fs._files[str(self.ENV)] = "OLD_KEY=val\n"
+        update_env_file(self.ENV, {"NEW_KEY": "new_val"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertIn("OLD_KEY=val", content)
+        self.assertIn("NEW_KEY=new_val", content)
+
+    # -- concurrency-safe temp files ----------------------------------------
+
+    def test_temp_file_is_namespaced_per_call(self):
+        """Successive calls use distinct tmp names — no shared fixed suffix."""
+        self.fs.clear_writes()
+        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs, _tmp_suffix="pid1")
+        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs, _tmp_suffix="pid2")
+        tmp_paths = {r[0] for r in self.fs.renames}
+        self.assertEqual(len(tmp_paths), 2,
+                         "each call must write to a unique temporary path")
+
+    def test_concurrent_writers_do_not_collide(self):
+        """Two writers with distinct suffixes never overwrite each other's
+        temp file, and both updates land in the final file."""
+        self.fs._files[str(self.ENV)] = "INIT=0\n"
+        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs, _tmp_suffix="w1")
+        # Second writer uses a different suffix — its tmp path is unique
+        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs, _tmp_suffix="w2")
+        content = self.fs.read_text(self.ENV)
+        self.assertIn("A=1", content)
+        self.assertIn("B=2", content)
+        self.assertIn("INIT=0", content)
+
+    def test_collision_same_suffix_still_converges(self):
+        """Even when two writers share the same suffix (simulated race),
+        the last rename wins and temp debris is cleaned."""
+        self.fs._files[str(self.ENV)] = "INIT=0\n"
+        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs, _tmp_suffix="same")
+        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs, _tmp_suffix="same")
+        content = self.fs.read_text(self.ENV)
+        # Last writer wins, but both writes succeed without crashing
+        self.assertIn("B=2", content)
+        # Temp file cleaned up after final call
+        tmp = self.ENV.with_name(f"{self.ENV.name}.tmp.same")
+        self.assertFalse(self.fs.is_file(tmp),
+                         "temp file must be cleaned up")
+
+    def test_default_suffix_differs_between_calls(self):
+        """Without ``_tmp_suffix`` injection, real calls use a
+        unique per-process+timestamp suffix."""
+        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs)
+        # A second call should succeed — it generates a fresh suffix
+        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs)
+        self.assertIn("A=1", self.fs.read_text(self.ENV))
+        self.assertIn("B=2", self.fs.read_text(self.ENV))
+
+    # -- failure cleanup ----------------------------------------------------
+
+    def test_temp_file_cleaned_on_rename_failure(self):
+        """When ``fs.rename`` raises, the temp file is deleted in the
+        ``finally`` block and the original file is untouched."""
+
+        class RenameFailingFs(FakeFilesystem):
+            def rename(self, src, dest):
+                self.renames.append((src, dest))
+                raise OSError("cross-device link")
+
+        self.fs._files[str(self.ENV)] = "SAFE=data\n"
+        fs = RenameFailingFs(files={str(self.ENV): "SAFE=data\n"})
+        with self.assertRaises(OSError):
+            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"},
+                            _fs=fs, _tmp_suffix="rxfail")
+        # Original untouched
+        self.assertEqual(fs.read_text(self.ENV), "SAFE=data\n")
+        # Temp debris removed
+        tmp = self.ENV.with_name(f"{self.ENV.name}.tmp.rxfail")
+        self.assertFalse(fs.is_file(tmp), "temp file must be cleaned up on rename failure")
+
+    def test_write_failure_cleanup_is_noop(self):
+        """When ``fs.write_text`` itself fails, no temp file exists to
+        clean up — but the ``finally`` block must not raise."""
+
+        class WriteFailingFs(FakeFilesystem):
+            def write_text(self, path, content, encoding="utf-8"):
+                raise OSError("disk full")
+
+        self.fs._files[str(self.ENV)] = "SAFE=data\n"
+        fs = WriteFailingFs(files={str(self.ENV): "SAFE=data\n"})
+        with self.assertRaises(OSError):
+            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"},
+                            _fs=fs, _tmp_suffix="wfail")
+        self.assertEqual(fs.read_text(self.ENV), "SAFE=data\n")
+
+    def test_delete_failure_inside_finally_is_suppressed(self):
+        """If ``fs.delete`` itself raises, the original ``rename``
+        error is not masked."""
+
+        class NastyFs(FakeFilesystem):
+            def rename(self, src, dest):
+                self.renames.append((src, dest))
+                raise OSError("rename failed")
+
+            def delete(self, path):
+                raise PermissionError("cannot delete")
+
+        fs = NastyFs(files={str(self.ENV): "SAFE=data\n"})
+        with self.assertRaises(OSError) as ctx:
+            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"},
+                            _fs=fs, _tmp_suffix="nasty")
+        # The original (rename) error propagates
+        self.assertIn("rename failed", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# 7.3 — Full diagnosis with injected boundaries
+# ---------------------------------------------------------------------------
+
+
+class TestDiagnoseGateway(unittest.TestCase):
+    """Full diagnosis orchestration with injected boundaries."""
+
+    def test_rootful_diagnosis_with_successful_probe(self):
+        def _run(cmd):
+            if cmd[0] == "docker":
+                if cmd[1] == "info":
+                    return _completed(0, stdout="Server Version: 27.0.0")
+                if cmd[1] == "run":
+                    return _completed(0, stdout="RESOLVED_IP=172.17.0.1\nPROBE_OK")
+            if cmd[0] == "hostname":
+                return _completed(0, stdout="192.168.1.10")
+            return _completed(0)
+
+        d = diagnose_gateway(
+            _run=_run,
+            _host_probe_factory=lambda: FakeHostProbeServer(port=12345, token="TOK"),
+            _fs=FakeFilesystem(),
+        )
+        self.assertIs(d.mode, DockerMode.ROOTFUL)
+        self.assertEqual(d.lan_ip, "192.168.1.10")
+        self.assertEqual(d.chosen_gateway, "host-gateway")
+        self.assertEqual(d.host_gateway_ip, "172.17.0.1")
+        self.assertEqual(len(d.probes), 2)
+
+    def test_rootless_diagnosis_with_override_needed(self):
+        def _run(cmd):
+            if cmd[0] == "docker":
+                if cmd[1] == "info":
+                    return _completed(0, stdout="  rootless: true\n")
+                if cmd[1] == "run":
+                    return _completed(0, stdout="RESOLVED_IP=10.0.2.100\nPROBE_OK")
+            if cmd[0] == "hostname":
+                return _completed(0, stdout="")
+            return _completed(0)
+
+        d = diagnose_gateway(
+            _run=_run,
+            _host_probe_factory=lambda: FakeHostProbeServer(port=9000, token="TK"),
+            _fs=FakeFilesystem(),
+        )
+        self.assertIs(d.mode, DockerMode.ROOTLESS)
+        self.assertTrue(d.override_needed)
+        self.assertEqual(d.probes[0].candidate, "10.0.2.2")
+        self.assertTrue(d.probes[0].ok)
+
+    def test_no_candidate_succeeds(self):
+        def _run(cmd):
+            if cmd[0] == "docker":
+                if cmd[1] == "info":
+                    return _completed(0, stdout="Server Version: 27.0.0")
+                if cmd[1] == "run":
+                    return _completed(1, stderr="connection refused")
+            if cmd[0] == "hostname":
+                raise FileNotFoundError
+            return _completed(0)
+
+        d = diagnose_gateway(
+            _run=_run,
+            _host_probe_factory=lambda: FakeHostProbeServer(port=1, token="X"),
+            _fs=FakeFilesystem(),
+        )
+        self.assertIsNone(d.chosen_gateway)
+        self.assertIsNone(d.host_gateway_ip)
+
+    def test_server_stops_after_diagnosis(self):
+        fake = FakeHostProbeServer()
+
+        def _run(cmd):
+            if cmd[0] == "docker":
+                if cmd[1] == "info":
+                    return _completed(0, stdout="Server Version: 27.0.0")
+                if cmd[1] == "run":
+                    return _completed(1, stderr="timeout")
+            if cmd[0] == "hostname":
+                raise FileNotFoundError
+            return _completed(0)
+
+        diagnose_gateway(_run=_run, _host_probe_factory=lambda: fake,
+                         _fs=FakeFilesystem())
+        self.assertTrue(fake.stopped)
+
+    def test_override_installed_flag_from_in_memory_fs(self):
+        src = Path("/fake/override.conf")
+        dest = Path("/fake/home/.config/systemd/user/docker.service.d/override.conf")
+        content = "[Service]\nX=1\n"
+        fs = FakeFilesystem(files={str(src): content, str(dest): content})
+
+        def _run(cmd):
+            if cmd[0] == "docker" and cmd[1] == "info":
+                return _completed(0, stdout="  rootless: true\n")
+            if cmd[0] == "docker" and cmd[1] == "run":
+                return _completed(0, stdout="PROBE_OK")
+            if cmd[0] == "hostname":
+                return _completed(0, stdout="10.0.0.5")
+            return _completed(0)
+
+        d = diagnose_gateway(
+            _run=_run,
+            _host_probe_factory=FakeHostProbeServer,
+            _fs=fs,
+            _override_src=src,
+            _override_dest=dest,
+        )
+        self.assertTrue(d.override_installed)
+        self.assertFalse(d.override_needed)
+
+    def test_diagnosis_returns_frozen_data(self):
+        def _run(cmd):
+            if cmd[0] == "docker":
+                if cmd[1] == "info":
+                    return _completed(0, stdout="Server Version: 27.0.0")
+                if cmd[1] == "run":
+                    return _completed(0, stdout="PROBE_OK")
+            if cmd[0] == "hostname":
+                return _completed(0, stdout="10.0.0.5")
+            return _completed(0)
+
+        d = diagnose_gateway(
+            _run=_run,
+            _host_probe_factory=FakeHostProbeServer,
+            _fs=FakeFilesystem(),
+        )
+        self.assertIsInstance(d.probes, tuple)
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            d.chosen_gateway = "hacked"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# 7.6 / 7.7 — Import boundary checks
+# ---------------------------------------------------------------------------
+
+
+class TestImportBoundary(unittest.TestCase):
+    """The networking module must not import the facade or execution layers."""
+
+    def test_module_does_not_import_argparse(self):
+        import ast
+        with open("docker/networking.py") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.assertNotIn("argparse", alias.name,
+                                     "must not import argparse")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    self.assertNotIn("argparse", node.module,
+                                     "must not import argparse")
+
+    def test_module_does_not_import_facade_or_orchestration(self):
+        import ast
+        with open("docker/networking.py") as f:
+            tree = ast.parse(f.read())
+        forbidden_modules = {"docker.versions", "docker.build_wrapper",
+                             "docker.launch_pi", "docker.cli"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                self.assertNotIn(node.module, forbidden_modules,
+                                 f"must not import {node.module}")
+
+    def test_module_does_not_declare_argparse_parser(self):
+        import ast
+        with open("docker/networking.py") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if "ArgumentParser" in getattr(node.func, "attr", ""):
+                        self.fail("must not create ArgumentParser")
+
+
+if __name__ == "__main__":
+    unittest.main()
