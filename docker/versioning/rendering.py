@@ -24,6 +24,10 @@ from .errors import EffectiveConfigError
 # Immutable rendering input models (Stage 6)
 # ---------------------------------------------------------------------------
 
+# Fixed container-side destination for the host Pi home mount.
+# The container user is always ``dev`` regardless of the host user.
+_CONTAINER_PI_HOME = "/home/dev/.pi"
+
 
 @dataclass(frozen=True)
 class CacheControls:
@@ -106,9 +110,11 @@ class RunRenderInputs:
     (e.g. ``"/run/pi-cli/docker-constructor.runtime.toml"``).
     """
 
-    pi_home: str
-    """Host path to the Pi home directory mounted into the container
-    at the same path (e.g. ``"~/.pi"``).
+    pi_home_host: str
+    """Host path to the Pi home directory (e.g. ``"~/.pi"`` or
+    ``"/home/alice/.pi"``).  Mounted into the container at the fixed
+    destination ``/home/dev/.pi`` — the paths are intentionally
+    asymmetric because the container user is always ``dev``.
     """
 
     main_project: str
@@ -158,6 +164,16 @@ def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
             projection platform.
     """
     raise NotImplementedError("render_build_vector — RED phase")
+
+
+def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
+    """Render a deterministic ``docker run`` argument vector.
+
+    Returns a ``tuple[str, ...]`` suitable for ``subprocess.run``.
+    The renderer never invokes Docker, discovers projects, probes
+    gateways, or prompts the user.
+    """
+    raise NotImplementedError("render_run_vector — RED phase")
 
 
 def render_build_environment(
