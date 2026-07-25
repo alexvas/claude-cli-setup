@@ -836,3 +836,36 @@ class TestArchitecturalGuards(unittest.TestCase):
         self.assertNotIn("compose", result)
         self.assertEqual(result[0], "docker")
         self.assertEqual(result[1], "run")
+
+    # ── 6.7 projection-origin tests ───────────────────────────────
+
+    def test_run_renderer_never_inspects_runtime_dto_contents(self):
+        """The run renderer mounts the runtime projection file but
+        never opens, reads, or parses it.  It only uses the host path
+        for the ``--mount`` argument — the contents are the container's
+        responsibility."""
+        # The renderer accepts arbitrary host paths (validated only
+        # for directory structure, not file existence).  A path to a
+        # nonexistent or empty file must not cause a read/parse error.
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as td:
+            runtime_dir = _os.path.join(td, ".docker-generated", "runtime")
+            _os.makedirs(runtime_dir)
+            # Create an empty file — the renderer must not attempt to read it
+            empty_path = _os.path.join(runtime_dir, "empty.toml")
+            with open(empty_path, "w") as f:
+                f.write("")
+            args = _render(
+                projection_host_path=empty_path,
+            )
+            # The path must appear verbatim in a mount argument
+            mounts = _collect_mounts(args)
+            projection_mounts = [
+                m for m in mounts
+                if m["dst"] == "/run/pi-cli/docker-constructor.runtime.toml"
+            ]
+            self.assertEqual(
+                len(projection_mounts), 1,
+                "Runtime projection must be mounted exactly once"
+            )
+            self.assertEqual(projection_mounts[0]["src"], empty_path)

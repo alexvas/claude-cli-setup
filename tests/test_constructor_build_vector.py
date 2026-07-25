@@ -895,4 +895,55 @@ class TestDevUidGid(unittest.TestCase):
         self.assertEqual(result[0], "docker")
         self.assertEqual(result[1], "build")
 
+    # ── 6.7 projection-origin tests ───────────────────────────────
+
+    def test_every_build_arg_traces_to_effective_build_projection(self):
+        """Every ``_BUILD_ARG_ORDER`` entry must resolve to a real
+        ``EffectiveBuildProjection`` field — no orphaned or
+        hardcoded arg names."""
+        from docker.versioning.rendering import (
+            _BUILD_ARG_ORDER,
+            _resolve_build_arg,
+        )
+        proj = _projection()
+        for arg_name, dotted_path in _BUILD_ARG_ORDER:
+            try:
+                value = _resolve_build_arg(proj, dotted_path)
+            except AttributeError:
+                self.fail(
+                    f"_BUILD_ARG_ORDER entry {arg_name!r} maps to "
+                    f"{dotted_path!r} — not a field on "
+                    f"EffectiveBuildProjection"
+                )
+            self.assertIsInstance(
+                value, str,
+                f"{arg_name!r} ({dotted_path}) did not resolve to str"
+            )
+            self.assertNotEqual(
+                value, "",
+                f"{arg_name!r} ({dotted_path}) resolved to empty string"
+            )
+
+    def test_no_concrete_dependency_version_in_renderer(self):
+        """If a projection field is empty the renderer must raise,
+        not silently substitute a hardcoded default version."""
+        for label, make_proj in (
+            ("node.image", lambda: _projection(node_image=" ")),
+            ("rust.version", lambda: _projection(rust_version=" ")),
+            ("python_version", lambda: _projection(python_version=" ")),
+            ("pi_version", lambda: _projection(pi_version=" ")),
+            ("openspec_version", lambda: _projection(openspec_version=" ")),
+            ("oh_my_zsh_revision", lambda: _projection(oh_my_zsh_revision=" ")),
+            ("uv_version", lambda: _projection(uv_version=" ")),
+            ("ty_version", lambda: _projection(ty_version=" ")),
+            ("rtk_version", lambda: _projection(rtk_version=" ")),
+            ("fd_version", lambda: _projection(fd_version=" ")),
+        ):
+            with self.subTest(field=label):
+                with self.assertRaises(
+                    EffectiveConfigError,
+                    msg=f"Empty {label} must raise, not fall back to a default",
+                ):
+                    _render(projection=make_proj())
+
 # end of red-phase tests
