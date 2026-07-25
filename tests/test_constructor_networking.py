@@ -1,14 +1,15 @@
-"""RED-phase tests for ``docker.networking`` — Stage 7.1 diagnosis.
+"""RED-phase tests for ``docker.networking`` — Stage 7.1 diagnosis, 7.2 overrides.
 
 Covers rootful/rootless detection, candidate ordering, LAN-IP
-discovery, probe results, diagnosis orchestration, and DTO
-immutability.  All tests use injected fakes — no Docker daemon, no
-systemd, no network access.
+discovery, probe results, diagnosis orchestration, DTO immutability,
+override planning states, structured failures, consent enforcement,
+and atomic persistence.  All tests use injected fakes — no Docker
+daemon, no systemd, no network access.
 
-Requirements: 7.1 (detection, candidates, probes, diagnosis).
+Requirements: 7.1 (detection, candidates, probes, diagnosis),
+              7.2 (override planning, consent, failures, persistence).
 
-See ``tests/test_networking.py`` for the full GREEN‑phase suite
-(override planning/application, persistence, import boundaries).
+See ``tests/test_networking.py`` for the GREEN‑phase suite.
 """
 
 from __future__ import annotations
@@ -16,19 +17,36 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 import unittest
+from pathlib import Path
 from typing import Optional
+from unittest import mock
 
 from docker.networking import (
     DockerDetectionError,
     DockerMode,
+    Filesystem,
+    FilesystemOperation,
     GatewayDiagnosis,
+    OverrideFailure,
+    OverrideState,
     ProbeResult,
+    RootlessOverridePlan,
+    ServiceController,
+    ServiceOperation,
+    SystemClock,
+    apply_rootless_override,
     candidate_gateways,
     detect_docker_mode,
     detect_lan_ip,
     diagnose_gateway,
+    inspect_rootless_override,
     probe_gateway,
+    update_env_file,
 )
+
+# Re-use the in-memory fake from the GREEN‑phase suite so RED tests never
+# touch real disk or systemd.
+from tests.test_networking import FakeFilesystem
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +683,757 @@ class TestHostGatewayIpResolution(unittest.TestCase):
             override_installed=False, override_needed=False,
         )
         self.assertIsNone(d.chosen_probe())
+
+
+# ======================================================================
+# 7.2 — Override planning model
+# ======================================================================
+
+
+class TestOverrideStateEnum(unittest.TestCase):
+    """Requirement 15: ``OverrideState`` enum variants."""
+
+    def test_absent_variant_exists(self):
+        self.assertEqual(OverrideState.ABSENT.value, "absent")
+
+    def test_matching_variant_exists(self):
+        self.assertEqual(OverrideState.MATCHING.value, "matching")
+
+    def test_different_variant_exists(self):
+        self.assertEqual(OverrideState.DIFFERENT.value, "different")
+
+
+class TestFilesystemOperationDTO(unittest.TestCase):
+    """Requirement 15: ``FilesystemOperation`` dataclass."""
+
+    def test_has_kind_and_path(self):
+        op = FilesystemOperation(kind="mkdir", path=Path("/a/b"))
+        self.assertEqual(op.kind, "mkdir")
+        self.assertEqual(op.path, Path("/a/b"))
+
+    def test_optional_source_path(self):
+        op = FilesystemOperation(kind="copy", path=Path("/a/dest"),
+                                 source_path=Path("/a/src"))
+        self.assertEqual(op.source_path, Path("/a/src"))
+
+    def test_default_source_path_is_none(self):
+        op = FilesystemOperation(kind="mkdir", path=Path("/a"))
+        self.assertIsNone(op.source_path)
+
+    def test_is_frozen(self):
+        op = FilesystemOperation(kind="mkdir", path=Path("/a"))
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            op.kind = "copy"  # type: ignore[misc]
+
+
+class TestServiceOperationDTO(unittest.TestCase):
+    """Requirement 15: ``ServiceOperation`` dataclass."""
+
+    def test_has_kind_and_unit(self):
+        op = ServiceOperation(kind="daemon_reload", unit=None)
+        self.assertEqual(op.kind, "daemon_reload")
+        self.assertIsNone(op.unit)
+
+    def test_unit_for_restart(self):
+        op = ServiceOperation(kind="restart", unit="docker.service")
+        self.assertEqual(op.unit, "docker.service")
+
+    def test_is_frozen(self):
+        op = ServiceOperation(kind="daemon_reload", unit=None)
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            op.kind = "restart"  # type: ignore[misc]
+
+
+class TestOverrideFailureDTO(unittest.TestCase):
+    """Requirement 20: ``OverrideFailure`` structured error."""
+
+    def test_stores_operation_and_path(self):
+        f = OverrideFailure(
+            operation="copy override",
+            path_or_command="/dest/override.conf",
+            detail="Permission denied",
+            persistence_applied=False,
+        )
+        self.assertEqual(f.operation, "copy override")
+        self.assertEqual(f.path_or_command, "/dest/override.conf")
+        self.assertEqual(f.detail, "Permission denied")
+        self.assertFalse(f.persistence_applied)
+
+    def test_persistence_applied_true_when_copy_succeeded_before_service_failure(self):
+        f = OverrideFailure(
+            operation="restart docker.service",
+            path_or_command="systemctl --user restart docker.service",
+            detail="unit not found",
+            persistence_applied=True,
+        )
+        self.assertTrue(f.persistence_applied)
+
+    def test_is_frozen(self):
+        f = OverrideFailure(
+            operation="mkdir",
+            path_or_command="/a",
+            detail="disk full",
+            persistence_applied=False,
+        )
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            f.detail = "hacked"  # type: ignore[misc]
+
+    def test_detail_is_bounded(self):
+        """A long detail string is accepted; truncation is the presenter's
+        job, not the model's."""
+        long_detail = "x" * 500
+        f = OverrideFailure(
+            operation="daemon-reload",
+            path_or_command="systemctl --user daemon-reload",
+            detail=long_detail,
+            persistence_applied=False,
+        )
+        self.assertEqual(len(f.detail), 500)
+
+
+class TestRootlessOverridePlanEnhancedFields(unittest.TestCase):
+    """Requirement 15: enhanced ``RootlessOverridePlan`` fields."""
+
+    def test_rootless_field(self):
+        plan = RootlessOverridePlan(
+            rootless=True,
+            src=Path("/s"), dest=Path("/d"),
+            state=OverrideState.ABSENT,
+            needed=True,
+            filesystem_ops=(),
+            service_ops=(),
+        )
+        self.assertTrue(plan.rootless)
+
+    def test_state_field_absent(self):
+        plan = RootlessOverridePlan(
+            rootless=True,
+            src=Path("/s"), dest=Path("/d"),
+            state=OverrideState.ABSENT,
+            needed=True,
+            filesystem_ops=(
+                FilesystemOperation("mkdir", Path("/d").parent),
+                FilesystemOperation("copy", Path("/d"), source_path=Path("/s")),
+            ),
+            service_ops=(
+                ServiceOperation("daemon_reload"),
+                ServiceOperation("restart", "docker.service"),
+            ),
+        )
+        self.assertIs(plan.state, OverrideState.ABSENT)
+
+    def test_state_field_matching(self):
+        plan = RootlessOverridePlan(
+            rootless=True,
+            src=Path("/s"), dest=Path("/d"),
+            state=OverrideState.MATCHING,
+            needed=False,
+            filesystem_ops=(),
+            service_ops=(),
+        )
+        self.assertIs(plan.state, OverrideState.MATCHING)
+        self.assertFalse(plan.needed)
+
+    def test_state_field_different(self):
+        plan = RootlessOverridePlan(
+            rootless=True,
+            src=Path("/s"), dest=Path("/d"),
+            state=OverrideState.DIFFERENT,
+            needed=True,
+            filesystem_ops=(
+                FilesystemOperation("copy", Path("/d"), source_path=Path("/s")),
+            ),
+            service_ops=(
+                ServiceOperation("daemon_reload"),
+                ServiceOperation("restart", "docker.service"),
+            ),
+        )
+        self.assertTrue(plan.needed)
+
+    def test_filesystem_ops_are_tuple(self):
+        plan = RootlessOverridePlan(
+            rootless=False,
+            src=Path("/s"), dest=Path("/d"),
+            state=OverrideState.MATCHING,
+            needed=False,
+            filesystem_ops=(),
+            service_ops=(),
+        )
+        self.assertIsInstance(plan.filesystem_ops, tuple)
+
+    def test_service_ops_are_tuple(self):
+        plan = RootlessOverridePlan(
+            rootless=False,
+            src=Path("/s"), dest=Path("/d"),
+            state=OverrideState.MATCHING,
+            needed=False,
+            filesystem_ops=(),
+            service_ops=(),
+        )
+        self.assertIsInstance(plan.service_ops, tuple)
+
+
+# ======================================================================
+# 7.2 — Override planning resolution (requirement 16)
+# ======================================================================
+
+
+class TestOverridePlanningResolution(unittest.TestCase):
+    """Requirement 16: ``inspect_rootless_override`` produces correct
+    plans for each state."""
+
+    SRC_CONTENT = "[Service]\nPort=forward\n"
+    OTHER = "[Service]\nPort=other\n"
+
+    def _plan(self, *, rootless=True, src_content=SRC_CONTENT,
+              dest_content=None):
+        """Build an in-memory plan via ``inspect_rootless_override``
+        by controlling what the filesystem returns.  Returns the plan.
+        The fake filesystem is constructed so that:
+        - src always exists with ``src_content``
+        - dest content: None → absent, str → that content
+        """
+        src = Path("/fake/src.conf")
+        dest = Path("/fake/home/.config/systemd/user/docker.service.d/override.conf")
+        files = {str(src): src_content or self.SRC_CONTENT}
+        if dest_content is not None:
+            files[str(dest)] = dest_content
+
+        class _PlanFS(Filesystem):
+            def __init__(self):
+                self._files = files
+            def is_file(self, path):
+                return str(path) in self._files
+            def read_text(self, path, encoding="utf-8"):
+                return self._files[str(path)]
+            @property
+            def home(self):
+                return Path("/fake/home")
+
+        return inspect_rootless_override(
+            _mode=DockerMode.ROOTLESS if rootless else DockerMode.ROOTFUL,
+            _fs=_PlanFS(),
+            _override_src=src,
+            _override_dest=dest,
+        )
+
+    # -- rootful ------------------------------------------------------------
+
+    def test_rootful_returns_not_applicable(self):
+        plan = self._plan(rootless=False)
+        self.assertFalse(plan.rootless, "rootful Docker needs no override")
+        self.assertFalse(plan.needed)
+        self.assertEqual(plan.filesystem_ops, ())
+        self.assertEqual(plan.service_ops, ())
+
+    # -- matching -----------------------------------------------------------
+
+    def test_matching_dest_returns_already_installed(self):
+        plan = self._plan(dest_content=self.SRC_CONTENT)
+        self.assertIs(plan.state, OverrideState.MATCHING)
+        self.assertTrue(plan.rootless)
+        self.assertFalse(plan.needed)
+        self.assertEqual(plan.filesystem_ops, ())
+        self.assertEqual(plan.service_ops, ())
+
+    # -- absent -------------------------------------------------------------
+
+    def test_absent_dest_produces_install_plan(self):
+        plan = self._plan(dest_content=None)
+        self.assertIs(plan.state, OverrideState.ABSENT)
+        self.assertTrue(plan.needed)
+        ops_by_kind = {op.kind for op in plan.filesystem_ops}
+        self.assertIn("mkdir", ops_by_kind)
+        self.assertIn("copy", ops_by_kind)
+        svc_kinds = {op.kind for op in plan.service_ops}
+        self.assertIn("daemon_reload", svc_kinds)
+        self.assertIn("restart", svc_kinds)
+
+    # -- differing ----------------------------------------------------------
+
+    def test_differing_dest_produces_replacement_plan(self):
+        plan = self._plan(dest_content=self.OTHER)
+        self.assertIs(plan.state, OverrideState.DIFFERENT)
+        self.assertTrue(plan.needed)
+        ops_by_kind = {op.kind for op in plan.filesystem_ops}
+        self.assertIn("copy", ops_by_kind)
+        svc_kinds = {op.kind for op in plan.service_ops}
+        self.assertIn("daemon_reload", svc_kinds)
+        self.assertIn("restart", svc_kinds)
+
+    def test_differing_plan_may_reuse_existing_dir(self):
+        """If the destination directory already exists, the plan does not
+        include a redundant mkdir."""
+        plan = self._plan(dest_content=self.OTHER)
+        ops_by_kind = {op.kind for op in plan.filesystem_ops}
+        # mkdir is idempotent but may be elided when parent exists;
+        # at minimum copy must be present.
+        self.assertIn("copy", ops_by_kind)
+
+    # -- read-only ----------------------------------------------------------
+
+    def test_planning_performs_no_side_effects(self):
+        """Inspection never writes, copies, reloads, or restarts."""
+        # Using a fake that records every call
+        calls: list[str] = []
+
+        class _RecordingFS(Filesystem):
+            def __init__(self):
+                self._files = {str(Path("/fake/src.conf")): TestOverridePlanningResolution.SRC_CONTENT}
+            @property
+            def home(self): return Path("/fake/home")
+            def is_file(self, path):
+                calls.append(f"is_file({path})")
+                return str(path) in self._files
+            def read_text(self, path, encoding="utf-8"):
+                calls.append(f"read_text({path})")
+                return self._files[str(path)]
+            def write_text(self, path, content, encoding="utf-8"):
+                calls.append(f"WRITE({path})")
+            def mkdir(self, path):
+                calls.append(f"MKDIR({path})")
+            def copy(self, src, dest):
+                calls.append(f"COPY({src}→{dest})")
+            def rename(self, src, dest):
+                calls.append(f"RENAME({src}→{dest})")
+            def delete(self, path):
+                calls.append(f"DELETE({path})")
+
+        inspect_rootless_override(
+            _fs=_RecordingFS(),
+            _override_src=Path("/fake/src.conf"),
+            _override_dest=Path("/fake/home/.config/systemd/user/docker.service.d/override.conf"),
+        )
+        write_calls = [c for c in calls
+                       if not c.startswith("is_file")
+                       and not c.startswith("read_text")]
+        self.assertEqual(write_calls, [],
+                         f"inspection must be read-only, got: {write_calls}")
+        self.assertIn("is_file", calls[0])
+
+
+# ======================================================================
+# 7.2 — Consent enforcement (requirement 17)
+# ======================================================================
+
+
+class TestConsentEnforcement(unittest.TestCase):
+    """Requirement 17: ``apply_rootless_override`` requires explicit consent."""
+
+    def setUp(self):
+        self.src = Path("/fake/src")
+        self.dest = Path("/fake/dest")
+        self.plan = RootlessOverridePlan(
+            rootless=True,
+            src=self.src, dest=self.dest,
+            state=OverrideState.ABSENT,
+            needed=True,
+            filesystem_ops=(
+                FilesystemOperation("mkdir", self.dest.parent),
+                FilesystemOperation("copy", self.dest,
+                                    source_path=self.src),
+            ),
+            service_ops=(
+                ServiceOperation("daemon_reload"),
+                ServiceOperation("restart", "docker.service"),
+            ),
+        )
+        self._fake_calls: list[str] = []
+
+    def _make_fs(self):
+        calls = self._fake_calls
+        src = self.src
+
+        class _FS(Filesystem):
+            def is_file(self, path): return path == src
+            def read_text(self, path, **kw): return "content"
+            @property
+            def home(self): return Path("/fake")
+            def mkdir(self, path): calls.append(f"mkdir:{path}")
+            def copy(self, s, d): calls.append(f"copy:{s}->{d}")
+
+        return _FS()
+
+    def _make_svc(self):
+        calls = self._fake_calls
+
+        class _SVC(ServiceController):
+            def __init__(self): pass
+            def daemon_reload(self): calls.append("daemon_reload")
+            def restart(self, unit): calls.append(f"restart:{unit}")
+
+        return _SVC()
+
+    def _make_clock(self):
+        class _Clock(SystemClock):
+            def timestamp(self): return 0.0
+            def sleep(self, s): pass
+        return _Clock()
+
+    def test_consent_false_returns_none_no_side_effects(self):
+        result = apply_rootless_override(
+            self.plan, consent=False,
+            _fs=self._make_fs(), _svc=self._make_svc(), _clock=self._make_clock(),
+        )
+        self.assertIsNone(result)
+        self.assertEqual(self._fake_calls, [],
+                         "consent=False must produce zero side effects")
+
+    def test_consent_true_applies_and_returns_none_on_success(self):
+        result = apply_rootless_override(
+            self.plan, consent=True,
+            _fs=self._make_fs(), _svc=self._make_svc(), _clock=self._make_clock(),
+        )
+        self.assertIsNone(result)
+        self.assertEqual(
+            self._fake_calls,
+            [f"mkdir:{self.dest.parent}", f"copy:{self.src}->{self.dest}",
+             "daemon_reload", "restart:docker.service"],
+        )
+
+    def test_module_never_prompts(self):
+        with mock.patch("builtins.input"):
+            result = apply_rootless_override(
+                self.plan, consent=False,
+                _fs=self._make_fs(), _svc=self._make_svc(), _clock=self._make_clock(),
+            )
+        self.assertIsNone(result)
+
+
+# ======================================================================
+# 7.2 — Application-order contract (requirement 18)
+# ======================================================================
+
+
+class TestApplicationOrder(unittest.TestCase):
+    """Requirement 18: ``apply_rootless_override`` executes operations in
+    the documented order — mkdir, copy, daemon-reload, restart, sleep."""
+
+    def setUp(self):
+        self.src = Path("/fake/src")
+        self.dest = Path("/fake/.config/systemd/user/docker.service.d/override.conf")
+        self.plan = RootlessOverridePlan(
+            rootless=True,
+            src=self.src, dest=self.dest,
+            state=OverrideState.ABSENT,
+            needed=True,
+            filesystem_ops=(
+                FilesystemOperation("mkdir", self.dest.parent),
+                FilesystemOperation("copy", self.dest,
+                                    source_path=self.src),
+            ),
+            service_ops=(
+                ServiceOperation("daemon_reload"),
+                ServiceOperation("restart", "docker.service"),
+            ),
+        )
+        self.log: list[str] = []
+        self.fs = self._make_fs()
+        self.svc = self._make_svc()
+        self.clock = self._make_clock()
+
+    def _make_fs(self):
+        log = self.log
+        files = {str(self.src): "src-content"}
+
+        class _FS(Filesystem):
+            def is_file(self, path):
+                return str(path) in files
+            def read_text(self, path, encoding="utf-8"):
+                return files[str(path)]
+            @property
+            def home(self): return Path("/fake")
+            def mkdir(self, path):
+                log.append(f"mkdir:{path}")
+            def copy(self, src, dest):
+                files[str(dest)] = files[str(src)]
+                log.append(f"copy:{src}→{dest}")
+
+        return _FS()
+
+    def _make_svc(self):
+        log = self.log
+
+        class _SVC(ServiceController):
+            def __init__(self): pass
+            def daemon_reload(self):
+                log.append("daemon_reload")
+            def restart(self, unit):
+                log.append(f"restart:{unit}")
+
+        return _SVC()
+
+    def _make_clock(self):
+        log = self.log
+
+        class _Clock(SystemClock):
+            def timestamp(self): return 0.0
+            def sleep(self, s):
+                log.append(f"sleep:{s}")
+
+        return _Clock()
+
+    def test_operations_execute_in_order(self):
+        apply_rootless_override(
+            self.plan, consent=True,
+            _fs=self.fs, _svc=self.svc, _clock=self.clock,
+        )
+        self.assertEqual(
+            self.log,
+            [
+                f"mkdir:{self.dest.parent}",
+                f"copy:{self.src}→{self.dest}",
+                "daemon_reload",
+                "restart:docker.service",
+                "sleep:3",
+            ],
+        )
+
+
+# ======================================================================
+# 7.2 — Structured application failures (requirements 19, 20, 21)
+# ======================================================================
+
+
+class TestApplicationFailures(unittest.TestCase):
+    """Requirements 19-21: ``apply_rootless_override`` returns
+    ``OverrideFailure`` instead of raising; failures are structured;
+    no automatic rollback."""
+
+    SRC = Path("/fake/src")
+    DEST = Path("/fake/.config/systemd/user/docker.service.d/override.conf")
+
+    @staticmethod
+    def _plan(**kw):
+        defaults: dict = dict(
+            rootless=True, src=TestApplicationFailures.SRC,
+            dest=TestApplicationFailures.DEST,
+            state=OverrideState.ABSENT, needed=True,
+            filesystem_ops=(
+                FilesystemOperation("mkdir", TestApplicationFailures.DEST.parent),
+                FilesystemOperation("copy", TestApplicationFailures.DEST,
+                                    source_path=TestApplicationFailures.SRC),
+            ),
+            service_ops=(
+                ServiceOperation("daemon_reload"),
+                ServiceOperation("restart", "docker.service"),
+            ),
+        )
+        defaults.update(kw)
+        return RootlessOverridePlan(**defaults)
+
+    # -- unreadable source --------------------------------------------------
+
+    def test_unreadable_source(self):
+        plan = self._plan()
+
+        class _FS(Filesystem):
+            @property
+            def home(self): return Path("/fake")
+            def is_file(self, path):
+                return False  # src not found
+
+        result = apply_rootless_override(plan, consent=True, _fs=_FS())
+        self.assertIsInstance(result, OverrideFailure)
+        assert result is not None
+        self.assertFalse(result.persistence_applied)
+        self.assertIn("copy", result.operation.lower()
+                      or "source" in result.operation.lower()
+                      or "src" in result.path_or_command.lower())
+
+    # -- directory creation failure -----------------------------------------
+
+    def test_mkdir_failure(self):
+        plan = self._plan()
+
+        class _FS(Filesystem):
+            @property
+            def home(self): return Path("/fake")
+            def is_file(self, path): return path == TestApplicationFailures.SRC
+            def read_text(self, path, **kw): return "ok"
+            def mkdir(self, path):
+                raise OSError("permission denied")
+
+        result = apply_rootless_override(plan, consent=True, _fs=_FS())
+        self.assertIsInstance(result, OverrideFailure)
+        assert result is not None
+        self.assertFalse(result.persistence_applied)
+        self.assertIn("permission denied", result.detail)
+
+    # -- copy failure -------------------------------------------------------
+
+    def test_copy_failure(self):
+        plan = self._plan()
+
+        class _FS(Filesystem):
+            @property
+            def home(self): return Path("/fake")
+            def is_file(self, path): return path == TestApplicationFailures.SRC
+            def read_text(self, path, **kw): return "ok"
+            def mkdir(self, path): pass
+            def copy(self, src, dest):
+                raise OSError("disk full")
+
+        result = apply_rootless_override(plan, consent=True, _fs=_FS())
+        self.assertIsInstance(result, OverrideFailure)
+        assert result is not None
+        self.assertFalse(result.persistence_applied)
+
+    # -- daemon-reload failure ----------------------------------------------
+
+    def test_daemon_reload_failure(self):
+        plan = self._plan()
+
+        class _FS(Filesystem):
+            @property
+            def home(self): return Path("/fake")
+            def is_file(self, path): return path == TestApplicationFailures.SRC
+            def read_text(self, path, **kw): return "ok"
+            def mkdir(self, path): pass
+            def copy(self, src, dest): pass
+
+        class _SVC(ServiceController):
+            def __init__(self): pass
+            def daemon_reload(self):
+                raise OSError("systemctl not found")
+            def restart(self, unit): pass
+
+        result = apply_rootless_override(plan, consent=True,
+                                         _fs=_FS(), _svc=_SVC())
+        self.assertIsInstance(result, OverrideFailure)
+        assert result is not None
+        # Copy happened before daemon-reload failed
+        self.assertTrue(result.persistence_applied,
+                        "override was written before service failure")
+        self.assertIn("systemctl", result.detail.lower()
+                      or "systemctl" in result.path_or_command.lower())
+
+    # -- restart failure ----------------------------------------------------
+
+    def test_restart_failure(self):
+        plan = self._plan()
+
+        class _FS(Filesystem):
+            @property
+            def home(self): return Path("/fake")
+            def is_file(self, path): return path == TestApplicationFailures.SRC
+            def read_text(self, path, **kw): return "ok"
+            def mkdir(self, path): pass
+            def copy(self, src, dest): pass
+
+        class _SVC(ServiceController):
+            def __init__(self): pass
+            def daemon_reload(self): pass
+            def restart(self, unit):
+                raise OSError("docker not running")
+
+        result = apply_rootless_override(plan, consent=True,
+                                         _fs=_FS(), _svc=_SVC())
+        self.assertIsInstance(result, OverrideFailure)
+        assert result is not None
+        self.assertTrue(result.persistence_applied,
+                        "override was written before restart failure")
+
+    # -- no automatic rollback (requirement 21) -----------------------------
+
+    def test_no_rollback_after_restart_failure(self):
+        """After a successful copy and failed restart, the dest file remains."""
+        written: dict[str, str] = {}
+
+        class _FS(Filesystem):
+            @property
+            def home(self): return Path("/fake")
+            def is_file(self, path):
+                return path == TestApplicationFailures.SRC or str(path) in written
+            def read_text(self, path, **kw):
+                return written.get(str(path), "ok")
+            def mkdir(self, path): pass
+            def copy(self, src, dest):
+                written[str(dest)] = "copied-content"
+
+        class _SVC(ServiceController):
+            def __init__(self): pass
+            def daemon_reload(self): pass
+            def restart(self, unit):
+                raise OSError("restart failed")
+
+        apply_rootless_override(self._plan(), consent=True,
+                                _fs=_FS(), _svc=_SVC())
+        self.assertIn(str(self.DEST), written,
+                      "dest must remain — no automatic rollback")
+
+
+# ======================================================================
+# 7.2 — Operational persistence (requirement 22)
+# ======================================================================
+
+
+class TestPersistenceRequirements(unittest.TestCase):
+    """Requirement 22: ``update_env_file`` persistence contracts."""
+
+    ENV = Path("/fake/.env")
+    CONSTRUCTOR = Path("/fake/docker-constructor.toml")
+
+    def setUp(self):
+        from tests.test_networking import FakeFilesystem
+        self.fs = FakeFilesystem()
+
+    def test_preserves_unrelated_keys(self):
+        self.fs._files[str(self.ENV)] = "BASE_IMAGE=alpine\n"
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=self.fs)
+        self.assertIn("BASE_IMAGE=alpine", self.fs.read_text(self.ENV))
+
+    def test_replaces_existing_gateway_key_without_duplication(self):
+        self.fs._files[str(self.ENV)] = "HOST_GATEWAY_IP=10.0.0.1\n"
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.99", content)
+        self.assertNotIn("10.0.0.1", content)
+
+    def test_appends_gateway_when_absent(self):
+        self.fs._files[str(self.ENV)] = "OTHER=val\n"
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertIn("OTHER=val", content)
+        self.assertIn("HOST_GATEWAY_IP=10.0.0.1", content)
+
+    def test_deterministic_newline_behavior(self):
+        self.fs._files[str(self.ENV)] = "A=1"  # no trailing newline
+        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs)
+        content = self.fs.read_text(self.ENV)
+        self.assertTrue(content.endswith("\n"),
+                        "output must end with exactly one newline")
+
+    def test_publishes_atomically_via_rename(self):
+        update_env_file(self.ENV, {"X": "1"}, _fs=self.fs)
+        self.assertEqual(len(self.fs.renames), 1)
+        self.assertEqual(self.fs.renames[0][1], self.ENV)
+
+    def test_rejects_empty_gateway_value(self):
+        with self.assertRaises(ValueError):
+            update_env_file(self.ENV, {"HOST_GATEWAY_IP": ""}, _fs=self.fs)
+
+    def test_rejects_missing_gateway_key_with_empty_value(self):
+        with self.assertRaises(ValueError):
+            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "   "}, _fs=self.fs)
+
+    def test_never_modifies_docker_constructor_toml(self):
+        """Dotenv writes must never touch the constructor config."""
+        self.fs._files[str(self.CONSTRUCTOR)] = "[build]\n"
+        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=self.fs)
+        self.assertEqual(self.fs.read_text(self.CONSTRUCTOR), "[build]\n",
+                         "docker-constructor.toml must be untouched")
+
+    def test_propagates_filesystem_failures_structurally(self):
+        class _FailingFS(FakeFilesystem):
+            def write_text(self, path, content, encoding="utf-8"):
+                raise OSError("io error")
+
+        fs = _FailingFS(files={str(self.ENV): "SAFE=1\n"})
+        with self.assertRaises(OSError) as ctx:
+            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=fs)
+        self.assertIn("io error", str(ctx.exception))
+        self.assertEqual(fs.read_text(self.ENV), "SAFE=1\n")
 
 
 if __name__ == "__main__":

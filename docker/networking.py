@@ -47,6 +47,13 @@ class DockerMode(enum.Enum):
     ROOTLESS = "rootless"
 
 
+class OverrideState(enum.Enum):
+    """Current state of the rootless-override destination file."""
+    ABSENT = "absent"
+    MATCHING = "matching"
+    DIFFERENT = "different"
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     """Result of probing a single gateway candidate."""
@@ -114,10 +121,29 @@ class RootlessOverridePlan:
     content matches the source template.
     """
 
-    installed: bool
-    needed: bool  # rootless Docker without a matching override
-    src: Path
-    dest: Path
+    installed: bool = False
+    needed: bool = True
+    src: Path = Path("/")
+    dest: Path = Path("/")
+    rootless: bool = True
+    state: OverrideState = OverrideState.ABSENT
+    filesystem_ops: tuple["FilesystemOperation", ...] = ()
+    service_ops: tuple["ServiceOperation", ...] = ()
+
+
+@dataclass(frozen=True)
+class FilesystemOperation:
+    """A single filesystem step in an override plan."""
+    kind: str
+    path: Path
+    source_path: Optional[Path] = None
+
+
+@dataclass(frozen=True)
+class ServiceOperation:
+    """A single service-control step in an override plan."""
+    kind: str
+    unit: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +154,19 @@ class RootlessOverridePlan:
 class DockerDetectionError(RuntimeError):
     """Docker daemon could not be reached or its mode could not be
     determined."""
+
+
+@dataclass(frozen=True)
+class OverrideFailure:
+    """Structured result when ``apply_rootless_override`` cannot complete.
+
+    ``persistence_applied`` is ``True`` when the override file was
+    successfully written before a subsequent service operation failed.
+    """
+    operation: str
+    path_or_command: str
+    detail: str
+    persistence_applied: bool
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +359,7 @@ def detect_lan_ip(
 
 def inspect_rootless_override(
     *,
+    _mode: Optional[DockerMode] = None,
     _fs: Optional[Filesystem] = None,
     _override_src: Optional[Path] = None,
     _override_dest: Optional[Path] = None,
@@ -327,8 +367,10 @@ def inspect_rootless_override(
     """Return a plan describing the current rootless-override state.
 
     The plan does **not** apply or prompt; the caller decides whether to
-    act on it.
+    act on it.  When ``_mode`` is ``None`` the plan assumes rootless
+    Docker; pass ``DockerMode.ROOTFUL`` for rootful daemons.
     """
+    mode = _mode if _mode is not None else DockerMode.ROOTLESS
     fs = _fs or Filesystem()
     src = _override_src if _override_src is not None else _DEFAULT_OVERRIDE_SRC
     dest = _override_dest if _override_dest is not None else fs.home / _OVERRIDE_DEST_REL
@@ -339,11 +381,18 @@ def inspect_rootless_override(
             installed = fs.read_text(dest) == fs.read_text(src)
         except OSError:
             pass
+
+    # RED stub: state / ops resolution not yet implemented.
+    # Always reports ABSENT with empty operation tuples.
     return RootlessOverridePlan(
         installed=installed,
         needed=not installed,
         src=src,
         dest=dest,
+        rootless=(mode is DockerMode.ROOTLESS),
+        state=OverrideState.ABSENT,
+        filesystem_ops=(),
+        service_ops=(),
     )
 
 
