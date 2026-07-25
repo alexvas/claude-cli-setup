@@ -15,7 +15,6 @@ See ``tests/test_networking.py`` for the GREEN‑phase suite.
 from __future__ import annotations
 
 import dataclasses
-import subprocess
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -59,8 +58,34 @@ def _completed(
     rc: int = 0,
     stdout: str = "",
     stderr: str = "",
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess([], rc, stdout=stdout, stderr=stderr)
+) -> ProcessRunner:
+    """Return a ``ProcessRunner`` that always responds with the
+    same canned ``ProcessResult`` regardless of argv."""
+
+    class _Single(ProcessRunner):
+        def run(self, argv):
+            return ProcessResult(
+                argv=tuple(argv), return_code=rc,
+                stdout=stdout, stderr=stderr,
+            )
+    return _Single()
+
+
+def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> ProcessResult:
+    """Return a ``ProcessResult`` — for use inside inline fake
+    functions that dispatch on argv."""
+    return ProcessResult(
+        argv=(), return_code=rc, stdout=stdout, stderr=stderr,
+    )
+
+
+def _as_runner(fn) -> ProcessRunner:
+    """Wrap an inline ``run(cmd)`` callable as a ``ProcessRunner``."""
+
+    class _Adapter(ProcessRunner):
+        def run(self, argv):
+            return fn(argv)
+    return _Adapter()
 
 
 def _fake_run(
@@ -75,47 +100,61 @@ def _fake_run(
     probe_stdouts: Optional[list[str]] = None,
     probe_rcs: Optional[list[int]] = None,
     probe_raises: Optional[list[Optional[Exception]]] = None,
-) -> callable:
-    """Build a fake subprocess runner with per-command behaviour."""
+) -> ProcessRunner:
+    """Build a fake ``ProcessRunner`` with per-command behaviour."""
 
     _call = [0]  # mutable counter for probe sequencing
 
-    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        key = cmd[0] if cmd else ""
+    class _Fake(ProcessRunner):
+        def run(self, argv: list[str]) -> ProcessResult:
+            key = argv[0] if argv else ""
 
-        if key == "docker" and len(cmd) >= 2 and cmd[1] == "info":
-            if docker_info_raises:
-                raise docker_info_raises
-            return _completed(docker_info_rc,
-                              stdout=docker_info_stdout,
-                              stderr="" if docker_info_rc == 0 else "permission denied")
+            if key == "docker" and len(argv) >= 2 and argv[1] == "info":
+                if docker_info_raises:
+                    raise docker_info_raises
+                return ProcessResult(
+                    argv=tuple(argv), return_code=docker_info_rc,
+                    stdout=docker_info_stdout,
+                    stderr="" if docker_info_rc == 0 else "permission denied",
+                )
 
-        if key == "docker" and len(cmd) >= 2 and cmd[1] == "run":
-            idx = _call[0]
-            _call[0] += 1
-            if probe_raises and idx < len(probe_raises) and probe_raises[idx]:
-                raise probe_raises[idx]  # type: ignore[operator]
-            stdout = ""
-            if probe_stdouts and idx < len(probe_stdouts):
-                stdout = probe_stdouts[idx]
-            rc = 0
-            if probe_rcs and idx < len(probe_rcs):
-                rc = probe_rcs[idx]
-            return _completed(rc, stdout=stdout, stderr="")
+            if key == "docker" and len(argv) >= 2 and argv[1] == "run":
+                idx = _call[0]
+                _call[0] += 1
+                if probe_raises and idx < len(probe_raises) and probe_raises[idx]:
+                    raise probe_raises[idx]  # type: ignore[operator]
+                stdout = ""
+                if probe_stdouts and idx < len(probe_stdouts):
+                    stdout = probe_stdouts[idx]
+                rc = 0
+                if probe_rcs and idx < len(probe_rcs):
+                    rc = probe_rcs[idx]
+                return ProcessResult(
+                    argv=tuple(argv), return_code=rc,
+                    stdout=stdout, stderr="",
+                )
 
-        if key == "hostname":
-            if hostname_raises:
-                raise hostname_raises
-            return _completed(0, stdout=hostname_stdout)
+            if key == "hostname":
+                if hostname_raises:
+                    raise hostname_raises
+                return ProcessResult(
+                    argv=tuple(argv), return_code=0,
+                    stdout=hostname_stdout, stderr="",
+                )
 
-        if key == "ip":
-            if ip_route_raises:
-                raise ip_route_raises
-            return _completed(0, stdout=ip_route_stdout)
+            if key == "ip":
+                if ip_route_raises:
+                    raise ip_route_raises
+                return ProcessResult(
+                    argv=tuple(argv), return_code=0,
+                    stdout=ip_route_stdout, stderr="",
+                )
 
-        return _completed(0, stdout="")
+            return ProcessResult(
+                argv=tuple(argv), return_code=0, stdout="", stderr="",
+            )
 
-    return run
+    return _Fake()
 
 
 class FakeHostProbeServer:
@@ -148,30 +187,30 @@ class TestDetectDockerMode(unittest.TestCase):
 
     def test_rootless_recognised(self):
         run = _fake_run(docker_info_stdout="  rootless: true\n  other: val")
-        self.assertIs(detect_docker_mode(_run=run), DockerMode.ROOTLESS)
+        self.assertIs(detect_docker_mode(_runner=run), DockerMode.ROOTLESS)
 
     def test_rootless_case_insensitive(self):
         run = _fake_run(docker_info_stdout="  RootLess: True\n")
-        self.assertIs(detect_docker_mode(_run=run), DockerMode.ROOTLESS)
+        self.assertIs(detect_docker_mode(_runner=run), DockerMode.ROOTLESS)
 
     # -- rootful when absent -------------------------------------------------
 
     def test_rootful_when_absent(self):
         run = _fake_run(docker_info_stdout="  Server Version: 27.0.1\n  OSType: linux\n")
-        self.assertIs(detect_docker_mode(_run=run), DockerMode.ROOTFUL)
+        self.assertIs(detect_docker_mode(_runner=run), DockerMode.ROOTFUL)
 
     # -- command failure → domain error --------------------------------------
 
     def test_nonzero_exit_raises_detection_error(self):
         run = _fake_run(docker_info_stdout="", docker_info_rc=1)
         with self.assertRaises(DockerDetectionError) as ctx:
-            detect_docker_mode(_run=run)
+            detect_docker_mode(_runner=run)
         self.assertIn("permission denied", str(ctx.exception))
 
     def test_docker_not_found_raises_detection_error(self):
         run = _fake_run(docker_info_raises=FileNotFoundError("docker"))
         with self.assertRaises(DockerDetectionError) as ctx:
-            detect_docker_mode(_run=run)
+            detect_docker_mode(_runner=run)
         self.assertIn("not found", str(ctx.exception))
 
     # -- does not print ------------------------------------------------------
@@ -183,7 +222,7 @@ class TestDetectDockerMode(unittest.TestCase):
         old = sys.stderr
         try:
             sys.stderr = buf
-            detect_docker_mode(_run=run)
+            detect_docker_mode(_runner=run)
         finally:
             sys.stderr = old
         self.assertEqual(buf.getvalue(), "")
@@ -196,7 +235,7 @@ class TestDetectDockerMode(unittest.TestCase):
         try:
             sys.stderr = buf
             with self.assertRaises(DockerDetectionError):
-                detect_docker_mode(_run=run)
+                detect_docker_mode(_runner=run)
         finally:
             sys.stderr = old
         self.assertEqual(buf.getvalue(), "")
@@ -207,7 +246,7 @@ class TestDetectDockerMode(unittest.TestCase):
         """Failure raises an exception — callers map to exit codes."""
         run = _fake_run(docker_info_stdout="", docker_info_rc=1)
         try:
-            detect_docker_mode(_run=run)
+            detect_docker_mode(_runner=run)
         except DockerDetectionError:
             pass  # exception, not sys.exit
 
@@ -270,35 +309,35 @@ class TestDetectLanIp(unittest.TestCase):
 
     def test_first_word_from_hostname_i(self):
         run = _fake_run(hostname_stdout="192.168.1.10 172.17.0.1")
-        self.assertEqual(detect_lan_ip(_run=run), "192.168.1.10")
+        self.assertEqual(detect_lan_ip(_runner=run), "192.168.1.10")
 
     def test_hostname_empty_falls_back_to_ip_route(self):
         run = _fake_run(
             hostname_stdout=" \n",
             ip_route_stdout="default via 10.0.0.1 dev eth0 src 10.0.0.55",
         )
-        self.assertEqual(detect_lan_ip(_run=run), "10.0.0.55")
+        self.assertEqual(detect_lan_ip(_runner=run), "10.0.0.55")
 
     def test_hostname_not_found_falls_back(self):
         run = _fake_run(
             hostname_raises=FileNotFoundError("hostname"),
             ip_route_stdout="default via 10.0.0.1 dev eth0 src 10.0.0.55",
         )
-        self.assertEqual(detect_lan_ip(_run=run), "10.0.0.55")
+        self.assertEqual(detect_lan_ip(_runner=run), "10.0.0.55")
 
     def test_both_fail_returns_none(self):
         run = _fake_run(
             hostname_raises=FileNotFoundError("hostname"),
             ip_route_raises=FileNotFoundError("ip"),
         )
-        self.assertIsNone(detect_lan_ip(_run=run))
+        self.assertIsNone(detect_lan_ip(_runner=run))
 
     def test_no_src_in_ip_route_returns_none(self):
         run = _fake_run(
             hostname_stdout="",
             ip_route_stdout="default via 10.0.0.1 dev eth0\n",
         )
-        self.assertIsNone(detect_lan_ip(_run=run))
+        self.assertIsNone(detect_lan_ip(_runner=run))
 
     def test_process_failure_remains_structured(self):
         """detect_lan_ip never raises regardless of process state."""
@@ -307,7 +346,7 @@ class TestDetectLanIp(unittest.TestCase):
             ip_route_raises=OSError("broken pipe"),
         )
         # Must not raise
-        result = detect_lan_ip(_run=run)
+        result = detect_lan_ip(_runner=run)
         self.assertIsNone(result)
 
 
@@ -341,26 +380,26 @@ class TestProbeGateway(unittest.TestCase):
 
     def test_successful_token_match(self):
         run = _fake_run(probe_stdouts=["RESOLVED_IP=172.17.0.1\nPROBE_OK"])
-        result = probe_gateway("10.0.2.2", 9999, "OK_1", _run=run)
+        result = probe_gateway("10.0.2.2", 9999, "OK_1", _runner=run)
         self.assertTrue(result.ok)
         self.assertEqual(result.candidate, "10.0.2.2")
         self.assertEqual(result.resolved_ip, "172.17.0.1")
 
     def test_missing_token_not_ok(self):
         run = _fake_run(probe_stdouts=["RESOLVED_IP=172.17.0.1\n"], probe_rcs=[0])
-        result = probe_gateway("10.0.2.2", 9999, "OK_1", _run=run)
+        result = probe_gateway("10.0.2.2", 9999, "OK_1", _runner=run)
         self.assertFalse(result.ok)
 
     def test_nonzero_process_status_not_ok(self):
         run = _fake_run(probe_stdouts=[""], probe_rcs=[1])
-        result = probe_gateway("host-gateway", 9999, "T", _run=run)
+        result = probe_gateway("host-gateway", 9999, "T", _runner=run)
         self.assertFalse(result.ok)
         self.assertIn("exit 1", result.detail)
 
     def test_missing_resolved_ip_with_ok_probe(self):
         """Successful probe without RESOLVED_IP still returns ok."""
         run = _fake_run(probe_stdouts=["PROBE_OK"])
-        result = probe_gateway("host-gateway", 9999, "T", _run=run)
+        result = probe_gateway("host-gateway", 9999, "T", _runner=run)
         self.assertTrue(result.ok)
         self.assertIsNone(result.resolved_ip)
 
@@ -368,21 +407,21 @@ class TestProbeGateway(unittest.TestCase):
         """Detail should not grow unbounded from a noisy container."""
         long_output = "x" * 500
         run = _fake_run(probe_stdouts=[long_output])
-        result = probe_gateway("host-gateway", 9999, "T", _run=run)
+        result = probe_gateway("host-gateway", 9999, "T", _runner=run)
         self.assertLessEqual(len(result.detail), 200)
 
     def test_resolved_ip_in_stderr(self):
         """RESOLVED_IP can appear on stderr."""
         def run(cmd):
-            return _completed(0, stdout="", stderr="RESOLVED_IP=10.8.0.1\nPROBE_OK")
-        result = probe_gateway("host-gateway", 9999, "T", _run=run)
+            return _proc(0, stdout="", stderr="RESOLVED_IP=10.8.0.1\nPROBE_OK")
+        result = probe_gateway("host-gateway", 9999, "T", _runner=_as_runner(run))
         self.assertTrue(result.ok)
         self.assertEqual(result.resolved_ip, "10.8.0.1")
 
     def test_exception_during_probe(self):
         def run(_cmd):
             raise OSError("no space left on device")
-        result = probe_gateway("gw", 9999, "T", _run=run)
+        result = probe_gateway("gw", 9999, "T", _runner=_as_runner(run))
         self.assertFalse(result.ok)
         self.assertIn("no space", result.detail)
 
@@ -390,10 +429,150 @@ class TestProbeGateway(unittest.TestCase):
         seen: list[list[str]] = []
         def run(cmd):
             seen.append(cmd)
-            return _completed(0, stdout="PROBE_OK")
-        probe_gateway("192.168.1.1", 9999, "T", _run=run)
+            return _proc(0, stdout="PROBE_OK")
+        probe_gateway("192.168.1.1", 9999, "T", _runner=_as_runner(run))
         self.assertTrue(any("host.docker.internal:192.168.1.1" in arg
                             for arg in seen[0]))
+
+    # -- requirement 31: exact PROBE_OK line, not substring ----------------
+
+    def test_nonzero_with_probe_ok_quoted_in_error_still_fails(self):
+        """Docker exits non-zero; stderr quotes the probe script which
+        happens to contain PROBE_OK.  The old substring check would
+        report ok=True; the line-anchored check must reject it."""
+        def run(cmd):
+            return _proc(1, stdout="",
+                         stderr="sh: PROBE_OK: command not found")
+        result = probe_gateway("gw", 9999, "T", _runner=_as_runner(run))
+        self.assertFalse(result.ok,
+                         "non-zero exit must fail even if PROBE_OK appears")
+        self.assertIn("PROBE_OK", result.detail,
+                      "detail should preserve the probe output")
+        self.assertIn("[exit 1]", result.detail,
+                      "detail must include exit code even with non-empty output")
+
+    def test_not_probe_ok_is_not_a_match(self):
+        """NOT_PROBE_OK on its own line must not be treated as success."""
+        def run(cmd):
+            return _proc(0, stdout="RESOLVED_IP=10.0.0.1\nNOT_PROBE_OK")
+        result = probe_gateway("gw", 9999, "T", _runner=_as_runner(run))
+        self.assertFalse(result.ok,
+                         "NOT_PROBE_OK must not match PROBE_OK regex")
+
+    def test_probe_ok_embedded_in_other_word_fails(self):
+        """XPROBE_OKX on a line is not a standalone PROBE_OK."""
+        def run(cmd):
+            return _proc(0, stdout="RESOLVED_IP=10.0.0.1\nXPROBE_OKX")
+        result = probe_gateway("gw", 9999, "T", _runner=_as_runner(run))
+        self.assertFalse(result.ok,
+                         "XPROBE_OKX must not match line-anchored PROBE_OK")
+
+    def test_probe_ok_with_leading_trailing_whitespace_fails(self):
+        """' PROBE_OK ' (with spaces) is not the exact line 'PROBE_OK'."""
+        def run(cmd):
+            return _proc(0, stdout=" PROBE_OK ")
+        result = probe_gateway("gw", 9999, "T", _runner=_as_runner(run))
+        self.assertFalse(result.ok,
+                         "whitespace must not match ^PROBE_OK$")
+
+
+# ---------------------------------------------------------------------------
+# 11a. Token safety — reject injection characters before ProcessRunner
+# ---------------------------------------------------------------------------
+
+
+class TestTokenSafety(unittest.TestCase):
+    """Requirement 35: ``probe_gateway`` must reject tokens containing
+    shell metacharacters (quotes, semicolons, newlines, ``$``, etc.)
+    **before** invoking ``ProcessRunner.run()``."""
+
+    SAFE_ARGS = ("host-gateway", 9999)
+
+    # -- unsafe tokens return failed result without calling runner -----------
+
+    def test_double_quote_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, '";id;"', _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [], "runner must not be called for unsafe token")
+
+    def test_single_quote_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "it's-ok", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_dollar_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "$(whoami)", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_backtick_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "`id`", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_semicolon_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "OK;id", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_newline_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "OK\nid", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_pipe_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "OK|id", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_hash_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "OK#bye", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    def test_space_token_rejected(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "OK 123", _runner=rec)
+        self.assertFalse(result.ok)
+        self.assertIn("unsafe", result.detail)
+        self.assertEqual(rec.calls, [])
+
+    # -- safe tokens are accepted and reach the runner -----------------------
+
+    def test_generated_token_style_accepted(self):
+        """Tokens matching ``OK_<timestamp>`` must pass validation."""
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "OK_1734567890", _runner=rec)
+        # Reaches runner (which returns default error → not-ok), but not
+        # rejected at the validation layer.
+        self.assertGreater(len(rec.calls), 0,
+                           "safe token must reach the ProcessRunner")
+
+    def test_alphanumeric_hyphen_token_accepted(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "my-token-v1.0", _runner=rec)
+        self.assertGreater(len(rec.calls), 0)
+
+    def test_underscore_only_token_accepted(self):
+        rec = _FakeProcessRunner([])
+        result = probe_gateway(*self.SAFE_ARGS, "___", _runner=rec)
+        self.assertGreater(len(rec.calls), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -410,12 +589,12 @@ class TestDiagnosisOrchestration(unittest.TestCase):
         def run(cmd):
             if cmd[0] == "docker" and cmd[1] == "run":
                 # Record that this is a probe call — server must already be started
-                return _completed(0, stdout="PROBE_OK")
+                return _proc(0, stdout="PROBE_OK")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="10.0.0.5")
-            return _completed(0)
+                return _proc(0, stdout="10.0.0.5")
+            return _proc(0)
 
         class TrackingServer:
             def __init__(self):
@@ -431,7 +610,7 @@ class TestDiagnosisOrchestration(unittest.TestCase):
                 self.stopped = True
 
         server = TrackingServer()
-        diagnose_gateway(_run=run, _host_probe_factory=lambda: server)
+        diagnose_gateway(_runner=_as_runner(run), _host_probe_factory=lambda: server)
         self.assertTrue(server.started, "server must be started")
         self.assertTrue(any(started_before_probe))
 
@@ -446,15 +625,15 @@ class TestDiagnosisOrchestration(unittest.TestCase):
                         cand = hostdef.split(":")[-1] if ":" in hostdef else hostdef
                         probed.append(cand)
                         break
-                return _completed(0, stdout="PROBE_OK")
+                return _proc(0, stdout="PROBE_OK")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="192.168.1.99")
-            return _completed(0)
+                return _proc(0, stdout="192.168.1.99")
+            return _proc(0)
 
         diagnose_gateway(
-            _run=run,
+            _runner=_as_runner(run),
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         # Rootful: host-gateway first, then LAN IP
@@ -471,16 +650,16 @@ class TestDiagnosisOrchestration(unittest.TestCase):
                         hostdef = cmd[i + 1]
                         cand = hostdef.split(":")[-1]
                         if cand == "host-gateway":
-                            return _completed(1, stderr="timeout")
-                        return _completed(0, stdout="RESOLVED_IP=10.9.9.9\nPROBE_OK")
+                            return _proc(1, stderr="timeout")
+                        return _proc(0, stdout="RESOLVED_IP=10.9.9.9\nPROBE_OK")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="192.168.1.5")
-            return _completed(0)
+                return _proc(0, stdout="192.168.1.5")
+            return _proc(0)
 
         d = diagnose_gateway(
-            _run=run,
+            _runner=_as_runner(run),
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         self.assertEqual(d.chosen_gateway, "192.168.1.5")
@@ -489,15 +668,15 @@ class TestDiagnosisOrchestration(unittest.TestCase):
     def test_all_fail_yields_no_gateway(self):
         def run(cmd):
             if cmd[0] == "docker" and cmd[1] == "run":
-                return _completed(1, stderr="connection refused")
+                return _proc(1, stderr="connection refused")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="10.0.0.5")
-            return _completed(0)
+                return _proc(0, stdout="10.0.0.5")
+            return _proc(0)
 
         d = diagnose_gateway(
-            _run=run,
+            _runner=_as_runner(run),
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         self.assertIsNone(d.chosen_gateway)
@@ -510,26 +689,26 @@ class TestDiagnosisOrchestration(unittest.TestCase):
         fake = FakeHostProbeServer()
         def run(cmd):
             if cmd[0] == "docker" and cmd[1] == "run":
-                return _completed(0, stdout="PROBE_OK")
+                return _proc(0, stdout="PROBE_OK")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="10.0.0.5")
-            return _completed(0)
-        diagnose_gateway(_run=run, _host_probe_factory=lambda: fake)
+                return _proc(0, stdout="10.0.0.5")
+            return _proc(0)
+        diagnose_gateway(_runner=_as_runner(run), _host_probe_factory=lambda: fake)
         self.assertTrue(fake.stopped)
 
     def test_server_stops_after_failure(self):
         fake = FakeHostProbeServer()
         def run(cmd):
             if cmd[0] == "docker" and cmd[1] == "run":
-                return _completed(1, stderr="timeout")
+                return _proc(1, stderr="timeout")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="")
-            return _completed(0)
-        diagnose_gateway(_run=run, _host_probe_factory=lambda: fake)
+                return _proc(0, stdout="")
+            return _proc(0)
+        diagnose_gateway(_runner=_as_runner(run), _host_probe_factory=lambda: fake)
         self.assertTrue(fake.stopped)
 
     def test_diagnosis_does_not_install_override(self):
@@ -539,15 +718,15 @@ class TestDiagnosisOrchestration(unittest.TestCase):
             if "systemctl" in (cmd[0] if cmd else ""):
                 ran_systemctl.append(cmd)
             if cmd[0] == "docker" and cmd[1] == "run":
-                return _completed(0, stdout="PROBE_OK")
+                return _proc(0, stdout="PROBE_OK")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="Server: 27\n")
+                return _proc(0, stdout="Server: 27\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="10.0.0.5")
-            return _completed(0)
+                return _proc(0, stdout="10.0.0.5")
+            return _proc(0)
 
         d = diagnose_gateway(
-            _run=run,
+            _runner=_as_runner(run),
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         self.assertEqual(ran_systemctl, [],
@@ -558,15 +737,15 @@ class TestDiagnosisOrchestration(unittest.TestCase):
     def test_rootless_mode_flows_to_diagnosis(self):
         def run(cmd):
             if cmd[0] == "docker" and cmd[1] == "run":
-                return _completed(0, stdout="PROBE_OK")
+                return _proc(0, stdout="PROBE_OK")
             if cmd[0] == "docker" and cmd[1] == "info":
-                return _completed(0, stdout="  rootless: true\n")
+                return _proc(0, stdout="  rootless: true\n")
             if cmd[0] == "hostname":
-                return _completed(0, stdout="")
-            return _completed(0)
+                return _proc(0, stdout="")
+            return _proc(0)
 
         d = diagnose_gateway(
-            _run=run,
+            _runner=_as_runner(run),
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         self.assertIs(d.mode, DockerMode.ROOTLESS)

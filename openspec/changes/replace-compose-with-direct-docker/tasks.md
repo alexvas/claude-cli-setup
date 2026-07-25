@@ -140,7 +140,7 @@
 
 ### GREEN
 
-- [ ] 7.4 Extract gateway diagnosis and rootless override behavior from `docker/build_wrapper.py` into a dedicated internal networking module.
+- [x] 7.4 Extract gateway diagnosis and rootless override behavior from `docker/build_wrapper.py` into a dedicated internal networking module.
 - [ ] 7.5 Expose structured diagnosis, persistence, override planning, and explicit application APIs without CLI parsing or exit-code policy.
 
 ### INTROSPECT
