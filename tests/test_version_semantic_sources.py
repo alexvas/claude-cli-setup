@@ -372,10 +372,10 @@ _STALE_BLOCK_ALLOWLIST: dict[str, set[tuple[int, int]]] = {
     "tests/test_version_rendering.py": {
         # Arbitrary temp fixture filenames in TestWriteEffectiveInventory
         # (write/read-back/determinism/atomic tests)
-        (226, 315),
+        (219, 308),
         # Absolute path and traversal rejection tests — path names are
         # arbitrary, not authoritative
-        (344, 362),
+        (335, 360),
     },
     "tests/test_versions_cli.py": {
         # TestInventoryDiscovery — intentionally references the legacy

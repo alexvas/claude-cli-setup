@@ -529,13 +529,8 @@ class TestAdditionalInvalidCases(unittest.TestCase):
     def test_exact_version_fails_own_policy(self):
         toml = _minimal_toml(
             **{
-                "build.stages.toolchain.python": """\
-version = "3.14.5"
-[build.stages.toolchain.python.override]
-constraint = ">=3.14.6"
-allow_prerelease = false
-scheme = "numeric"
-"""
+                "build.stages.toolchain.python": 'version = "3.14.5"',
+                "build.stages.toolchain.python.override": 'constraint = ">=3.14.6"\nallow_prerelease = false\nscheme = "numeric"',
             }
         )
         path = _write_toml(toml)
@@ -548,13 +543,7 @@ scheme = "numeric"
     def test_allow_prerelease_with_numeric_scheme(self):
         toml = _minimal_toml(
             **{
-                "build.stages.toolchain.python": """\
-version = "3.14.6"
-[build.stages.toolchain.python.override]
-constraint = ">=3.14.6"
-allow_prerelease = true
-scheme = "numeric"
-"""
+                "build.stages.toolchain.python.override": 'constraint = ">=3.14.6"\nallow_prerelease = true\nscheme = "numeric"',
             }
         )
         path = _write_toml(toml)
@@ -567,13 +556,7 @@ scheme = "numeric"
     def test_unknown_scheme(self):
         toml = _minimal_toml(
             **{
-                "build.stages.toolchain.python": """\
-version = "3.14.6"
-[build.stages.toolchain.python.override]
-constraint = ">=3.14.6"
-allow_prerelease = false
-scheme = "semver"
-"""
+                "build.stages.toolchain.python.override": 'constraint = ">=3.14.6"\nallow_prerelease = false\nscheme = "semver"',
             }
         )
         path = _write_toml(toml)

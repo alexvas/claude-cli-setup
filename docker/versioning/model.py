@@ -278,6 +278,55 @@ class PiExtensionEntry:
 
 
 # ---------------------------------------------------------------------------
+# Effective build projection (Stage 4)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EffectiveArtifact:
+    """Resolved platform artifact with URL and checksum."""
+    url: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class EffectiveNode:
+    """Resolved base image reference."""
+    image: str
+
+
+@dataclass(frozen=True)
+class EffectiveRust:
+    """Resolved Rust toolchain selection."""
+    version: str
+    profile: str
+    components: tuple[str, ...]
+    rustup: EffectiveArtifact
+
+
+@dataclass(frozen=True)
+class EffectiveTool:
+    """Resolved tool with version and mandatory platform artifact."""
+    version: str
+    artifact: EffectiveArtifact
+
+
+@dataclass(frozen=True)
+class EffectiveBuildProjection:
+    """Host-only effective build projection after override application."""
+    platform: str
+    node: EffectiveNode
+    rust: EffectiveRust
+    uv: EffectiveTool
+    python_version: str
+    ty_version: str
+    rtk: EffectiveTool
+    fd: EffectiveTool
+    pi_version: str
+    openspec_version: str
+    oh_my_zsh_revision: str
+
+
+# --------------------------------------------------------------------------
 # Stages
 # ---------------------------------------------------------------------------
 

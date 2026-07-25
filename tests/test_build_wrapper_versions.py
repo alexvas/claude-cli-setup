@@ -19,14 +19,7 @@ from tests.versioning.support.inventory_builder import minimal_toml, write_toml
 def _python_override_toml() -> str:
     return minimal_toml(
         **{
-            "build.stages.toolchain.python": (
-                'version = "3.14.6"\n'
-                "\n"
-                "[build.stages.toolchain.python.override]\n"
-                'constraint = ">=3.14.6"\n'
-                "allow_prerelease = false\n"
-                'scheme = "numeric"'
-            ),
+            "build.stages.toolchain.python": 'version = "3.14.6"',
         }
     )
 

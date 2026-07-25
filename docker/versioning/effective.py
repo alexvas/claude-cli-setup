@@ -18,7 +18,17 @@ from .errors import (
     UnsupportedOverrideError,
     VersionSyntaxError,
 )
-from .model import Inventory, PiExtensionEntry, PythonEntry
+from .model import (
+    BuildInventory,
+    EffectiveArtifact,
+    EffectiveBuildProjection,
+    EffectiveNode,
+    EffectiveRust,
+    EffectiveTool,
+    Inventory,
+    PiExtensionEntry,
+    PythonEntry,
+)
 
 # ---------------------------------------------------------------------------
 # Override register
@@ -98,6 +108,134 @@ def apply_overrides(
         inventory=result,
         overrides=MappingProxyType(dict(overrides)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Build projection resolver (Stage 4)
+# ---------------------------------------------------------------------------
+
+# Override paths supported in build projection resolution
+# Supported platform identifiers for build projection resolution
+_SUPPORTED_PLATFORMS: set[str] = {"linux-amd64", "linux-arm64"}
+
+# Override paths supported in build projection resolution
+_BUILD_OVERRIDE_HANDLERS: Mapping[str, str] = {
+    "build.stages.toolchain.python.version": "python",
+}
+
+
+def resolve_build_projection(
+    build: BuildInventory,
+    overrides: Mapping[str, str],
+    *,
+    platform: str = "linux-amd64",
+) -> EffectiveBuildProjection:
+    """Resolve the effective build projection from reviewed build inventory.
+
+    Applies validated overrides and returns a frozen projection containing
+    only the fields required for Docker build construction and host-side
+    verification.  No runtime extensions, update metadata, override policy,
+    or operational state appear in the projection.
+
+    *platform* selects the target architecture.  Must be one of
+    ``"linux-amd64"`` or ``"linux-arm64"``.
+    """
+    if platform not in _SUPPORTED_PLATFORMS:
+        raise EffectiveConfigError(
+            f"Unsupported platform {platform!r}; "
+            f"must be one of {sorted(_SUPPORTED_PLATFORMS)}"
+        )
+    effective_python = build.stages.toolchain.python.version
+
+    for path, value in overrides.items():
+        kind = _BUILD_OVERRIDE_HANDLERS.get(path)
+        if kind is None:
+            raise UnsupportedOverrideError(
+                f"{path}: not an overrideable path"
+            )
+        if kind == "python":
+            effective_python = _resolve_python_override(
+                build.stages.toolchain.python, value, path
+            )
+
+    # Resolve base node image
+    node_entry = build.stages.base.node
+    registry = node_entry.source.registry.rstrip("/")
+    node_image = f"{registry}/{node_entry.source.repository}:{node_entry.tag}@{node_entry.digest}"
+
+    # Resolve Rust + rustup
+    rust = build.stages.toolchain.rust
+
+    def _resolve_artifact(artifacts, p: str, name: str):
+        art = artifacts.get(p)
+        if art is None:
+            raise EffectiveConfigError(
+                f"No artifact for platform {p!r} in {name} entry"
+            )
+        return EffectiveArtifact(url=art.url, sha256=art.sha256)
+
+    uv = build.stages.toolchain.uv
+    rtk = build.stages.rtk_prebuilt.rtk
+    fd = build.stages.fd_prebuilt.fd
+
+    return EffectiveBuildProjection(
+        platform=platform,
+        node=EffectiveNode(image=node_image),
+        rust=EffectiveRust(
+            version=rust.version,
+            profile=rust.profile,
+            components=tuple(rust.components),
+            rustup=_resolve_artifact(rust.rustup, platform, "rustup"),
+        ),
+        uv=EffectiveTool(
+            version=uv.version,
+            artifact=_resolve_artifact(uv.artifacts, platform, "uv"),
+        ),
+        python_version=effective_python,
+        ty_version=build.stages.toolchain.ty.version,
+        rtk=EffectiveTool(
+            version=rtk.version,
+            artifact=_resolve_artifact(rtk.artifacts, platform, "rtk"),
+        ),
+        fd=EffectiveTool(
+            version=fd.version,
+            artifact=_resolve_artifact(fd.artifacts, platform, "fd"),
+        ),
+        pi_version=build.stages.pi_tools.pi.version,
+        openspec_version=build.stages.openspec_tools.openspec.version,
+        oh_my_zsh_revision=build.stages.runtime.oh_my_zsh.revision,
+    )
+
+
+def _resolve_python_override(
+    entry: PythonEntry,
+    value: str,
+    path: str,
+) -> str:
+    """Validate a Python version override and return the effective version."""
+    if entry.override is None:
+        raise UnsupportedOverrideError(
+            f"{path}: no override policy configured"
+        )
+    policy = entry.override
+    if policy.scheme != "numeric":
+        raise UnsupportedOverrideError(
+            f"{path}: override scheme is {policy.scheme!r}, expected 'numeric'"
+        )
+
+    try:
+        candidate = parse_numeric_version(value)
+    except VersionSyntaxError as exc:
+        raise OverrideValidationError(
+            f"{path}: {value!r} is not a valid X.Y.Z numeric version"
+        ) from exc
+
+    if not policy.constraint.matches(candidate):
+        raise OverrideValidationError(
+            f"{path}: {candidate} does not satisfy {policy.constraint}"
+        )
+
+    return str(candidate)
 
 
 # ---------------------------------------------------------------------------

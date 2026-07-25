@@ -908,12 +908,12 @@ class TestUnknownKeyRejection(unittest.TestCase):
             path.unlink()
 
     def test_misspelled_artifact_field_in_second_platform_rejected(self):
-        """linux-arm64 artifact with sh256 typo must be caught via __ANY__ wildcard."""
+        """linux-ppc64le artifact with sh256 typo must be caught via __ANY__ wildcard."""
         toml = minimal_toml()
-        # Add a second platform entry with misspelled sha256 field
+        # Add another platform entry with misspelled sha256 field
         toml += """
-[build.stages.toolchain.uv.artifacts.linux-arm64]
-url = "https://example.invalid/uv-0.1.0-arm64.tar.gz"
+[build.stages.toolchain.uv.artifacts.linux-ppc64le]
+url = "https://example.invalid/uv-0.1.0-ppc64le.tar.gz"
 sh256 = "b1a2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f6789"
 """
         path = write_toml(toml)

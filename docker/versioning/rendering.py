@@ -61,9 +61,12 @@ def render_build_environment(
     result["RUST_COMPONENTS"] = " ".join(inv.stages.toolchain.rust.components)
     # Mandatory rustup bootstrap artifact
     rustup_artifact = inv.stages.toolchain.rust.rustup.get(platform)
-    if rustup_artifact is not None:
-        result["RUSTUP_URL"] = rustup_artifact.url
-        result["RUSTUP_SHA256"] = rustup_artifact.sha256
+    if rustup_artifact is None:
+        raise EffectiveConfigError(
+            f"No artifact for platform {platform!r} in rustup entry"
+        )
+    result["RUSTUP_URL"] = rustup_artifact.url
+    result["RUSTUP_SHA256"] = rustup_artifact.sha256
     result["UV_VERSION"] = inv.stages.toolchain.uv.version
     result["UV_URL"] = artifacts_uv.url
     result["UV_SHA256"] = artifacts_uv.sha256
@@ -395,3 +398,200 @@ def _toml_str(s: str) -> str:
     """Quote *s* as a TOML basic string, escaping backslashes and quotes."""
     escaped = s.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+# ---------------------------------------------------------------------------
+# Effective Build Projection serialization (Stage 4)
+# ---------------------------------------------------------------------------
+
+import dataclasses as _dc
+
+
+def serialize_effective_build(projection) -> dict[str, object]:
+    """Serialize an EffectiveBuildProjection to a deterministic plain dict."""
+    p = projection
+    return {
+        "platform": p.platform,
+        "node": {
+            "image": p.node.image,
+        },
+        "rust": _serialize_rust(p.rust),
+        "uv": _serialize_tool(p.uv),
+        "python": {
+            "version": p.python_version,
+        },
+        "ty": {
+            "version": p.ty_version,
+        },
+        "rtk": _serialize_tool(p.rtk),
+        "fd": _serialize_tool(p.fd),
+        "pi": {
+            "version": p.pi_version,
+        },
+        "openspec": {
+            "version": p.openspec_version,
+        },
+        "oh-my-zsh": {
+            "revision": p.oh_my_zsh_revision,
+        },
+    }
+
+
+def _serialize_rust(rust) -> dict[str, object]:
+    result: dict[str, object] = {
+        "version": rust.version,
+        "profile": rust.profile,
+        "components": list(rust.components),
+        "rustup": {
+            "url": rust.rustup.url,
+            "sha256": rust.rustup.sha256,
+        },
+    }
+    return result
+
+
+def _serialize_tool(tool) -> dict[str, object]:
+    return {
+        "version": tool.version,
+        "artifact": {
+            "url": tool.artifact.url,
+            "sha256": tool.artifact.sha256,
+        },
+    }
+
+
+def validate_effective_build(data: dict[str, object]):
+    """Validate a plain dict against the EffectiveBuildProjection schema.
+
+    Raises ValueError or EffectiveConfigError on invalid data.
+    """
+    from .model import EffectiveBuildProjection, EffectiveNode, EffectiveRust, \
+        EffectiveTool, EffectiveArtifact
+
+    if not isinstance(data, dict):
+        raise ValueError("effective build projection must be a dict")
+
+    required = {"platform", "node", "rust", "uv", "python", "ty", "rtk", "fd", "pi", "openspec", "oh-my-zsh"}
+    missing = required - set(data.keys())
+    if missing:
+        raise ValueError(f"missing required sections: {sorted(missing)}")
+
+    platform_val = data.get("platform")
+    if platform_val not in ("linux-amd64", "linux-arm64"):
+        raise ValueError(f"platform must be 'linux-amd64' or 'linux-arm64', got {platform_val!r}")
+
+    node = data["node"]
+    if not isinstance(node, dict) or "image" not in node:
+        raise ValueError("node section missing 'image'")
+
+    rust = data["rust"]
+    for key in ("version", "profile", "components", "rustup"):
+        if key not in rust:
+            raise ValueError(f"rust section missing {key!r}")
+    rustup = rust["rustup"]
+    if not isinstance(rustup, dict):
+        raise ValueError("rust.rustup must be a dict")
+    for akey in ("url", "sha256"):
+        if akey not in rustup:
+            raise ValueError(f"rust.rustup missing {akey!r}")
+
+    for section_name in ("uv", "rtk", "fd"):
+        sec = data[section_name]
+        if not isinstance(sec, dict):
+            raise ValueError(f"{section_name} must be a dict")
+        for key in ("version", "artifact"):
+            if key not in sec:
+                raise ValueError(f"{section_name} section missing {key!r}")
+        art = sec["artifact"]
+        if not isinstance(art, dict):
+            raise ValueError(f"{section_name}.artifact must be a dict")
+        for akey in ("url", "sha256"):
+            if akey not in art:
+                raise ValueError(f"{section_name}.artifact missing {akey!r}")
+
+    for section_name in ("python", "ty", "pi", "openspec"):
+        sec = data[section_name]
+        if not isinstance(sec, dict) or "version" not in sec:
+            raise ValueError(f"{section_name} section missing 'version'")
+
+    oh = data["oh-my-zsh"]
+    if not isinstance(oh, dict) or "revision" not in oh:
+        raise ValueError("oh-my-zsh section missing 'revision'")
+
+    # Reject runtime / extension keys (platform is allowed as a top-level scalar)
+    forbidden = {"runtime", "pi-extensions", "extensions", "cache", "update", "override"}
+    for key in data:
+        if key in forbidden:
+            raise ValueError(f"forbidden key in build projection: {key!r}")
+
+
+def write_effective_build(
+    projection,
+    *,
+    repo_root,
+) -> Path:
+    """Write the effective build projection atomically to the canonical path.
+
+    The canonical output is always ``.docker-generated/docker-constructor.build.effective.toml``
+    relative to *repo_root*.  No other destination is accepted.
+
+    Symlink escapes are rejected: if ``.docker-generated`` or the leaf file
+    is a symlink that points outside *repo_root*, the write is refused.
+
+    Validates the projection before touching any existing file.
+    Writes to a temporary sibling, flushes, and os.replaces.
+    """
+    repo_root = Path(repo_root).resolve()
+
+    # Build unresolved canonical path; reject symlink escapes
+    canonical_parent = repo_root / ".docker-generated"
+    canonical_dest = canonical_parent / "docker-constructor.build.effective.toml"
+
+    _require_not_symlink_escape(canonical_parent, repo_root, label=".docker-generated")
+    # Leaf symlinks are always rejected — os.replace would overwrite the
+    # target, leaving the canonical path as a symlink.
+    if canonical_dest.is_symlink():
+        raise EffectiveInventoryOutputError(
+            f"docker-constructor.build.effective.toml is a symlink: {canonical_dest}"
+        )
+
+    destination = canonical_dest.resolve()
+
+    # Validate before touching disk
+    data = serialize_effective_build(projection)
+    validate_effective_build(data)
+
+    # Atomic write
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".toml",
+        prefix=".build-effective-",
+        dir=str(destination.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            _write_toml(fh, data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, destination)
+    except Exception:
+        os.unlink(tmp_path)
+        raise
+    return destination
+
+
+def _require_not_symlink_escape(path: Path, repo_root: Path, *, label: str) -> None:
+    """Raise if *path* is a symlink that resolves outside *repo_root*.
+
+    Used only for directory symlinks.  Leaf-file symlinks are unconditionally
+    rejected by the caller.
+    """
+    if not path.is_symlink():
+        return
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError:
+        raise EffectiveInventoryOutputError(
+            f"{label} is a symlink escaping repo root: {path} -> {resolved}"
+        ) from None

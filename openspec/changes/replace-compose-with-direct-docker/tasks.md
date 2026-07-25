@@ -68,23 +68,23 @@
 
 ### RED
 
-- [ ] 4.1 Add failing resolver tests for default build selections, supported overrides, platform artifacts, URL/version consistency, and deterministic projection ordering.
-- [ ] 4.2 Add failing filesystem tests for atomic `.docker-generated/docker-constructor.build.effective.toml` replacement, validation before replacement, interrupted writes, and unsafe output paths.
+- [x] 4.1 Add failing resolver tests for default build selections, supported overrides, platform artifacts, URL/version consistency, and deterministic projection ordering.
+- [x] 4.2 Add failing filesystem tests for atomic `.docker-generated/docker-constructor.build.effective.toml` replacement, validation before replacement, interrupted writes, and unsafe output paths.
 
 ### GREEN
 
-- [ ] 4.3 Implement a pure typed build resolver that accepts the reviewed build model plus overrides and returns the effective build projection without invoking Docker.
-- [ ] 4.4 Implement validated atomic serialization of the effective build projection at the canonical host-only path.
+- [x] 4.3 Implement a pure typed build resolver that accepts the reviewed build model plus overrides and returns the effective build projection without invoking Docker.
+- [x] 4.4 Implement validated atomic serialization of the effective build projection at the canonical host-only path.
 
 ### INTROSPECT
 
-- [ ] 4.5 Verify defaults and override constraints remain inventory-owned rather than becoming Python or Dockerfile constants.
-- [ ] 4.6 Review projection contents and remove runtime entries, host operational state, and fields not required for construction or host-side verification.
+- [x] 4.5 Verify defaults and override constraints remain inventory-owned rather than becoming Python or Dockerfile constants.
+- [x] 4.6 Review projection contents and remove runtime entries, host operational state, and fields not required for construction or host-side verification.
 
 ### VALIDATE
 
-- [ ] 4.7 Run build resolver, serialization, override, and fake-filesystem tests without Docker.
-- [ ] 4.8 Run type/import checks and `git diff --check`.
+- [x] 4.7 Run build resolver, serialization, override, and fake-filesystem tests without Docker.
+- [x] 4.8 Run type/import checks and `git diff --check`.
 
 ## 5. Stage 5 — Effective Runtime Projection
 

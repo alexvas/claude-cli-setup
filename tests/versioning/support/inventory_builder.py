@@ -92,6 +92,9 @@ sha256 = "0a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f6789"
 [build.stages.toolchain.python.update]
 {g("build.stages.toolchain.python.update", 'provider = "uv-python"\nimplementation = "cpython"\nstable_only = true')}
 
+[build.stages.toolchain.python.override]
+{g("build.stages.toolchain.python.override", 'constraint = ">=3.14.6"\nallow_prerelease = false\nscheme = "numeric"')}
+
 [build.stages.toolchain.ty]
 {g("build.stages.toolchain.ty", 'version = "0.0.61"')}
 
