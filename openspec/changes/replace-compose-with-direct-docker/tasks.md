@@ -112,7 +112,7 @@
 
 ### RED
 
-- [ ] 6.1 Add failing tests for deterministic `docker build` vectors: context, runtime target, canonical image tag, platform, build arguments, cache, pull, and progress controls.
+- [x] 6.1 Add failing tests for deterministic `docker build` vectors: context, runtime target, canonical image tag, platform, build arguments, cache, pull, and progress controls.
 - [ ] 6.2 Add failing tests for deterministic `docker run` vectors: read-only runtime projection, Pi home, projects, working directory, `PROJECT_PATH_*`, host mapping, name, removal, TTY, and command passthrough.
 - [ ] 6.3 Add failing edge-case tests for spaces, empty optional projects, argument ordering, shell-escaped display, and rejection of reviewed-source or effective-build mounts.
 

@@ -7,12 +7,157 @@ from __future__ import annotations
 
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
-from .effective import EffectiveConfiguration, to_plain_data
+from .effective import (
+    EffectiveBuildProjection,
+    EffectiveConfiguration,
+    to_plain_data,
+)
 from .errors import EffectiveConfigError
+
+
+# ---------------------------------------------------------------------------
+# Immutable rendering input models (Stage 6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CacheControls:
+    """Docker build cache controls.
+
+    *enabled* is ``True`` to use the default BuildKit cache; ``False``
+    adds ``--no-cache`` to the build command.
+    """
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class BuildRenderInputs:
+    """Immutable input for ``docker build`` command rendering.
+
+    Every attribute maps to a concrete Docker CLI argument.  The
+    renderer produces a ``tuple[str, ...]`` argument vector from this
+    container without invoking Docker, resolving overrides, or reading
+    ``docker-constructor.toml``.
+    """
+
+    build_context: str
+    """Repository root — the Docker build context path."""
+
+    projection: EffectiveBuildProjection
+    """Resolved effective build projection from Stage 4."""
+
+    target_stage: str
+    """Dockerfile stage name (e.g. ``"runtime"``)."""
+
+    image_tag: str
+    """Canonical image tag applied via ``--tag``."""
+
+    platform: str
+    """Docker platform string (e.g. ``"linux/amd64"``)."""
+
+    cache: CacheControls = CacheControls()
+    """Cache behaviour."""
+
+    pull: bool = False
+    """Always pull base images (``--pull``)."""
+
+    progress: str = "auto"
+    """BuildKit progress mode: ``"auto"``, ``"plain"``, or ``"tty"``."""
+
+    dockerfile: Optional[str] = None
+    """Relative path to the Dockerfile inside *build_context*.
+
+    When ``None`` (the default) Docker uses ``Dockerfile`` in the
+    build-context root.  Set to ``"docker/Dockerfile"`` or similar when
+    the Dockerfile is not at the repository root.
+    """
+
+
+@dataclass(frozen=True)
+class RunRenderInputs:
+    """Immutable input for ``docker run`` command rendering.
+
+    Every attribute maps to a concrete Docker CLI argument or mount.
+    The renderer produces a ``tuple[str, ...]`` argument vector from
+    this container without invoking Docker, discovering projects,
+    probing gateways, or prompting the user.
+    """
+
+    image: str
+    """Canonical image to run."""
+
+    container_name: str
+    """Container name assigned via ``--name``."""
+
+    projection_host_path: str
+    """Host path to the private runtime projection file.
+
+    This is the path returned by :meth:`RuntimeProjectionHandle.path`.
+    The caller must keep the handle alive while the container runs.
+    """
+
+    projection_container_path: str
+    """Fixed read-only mount path inside the container
+    (e.g. ``"/run/pi-cli/docker-constructor.runtime.toml"``).
+    """
+
+    pi_home: str
+    """Host path to the Pi home directory mounted into the container
+    at the same path (e.g. ``"~/.pi"``).
+    """
+
+    main_project: str
+    """Host path to the main project.  Bound as ``PROJECT_PATH_1`` and
+    set as the container working directory.
+    """
+
+    optional_projects: tuple[str, ...] = ()
+    """Additional host project paths bound as ``PROJECT_PATH_2``,
+    ``PROJECT_PATH_3``, etc.
+    """
+
+    gateway: str = "host-gateway"
+    """Value for ``--add-host host.docker.internal:<value>``."""
+
+    tty: bool = True
+    """Allocate a pseudo-TTY (``--tty``)."""
+
+    stdin_open: bool = True
+    """Keep STDIN open (``--interactive``)."""
+
+    command: tuple[str, ...] = ()
+    """Command and arguments to pass through to the container entrypoint.
+    An empty tuple means the image's default ``CMD`` is used.
+    """
+
+    chown_on_start: Optional[str] = None
+    """Value for ``CHOWN_WORK_ON_START`` environment variable inside
+    the container.  ``None`` omits the variable; a string like ``"1"``
+    or ``"0"`` adds ``--env CHOWN_WORK_ON_START=<value>``.
+    """
+
+
+# ── existing rendering functions ────────────────────────────────────
+
+
+def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
+    """Render a deterministic ``docker build`` argument vector.
+
+    Returns a ``tuple[str, ...]`` suitable for ``subprocess.run``.
+    The renderer never invokes Docker, reads ``docker-constructor.toml``,
+    or resolves overrides.
+
+    Raises:
+        EffectiveConfigError: a required projection field is missing
+            or empty, or the command platform does not match the
+            projection platform.
+    """
+    raise NotImplementedError("render_build_vector — RED phase")
 
 
 def render_build_environment(
