@@ -593,7 +593,7 @@ class TestDeterministicOutput(unittest.TestCase):
             build_context=".",
             projection=proj,
             target_stage="runtime",
-            image_tag="pi:latest",
+            image_tag="pi-cli-pi:latest",
             platform="linux/amd64",
         )
         a = render_build_vector(bi)
@@ -621,3 +621,105 @@ class TestDeterministicOutput(unittest.TestCase):
             build_context=".",
         ))
         self.assertEqual(a, b)
+
+
+# ---------------------------------------------------------------------------
+# 6.3  Edge-case tests (build-specific)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPathEdgeCases(unittest.TestCase):
+    """Paths with spaces, Unicode, and leading dashes in build inputs."""
+
+    def test_build_context_with_spaces_preserved(self):
+        ctx = "path with spaces/my project"
+        args = _render(build_context=ctx)
+        self.assertEqual(args[-1], ctx)
+
+    def test_build_context_with_unicode(self):
+        ctx = "/home/dev/work/projéct-α"
+        args = _render(build_context=ctx)
+        self.assertEqual(args[-1], ctx)
+
+    def test_build_context_with_leading_dash(self):
+        ctx = "/home/dev/--my-repo"
+        args = _render(build_context=ctx)
+        self.assertEqual(args[-1], ctx)
+
+    def test_dockerfile_path_with_unicode(self):
+        df = "docker/nível/Dockerfile"
+        args = _render(dockerfile=df)
+        idx = args.index("--file")
+        self.assertEqual(args[idx + 1], df)
+
+
+class TestBuildImageValidation(unittest.TestCase):
+    """Reject invalid image tags."""
+
+    def test_empty_image_tag_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(image_tag="")
+
+    def test_whitespace_image_tag_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(image_tag="   ")
+
+
+class TestBuildArgumentAtomicity(unittest.TestCase):
+    """No argument may contain shell-joined text."""
+
+    def test_no_flag_equals_value_fused(self):
+        args = _render()
+        for token in args:
+            if token.startswith("--"):
+                self.assertNotIn("=", token,
+                                 f"flag {token!r} must not embed its value")
+
+    def test_every_build_arg_is_adjacent_pair(self):
+        """Each ``--build-arg`` token must be immediately followed
+        by a single ``KEY=VALUE`` string — two elements, never fused
+        into one."""
+        args = _render()
+        for i, token in enumerate(args):
+            if token == "--build-arg":
+                self.assertLess(i + 1, len(args),
+                                f"--build-arg at {i} has no successor")
+                val = args[i + 1]
+                # The successor must be a plain KEY=VALUE string, not
+                # another flag.
+                self.assertFalse(val.startswith("--"),
+                                 f"--build-arg followed by flag {val!r}")
+                self.assertIn("=", val,
+                              f"--build-arg value {val!r} missing '='")
+
+    def test_build_arg_with_spaces_remains_one_element(self):
+        """Values containing spaces (e.g. RUST_COMPONENTS listings)
+        must stay as a single KEY=VALUE element — spaces inside the
+        value are not argument separators."""
+        projection = _projection(
+            rust_components=("rls", "rust-analysis", "rustfmt"),
+        )
+        args = _render(projection=projection)
+        # Walk through all --build-arg pairs to find RUST_COMPONENTS.
+        rust_components_val = None
+        for i, token in enumerate(args):
+            if token == "--build-arg" and args[i + 1].startswith("RUST_COMPONENTS="):
+                rust_components_val = args[i + 1]
+                break
+        self.assertIsNotNone(rust_components_val,
+                             "RUST_COMPONENTS build arg not found")
+        self.assertEqual(
+            rust_components_val,
+            "RUST_COMPONENTS=rls rust-analysis rustfmt",
+        )
+        # The value is one element — verify by indexing.
+        rc_idx = args.index(rust_components_val)
+        self.assertEqual(args[rc_idx - 1], "--build-arg")
+        # The spaces inside the value did not split it into multiple args.
+        self.assertEqual(
+            tuple(args[rc_idx:rc_idx + 1]),
+            ("RUST_COMPONENTS=rls rust-analysis rustfmt",),
+        )
+
+
+# end of red-phase tests

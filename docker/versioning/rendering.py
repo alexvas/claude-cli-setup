@@ -176,6 +176,17 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     raise NotImplementedError("render_run_vector — RED phase")
 
 
+def render_command_display(args: tuple[str, ...]) -> str:
+    """Render a command vector as a shell-escaped string for display.
+
+    Returns a ``str`` suitable for terminal output (logs, dry-run
+    messages).  The returned string MUST NOT be fed back into
+    ``subprocess`` — it may contain shell metacharacters that would
+    alter the executed command.
+    """
+    raise NotImplementedError("render_command_display — RED phase")
+
+
 def render_build_environment(
     effective: EffectiveConfiguration,
     *,

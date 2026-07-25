@@ -120,13 +120,18 @@ class TestMounts(unittest.TestCase):
 
     def test_runtime_projection_mount_present(self):
         args = _render(
-            projection_host_path="/tmp/runtime/proj.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/proj.toml"
+            ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         )
         mounts = _collect_mounts(args)
         proj = _find_mount(mounts, dst="/run/pi-cli/docker-constructor.runtime.toml")
         self.assertIsNotNone(proj, "missing runtime projection mount")
-        self.assertEqual(proj["src"], "/tmp/runtime/proj.toml")
+        self.assertEqual(
+            proj["src"],
+            "/home/dev/.pi-cli/.docker-generated/runtime/proj.toml",
+        )
 
     def test_runtime_projection_mount_is_readonly(self):
         args = _render()
@@ -139,11 +144,15 @@ class TestMounts(unittest.TestCase):
     def test_runtime_projection_fixed_container_path(self):
         """The container-side path is fixed regardless of host path."""
         a = _render(
-            projection_host_path="/tmp/launch-a.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/launch-a.toml"
+            ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         )
         b = _render(
-            projection_host_path="/tmp/launch-b.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/launch-b.toml"
+            ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         )
         mount_a = _find_mount(_collect_mounts(a),
@@ -363,7 +372,9 @@ class TestDeterministicOutput(unittest.TestCase):
         ri = RunRenderInputs(
             image="pi-cli-pi:latest",
             container_name="pi-1",
-            projection_host_path="/tmp/x.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
+            ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
             pi_home_host="/home/alice/.pi",
             main_project="/home/dev/work/main",
@@ -377,7 +388,9 @@ class TestDeterministicOutput(unittest.TestCase):
         a = render_run_vector(RunRenderInputs(
             image="pi-cli-pi:latest",
             container_name="pi-1",
-            projection_host_path="/tmp/x.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
+            ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
             pi_home_host="/home/alice/.pi",
             main_project="/home/dev/work/main",
@@ -386,11 +399,326 @@ class TestDeterministicOutput(unittest.TestCase):
             main_project="/home/dev/work/main",
             pi_home_host="/home/alice/.pi",
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-            projection_host_path="/tmp/x.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
+            ),
             container_name="pi-1",
             image="pi-cli-pi:latest",
         ))
         self.assertEqual(a, b)
+
+
+# ---------------------------------------------------------------------------
+# 6.3  Edge-case and security tests
+# ---------------------------------------------------------------------------
+
+
+class TestPathEdgeCases(unittest.TestCase):
+    """Paths with spaces, quotes, Unicode, and leading dashes must be
+    preserved as individual vector elements."""
+
+    def test_project_path_with_spaces(self):
+        args = _render(main_project="/home/dev/work/my project")
+        self.assertIn("/home/dev/work/my project", args)
+        mounts = _collect_mounts(args)
+        main = _find_mount(mounts, dst="/home/dev/work/my project")
+        self.assertIsNotNone(main)
+        self.assertEqual(main["src"], "/home/dev/work/my project")
+
+    def test_project_path_with_unicode(self):
+        path = "/home/dev/work/projéct-α"
+        args = _render(main_project=path)
+        env = _collect_env(args)
+        self.assertEqual(env["PROJECT_PATH_1"], path)
+
+    def test_project_path_with_leading_dashes(self):
+        """A path like /home/dev/--help must not be misinterpreted
+        as a Docker flag — it's a positional argument value."""
+        path = "/home/dev/work/--project-name"
+        args = _render(main_project=path)
+        # The path must appear verbatim after --workdir and as PROJECT_PATH_1.
+        wd_idx = args.index("--workdir")
+        self.assertEqual(args[wd_idx + 1], path)
+        env = _collect_env(args)
+        self.assertEqual(env["PROJECT_PATH_1"], path)
+
+    def test_pi_home_host_with_spaces(self):
+        args = _render(pi_home_host="/home/user name/.pi")
+        mounts = _collect_mounts(args)
+        from docker.versioning.rendering import _CONTAINER_PI_HOME
+        pi = _find_mount(mounts, dst=_CONTAINER_PI_HOME)
+        self.assertIsNotNone(pi)
+        self.assertEqual(pi["src"], "/home/user name/.pi")
+
+
+class TestProjectValidation(unittest.TestCase):
+    """Reject malformed project inputs."""
+
+    def test_empty_main_project_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(main_project="")
+
+    def test_whitespace_only_main_project_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(main_project="   ")
+
+    def test_empty_optional_project_entry_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/main",
+                optional_projects=("/home/dev/work/opt1", ""),
+            )
+
+    def test_duplicate_project_paths_rejected(self):
+        """A path appearing as both main and optional project must
+        be rejected — duplicate mounts would collide."""
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/shared",
+                optional_projects=("/home/dev/work/other", "/home/dev/work/shared"),
+            )
+
+    def test_duplicate_optional_project_paths_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/main",
+                optional_projects=("/home/dev/work/opt1", "/home/dev/work/opt1"),
+            )
+
+    def test_more_than_two_optional_projects_rejected(self):
+        """The supported contract is main + up to 2 optional projects."""
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/main",
+                optional_projects=(
+                    "/home/dev/work/opt1",
+                    "/home/dev/work/opt2",
+                    "/home/dev/work/opt3",
+                ),
+            )
+
+    def test_relative_main_project_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(main_project="relative/path/project")
+
+    def test_relative_optional_project_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/work/main",
+                optional_projects=("relative/path/project",),
+            )
+
+    def test_relative_pi_home_host_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(pi_home_host="~/.pi")
+
+
+class TestImageAndNameValidation(unittest.TestCase):
+    """Reject invalid image tags and container names."""
+
+    def test_empty_image_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(image="")
+
+    def test_whitespace_image_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(image="   ")
+
+    def test_empty_container_name_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(container_name="")
+
+    def test_whitespace_container_name_rejected(self):
+        with self.assertRaises(ValueError):
+            _render(container_name="  ")
+
+
+class TestMountSecurity(unittest.TestCase):
+    """Reject mounts that would leak host-only metadata into the
+    container or conflict with expected destinations."""
+
+    def test_writable_projection_mount_rejected(self):
+        """The runtime projection mount must be read-only.
+        There is no API to request a writable projection — the
+        renderer enforces it unconditionally."""
+        args = _render()
+        mounts = _collect_mounts(args)
+        proj = _find_mount(mounts,
+                           dst="/run/pi-cli/docker-constructor.runtime.toml")
+        self.assertIsNotNone(proj)
+        # readonly may be "true" or present as a key with empty value.
+        # Either way, it signals read-only.
+        self.assertIn("readonly", proj,
+                      "projection mount must be read-only")
+        self.assertNotEqual(proj.get("readonly", "true"), "false",
+                            "projection mount must not be writable")
+
+    def test_docker_constructor_toml_as_projection_rejected(self):
+        """Passing docker-constructor.toml as projection_host_path
+        must be rejected — the reviewed source must not leak into
+        the container."""
+        with self.assertRaises(ValueError):
+            _render(
+                projection_host_path=(
+                    "/home/dev/.pi-cli/docker-constructor.toml"
+                ),
+            )
+
+    def test_effective_build_projection_as_projection_rejected(self):
+        """The effective build projection file must not be mounted
+        into the runtime container."""
+        with self.assertRaises(ValueError):
+            _render(
+                projection_host_path=(
+                    "/home/dev/.pi-cli/.docker-generated/"
+                    "docker-constructor.build.effective.toml"
+                ),
+            )
+
+    def test_broad_dot_docker_generated_as_projection_rejected(self):
+        """.docker-generated/ as a directory must not be mounted —
+        only individual files under .docker-generated/runtime/ are
+        valid projection paths."""
+        with self.assertRaises(ValueError):
+            _render(
+                projection_host_path=(
+                    "/home/dev/.pi-cli/.docker-generated"
+                ),
+            )
+
+    def test_projection_path_outside_runtime_dir_rejected(self):
+        """The host projection path must reside under
+        .docker-generated/runtime/."""
+        with self.assertRaises(ValueError):
+            _render(projection_host_path="/tmp/outside-proj.toml")
+
+    def test_noncanonical_projection_container_path_rejected(self):
+        """The container-side projection destination is fixed at
+        ``/run/pi-cli/docker-constructor.runtime.toml``.  Passing any
+        other path must be rejected."""
+        with self.assertRaises(ValueError):
+            _render(
+                projection_container_path="/etc/evil.toml",
+            )
+
+    def test_canonical_projection_container_path_accepted(self):
+        """The fixed path must be accepted (sanity check — the
+        default helper already uses this value)."""
+        _render(
+            projection_container_path=(
+                "/run/pi-cli/docker-constructor.runtime.toml"
+            ),
+        )
+
+    def test_projection_path_in_runtime_dir_accepted(self):
+        """Paths under .docker-generated/runtime/ are valid."""
+        # This must not raise.
+        _render(
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/proj-abc123.toml"
+            ),
+        )
+
+    def test_duplicate_destination_mounts_rejected(self):
+        """Two mounts with the same dst= would collide inside the
+        container.  The renderer must validate uniqueness."""
+        # The main project and Pi home could collide if they share
+        # a destination.  Test by making an optional project path
+        # equal to the Pi home host — since Pi home maps to a fixed
+        # dst, this won't collide.  But two identical project dsts
+        # would collide.
+        #
+        # The simplest collision: main project is also an optional
+        # project — already tested as TestProjectValidation.
+        # test_duplicate_project_paths_rejected.
+        #
+        # For a direct dst collision, the renderer must detect that
+        # two different src paths map to the same dst.  With 1:1
+        # project mounts this can't happen unless the same path is
+        # reused (caught above).  The real risk is Pi home colliding
+        # with a project whose host path happens to be /home/dev/.pi
+        # — but Pi home dst is always /home/dev/.pi, so a project
+        # at /home/dev/.pi would collide.  Test that.
+        with self.assertRaises(ValueError):
+            _render(
+                main_project="/home/dev/.pi",
+                pi_home_host="/home/alice/.pi",
+            )
+
+
+class TestDeterministicOrderingEdge(unittest.TestCase):
+    """Deterministic output independent of input field order."""
+
+    def test_optional_projects_in_order(self):
+        """Optional projects must appear in the vector in the order
+        they were given — no sorting or reordering."""
+        a = _render(
+            main_project="/home/dev/work/main",
+            optional_projects=("/home/dev/work/B", "/home/dev/work/A"),
+        )
+        b = _render(
+            main_project="/home/dev/work/main",
+            optional_projects=("/home/dev/work/A", "/home/dev/work/B"),
+        )
+        # Different input order → different vector (caller controls ordering).
+        self.assertNotEqual(a, b)
+
+    def test_flag_order_deterministic(self):
+        """Calling render_run_vector twice with identical RunRenderInputs
+        constructed with different kwarg order must produce the same
+        flag order in the output vector."""
+        a = render_run_vector(RunRenderInputs(
+            image="pi-cli-pi:latest",
+            container_name="pi-1",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
+            ),
+            projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
+            pi_home_host="/home/alice/.pi",
+            main_project="/home/dev/work/main",
+            optional_projects=("/home/dev/work/lib",),
+        ))
+        b = render_run_vector(RunRenderInputs(
+            optional_projects=("/home/dev/work/lib",),
+            main_project="/home/dev/work/main",
+            pi_home_host="/home/alice/.pi",
+            projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
+            projection_host_path=(
+                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
+            ),
+            container_name="pi-1",
+            image="pi-cli-pi:latest",
+        ))
+        self.assertEqual(a, b,
+                         "output must be independent of RunRenderInputs kwarg order")
+
+
+class TestArgumentAtomicity(unittest.TestCase):
+    """No argument may contain shell-joined command text."""
+
+    def test_no_shell_joined_flags(self):
+        """Every --flag and its value are separate elements.
+        No '--flag=value' or '--flag value' fused into one string."""
+        args = _render(
+            main_project="/home/dev/work/main",
+            optional_projects=("/home/dev/work/lib",),
+        )
+        for token in args:
+            if token.startswith("--"):
+                self.assertNotIn("=", token,
+                                 f"flag {token!r} must not embed its value")
+                self.assertNotIn(" ", token,
+                                 f"flag {token!r} must not embed its value")
+
+    def test_no_env_with_equals_in_key(self):
+        """--env KEY=VALUE must be two tokens: --env and KEY=VALUE."""
+        args = _render()
+        # The --env token itself must be bare.
+        for i, token in enumerate(args):
+            if token == "--env":
+                self.assertLess(i + 1, len(args))
+                self.assertFalse(args[i + 1].startswith("--"),
+                                 f"--env followed by flag {args[i+1]!r}")
 
 
 # ---------------------------------------------------------------------------
