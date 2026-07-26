@@ -758,5 +758,61 @@ class TestZeroProviderRequestsFromOrdinaryCommands(unittest.TestCase):
         )
 
 
+class TransportConfigImmutabilityTest(unittest.TestCase):
+    """``TransportConfig.tokens`` is stored as an immutable ``MappingProxyType``."""
+
+    def test_tokens_field_is_not_a_mutable_dict(self) -> None:
+        from docker.versioning.transports import TransportConfig
+        from docker.versioning.providers.base import HttpTransport
+
+        class _NoopHttp(HttpTransport):
+            def request(self, method, url, *, headers=(), nocache=False):
+                raise NotImplementedError
+
+        cfg = TransportConfig(http=_NoopHttp(), git=_NoopHttp(),
+                              tokens={"GITHUB_TOKEN": "ghp_secret"})
+        # Type-level — the field annotation is Mapping, not dict
+        self.assertNotIsInstance(cfg.tokens, dict)
+
+    def test_tokens_rejects_mutation(self) -> None:
+        from docker.versioning.transports import TransportConfig
+        from docker.versioning.providers.base import HttpTransport
+
+        class _NoopHttp(HttpTransport):
+            def request(self, method, url, *, headers=(), nocache=False):
+                raise NotImplementedError
+
+        cfg = TransportConfig(http=_NoopHttp(), git=_NoopHttp(),
+                              tokens={"GITHUB_TOKEN": "ghp_secret"})
+        with self.assertRaises(TypeError):
+            cfg.tokens["GITHUB_TOKEN"] = "overwritten"  # type: ignore[index]
+
+    def test_tokens_rejects_deletion(self) -> None:
+        from docker.versioning.transports import TransportConfig
+        from docker.versioning.providers.base import HttpTransport
+
+        class _NoopHttp(HttpTransport):
+            def request(self, method, url, *, headers=(), nocache=False):
+                raise NotImplementedError
+
+        cfg = TransportConfig(http=_NoopHttp(), git=_NoopHttp(),
+                              tokens={"GITHUB_TOKEN": "ghp_secret"})
+        with self.assertRaises(TypeError):
+            del cfg.tokens["GITHUB_TOKEN"]  # type: ignore[arg-type]
+
+    def test_default_tokens_is_empty_immutable_mapping(self) -> None:
+        from docker.versioning.transports import TransportConfig
+        from docker.versioning.providers.base import HttpTransport
+
+        class _NoopHttp(HttpTransport):
+            def request(self, method, url, *, headers=(), nocache=False):
+                raise NotImplementedError
+
+        cfg = TransportConfig(http=_NoopHttp(), git=_NoopHttp())
+        self.assertEqual(0, len(cfg.tokens))
+        with self.assertRaises(TypeError):
+            cfg.tokens["new"] = "val"  # type: ignore[index]
+
+
 if __name__ == "__main__":
     unittest.main()

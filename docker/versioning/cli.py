@@ -490,98 +490,27 @@ def _cmd_extensions(args: argparse.Namespace) -> int:
 
 
 def _resolve_transports(args: argparse.Namespace):
-    """Build production HTTP / git transports for *args*."""
-    from .providers.base import HttpTransport, GitRefTransport
+    """Thin wrapper — delegates to the shared ``build_transports()`` API.
 
-    class _ProductionHttp(HttpTransport):
-        def request(self, method, url, *, headers=(), nocache=False):
-            import urllib.request
-            import urllib.error
-            req = urllib.request.Request(url, method=method, headers=dict(headers))
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    body = resp.read()
-                    return type("HttpResponse", (), {
-                        "status": resp.status,
-                        "headers": dict(resp.headers),
-                        "body": body,
-                    })()
-            except urllib.error.HTTPError as e:
-                body = e.read() if hasattr(e, "read") else b""
-                return type("HttpResponse", (), {
-                    "status": e.code,
-                    "headers": dict(e.headers) if hasattr(e, "headers") else {},
-                    "body": body,
-                })()
-            except OSError as e:
-                # SocketTimeout, ConnectionError, etc. — treat as
-                # provider unavailable rather than crashing the CLI.
-                return type("HttpResponse", (), {
-                    "status": 503,
-                    "headers": {},
-                    "body": f"timeout_or_connection_error: {e}".encode(),
-                })()
-
-    class _ProductionGit(GitRefTransport):
-        def resolve_ref(self, repository, ref):
-            import subprocess
-            try:
-                result = subprocess.run(
-                    ["git", "ls-remote", repository, ref],
-                    capture_output=True, text=True, timeout=30,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(result.stderr.strip())
-                line = result.stdout.strip().split("\n")[0]
-                return line.split()[0]
-            except FileNotFoundError:
-                raise RuntimeError("git executable not found")
-
-    from .cache import CachingHttpTransport, DiskCache, _default_cache_dir
-    from .model import CacheConfig
-    http = _ProductionHttp()
-    no_cache: bool = getattr(args, "no_cache", False)
-    if not no_cache:
-        cache_ttl: int | None = getattr(args, "cache_ttl", None)
-        cache_dir: str | None = getattr(args, "cache_dir", None)
-
-        # Read [cache] section from validated inventory
-        inv_cache: CacheConfig | None = getattr(args, "_inventory_cache", None)
-        if inv_cache is not None:
-            if cache_dir is None and inv_cache.dir is not None:
-                cache_dir = inv_cache.dir
-            if cache_ttl is None and inv_cache.ttl is not None:
-                cache_ttl = inv_cache.ttl
-
-        # In --suggest mode, never create or write to a disk cache.
-        # The guarantee is that --suggest mutates nothing on the
-        # filesystem, including the cache directory — even when
-        # [cache].dir or --cache-dir points inside the working tree.
-        suggest_mode: bool = getattr(args, "suggest", False)
-        if not suggest_mode:
-            if cache_dir is not None:
-                disk = DiskCache(Path(cache_dir), ttl=cache_ttl)
-            else:
-                disk = DiskCache(_default_cache_dir(), ttl=cache_ttl) if cache_ttl is not None else None
-            http = CachingHttpTransport(http, ttl=cache_ttl, disk_cache=disk)
-        else:
-            disk = None
-            # In-memory only — reads from cache directory would
-            # themselves be non-mutating, but for simplicity and to
-            # avoid any edge case we omit the disk tier entirely.
-            http = CachingHttpTransport(http, ttl=cache_ttl, disk_cache=disk)
-    return http, _ProductionGit()
+    Preserved only for backward-compatibility with the legacy CLI
+    ``_cmd_check_updates`` codepath.  New code should call
+    ``docker.versioning.transports.build_transports()`` directly.
+    """
+    from .transports import build_transports
+    config = build_transports(
+        no_cache=bool(getattr(args, "no_cache", False)),
+        cache_ttl=getattr(args, "cache_ttl", None),
+        cache_dir=getattr(args, "cache_dir", None),
+        inventory_cache=getattr(args, "_inventory_cache", None),
+        suggest_mode=bool(getattr(args, "suggest", False)),
+    )
+    return config.http, config.git
 
 
 def _resolve_tokens() -> dict[str, str]:
-    """Collect provider tokens from environment variables."""
-    import os as _os
-    tokens: dict[str, str] = {}
-    for var in ("GITHUB_TOKEN", "NPM_TOKEN", "PYPI_TOKEN", "DOCKER_REGISTRY_TOKEN"):
-        val = _os.environ.get(var)
-        if val:
-            tokens[var] = val
-    return tokens
+    """Thin wrapper — delegates to the shared ``_collect_tokens()`` API."""
+    from .transports import _collect_tokens
+    return _collect_tokens()
 
 
 def _cmd_check_updates(

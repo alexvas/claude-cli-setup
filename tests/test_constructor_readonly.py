@@ -10,8 +10,6 @@ inventory parsing.
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import io
 import json
 import os
@@ -23,25 +21,11 @@ from typing import Any, Sequence
 
 # ── module loader ──────────────────────────────────────────────────────
 
-_MODULE: Any = None
-
 
 def _load_mod() -> Any:
-    global _MODULE
-    if _MODULE is not None:
-        return _MODULE
-    path = os.path.join(
-        os.path.dirname(__file__), "..", "docker", "docker-constructor.py",
-    )
-    loader = importlib.machinery.SourceFileLoader("docker_constructor", path)
-    spec = importlib.util.spec_from_loader("docker_constructor", loader)
-    assert spec is not None
-    mod = importlib.util.module_from_spec(spec)
-    mod.__module__ = "docker_constructor"
-    sys.modules["docker_constructor"] = mod
-    loader.exec_module(mod)
-    _MODULE = mod
-    return mod
+    """Import the importable facade module."""
+    from docker import constructor_cli
+    return constructor_cli
 
 
 # ── helpers ────────────────────────────────────────────────────────────

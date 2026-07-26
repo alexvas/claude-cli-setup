@@ -10,8 +10,6 @@ No test touches inventory, providers, networking, or Docker.
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import io
 import json
 import os
@@ -23,25 +21,11 @@ from typing import Any, Sequence
 
 # ── helpers ────────────────────────────────────────────────────────────
 
-_MODULE = None
-
 
 def _load_mod() -> Any:
-    global _MODULE
-    if _MODULE is not None:
-        return _MODULE
-    path = os.path.join(
-        os.path.dirname(__file__), "..", "docker", "docker-constructor.py",
-    )
-    loader = importlib.machinery.SourceFileLoader("docker_constructor", path)
-    spec = importlib.util.spec_from_loader("docker_constructor", loader)
-    assert spec is not None
-    mod = importlib.util.module_from_spec(spec)
-    mod.__module__ = "docker_constructor"
-    sys.modules["docker_constructor"] = mod
-    loader.exec_module(mod)
-    _MODULE = mod
-    return mod
+    """Import the importable facade module."""
+    from docker import constructor_cli
+    return constructor_cli
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -215,30 +199,64 @@ class TestExitCodeMapping(unittest.TestCase):
 
 
 class TestDefaultDispatcherReturnsUnavailable(unittest.TestCase):
-    """Without injection, every command returns 'unavailable' (CLI → stderr)."""
+    """Default (real) dispatcher handles read-only commands without injection.
+
+    Validate and show succeed with real inventory; check-updates is
+    exercised through injected stub providers to avoid network access.
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.m = _load_mod()
 
-    def test_validate_unavailable(self) -> None:
+    def test_validate_succeeds_on_real_inventory(self) -> None:
         rc, out, err = _run(self.m, ["validate"])
-        self.assertEqual(2, rc)
-        self.assertEqual("", out)                     # semantic stdout empty
-        self.assertIn("not available", err)           # error on stderr
-        self.assertIn("validate", err)
+        self.assertEqual(0, rc)
+        self.assertIn("valid", out)
+        self.assertEqual("", err)
 
-    def test_show_unavailable(self) -> None:
-        rc, out, err = _run(self.m, ["show"])
-        self.assertEqual(2, rc)
-        self.assertEqual("", out)
-        self.assertIn("not available", err)
+    def test_show_succeeds_on_real_inventory(self) -> None:
+        rc, out, err = _run(self.m, ["show", "--scope", "build"])
+        self.assertEqual(0, rc)
+        self.assertIn("node", out)
+        self.assertEqual("", err)
 
-    def test_check_updates_unavailable(self) -> None:
-        rc, out, err = _run(self.m, ["check-updates"])
-        self.assertEqual(2, rc)
-        self.assertEqual("", out)
-        self.assertIn("not available", err)
+    def test_check_updates_with_stub_providers(self) -> None:
+        import docker.versioning.updates
+        from unittest.mock import patch
+        from types import MappingProxyType
+        from docker.versioning.model import UpdateCandidate, UpdateKind
+        from docker.versioning.providers.base import ProviderResult
+
+        class _Stub:
+            def __init__(self, name):
+                self.name = name
+
+            def discover(self, target, context):
+                return ProviderResult(
+                    candidate=UpdateCandidate(
+                        value=getattr(target, "current", ""),
+                        kind=UpdateKind.VERSION,
+                        artifacts={},
+                    ),
+                )
+
+        fake_providers = MappingProxyType({
+            k: _Stub(k) for k in (
+                "docker-registry", "rust-channel", "static-url",
+                "github-release", "uv-python", "pypi", "npm", "git-ref",
+            )
+        })
+        with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                          fake_providers):
+            rc, out, err = _run(self.m, ["check-updates"])
+        self.assertEqual(0, rc)
+        self.assertTrue(
+            "docker-registry" in out.lower()
+            or "node" in out.lower()
+            or "build.stages" in out.lower()
+        )
+        self.assertEqual("", err)
 
 
 # ════════════════════════════════════════════════════════════════════════
