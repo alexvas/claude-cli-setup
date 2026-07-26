@@ -179,7 +179,7 @@
 ### RED
 
 - [x] 9.1 Add failing `build` tests for build overrides, projection generation, gateway API reuse, platform/cache controls, confirmation, dry-run, and direct execution with fake processes.
-- [ ] 9.2 Add failing `doctor` tests for read-only diagnosis, unavailable gateways, explicit rootless repair consent, denied consent, persistence failures, and service failures.
+- [x] 9.2 Add failing `doctor` tests for read-only diagnosis, unavailable gateways, explicit rootless repair consent, denied consent, persistence failures, and service failures.
 
 ### GREEN
 

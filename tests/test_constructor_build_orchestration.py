@@ -19,14 +19,18 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
+from docker.networking import (
+    DockerMode,
+    GatewayDiagnosis,
+    PersistenceResult,
+    ProbeResult,
+)
 from docker.versioning.build_orchestration import (
     BuildRequest,
     BuildResult,
-    DoctorResult,
     PublishResult,
     ProcessResult,
     orchestrate_build,
-    orchestrate_doctor,
 )
 from docker.versioning.dispatch_types import ExitKind
 
@@ -36,91 +40,89 @@ from docker.versioning.dispatch_types import ExitKind
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@dataclass(frozen=True)
-class FakeGatewayDiagnosis:
-    host_gateway_ip: str | None = "172.17.0.1"
-    rootless: bool = False
+def _make_diagnosis(
+    *,
+    mode: DockerMode = DockerMode.ROOTFUL,
+    chosen_gateway: str | None = "172.17.0.1",
+) -> GatewayDiagnosis:
+    """Build a minimal ``GatewayDiagnosis`` with a single probe result."""
+    ok = chosen_gateway is not None
+    probe = ProbeResult(
+        candidate=chosen_gateway or "172.17.0.1",
+        ok=ok,
+        resolved_ip=chosen_gateway,
+        detail="" if ok else "no route to host",
+    )
+    return GatewayDiagnosis(
+        mode=mode,
+        probe_port=8080,
+        probe_token="test-token",
+        lan_ip=None,
+        probes=(probe,),
+        chosen_gateway=chosen_gateway,
+        override_installed=False,
+        override_needed=False,
+    )
 
 
-@dataclass(frozen=True)
-class FakePersistenceResult:
-    written: bool = True
-    error: str | None = None
+class FakeBuildExecutor:
+    """Recording build executor matching ``BuildExecutor`` Protocol."""
 
-
-class FakeRunner:
-    """Recording process runner."""
-
-    def __init__(self, returncode: int = 0):
-        self.calls: list[tuple[tuple[str, ...], Optional[float]]] = []
+    def __init__(self, result: ProcessResult | None = None,
+                 returncode: int = 0):
+        self._result = result
         self.returncode = returncode
+        self.calls: list[tuple[str, ...]] = []
 
-    def run(
-        self, cmd: tuple[str, ...], *, timeout: float | None = None,
-    ) -> ProcessResult:
-        self.calls.append((cmd, timeout))
+    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+        self.calls.append(argv)
+        if self._result is not None:
+            return self._result
         return ProcessResult(
-            returncode=self.returncode,
+            argv=argv,
+            return_code=self.returncode,
             stdout="build output" if self.returncode == 0 else "",
             stderr="" if self.returncode == 0 else "build error",
         )
 
 
-@dataclass(frozen=True)
-class FakeOverridePlan:
-    needed: bool = True
-
-
 # ── Convenience factories (inject into BuildRequest fields) ──────────
 
-def _consent_always(_: str) -> bool:
-    return True
-
-
-def _consent_never(_: str) -> bool:
-    return False
 
 
 def _diag_reachable(**kw):
-    return FakeGatewayDiagnosis(host_gateway_ip="172.17.0.1")
+    return _make_diagnosis(
+        mode=DockerMode.ROOTFUL,
+        chosen_gateway="172.17.0.1",
+    )
 
 
 def _diag_unreachable(**kw):
-    return FakeGatewayDiagnosis(host_gateway_ip=None)
+    return _make_diagnosis(
+        mode=DockerMode.ROOTFUL,
+        chosen_gateway=None,
+    )
 
 
 def _persist_ok(path=None, gateway=None):
-    return FakePersistenceResult(written=True)
+    return PersistenceResult(
+        path=Path("/tmp/.env"),
+        gateway="172.17.0.1",
+        written=True,
+    )
 
 
 def _persist_fail(path=None, gateway=None):
-    return FakePersistenceResult(written=False, error="EACCES")
+    return PersistenceResult(
+        path=Path("/tmp/.env"),
+        gateway="172.17.0.1",
+        written=False,
+        error="EACCES",
+    )
 
 
 def _publish_ok(inv=None, projection=None, path=None):
     return PublishResult(published_path="/tmp/effective.toml")
-
-
-def _detect_rootful():
-    from docker.networking import DockerMode
-    return DockerMode.ROOTFUL
-
-
-def _detect_rootless():
-    from docker.networking import DockerMode
-    return DockerMode.ROOTLESS
-
-
-def _plan_needed(_mode=None):
-    return FakeOverridePlan(needed=True)
-
-
-def _plan_not_needed(_mode=None):
-    return FakeOverridePlan(needed=False)
-
-
-def _apply_ok(plan=None, consent=False):
-    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -145,15 +147,12 @@ class TestBuildRequestDto(unittest.TestCase):
         self.assertEqual("auto", req.progress)
         self.assertIsNone(req.uid)
         self.assertIsNone(req.gid)
-        self.assertFalse(req.confirm)
+        self.assertFalse(req.confirmed)
         self.assertFalse(req.dry_run)
         self.assertIsNone(req.runner)
         self.assertEqual("alpine:3.20", req.gateway_probe_image)
         self.assertIsNone(req.repo_root)
-        self.assertIsNone(req._detect_docker_mode)
         self.assertIsNone(req._diagnose_gateway)
-        self.assertIsNone(req._plan_rootless_override)
-        self.assertIsNone(req._apply_rootless_override)
         self.assertIsNone(req._persist_gateway)
         self.assertIsNone(req._publish_projection)
 
@@ -171,16 +170,12 @@ class TestBuildRequestDto(unittest.TestCase):
             progress="plain",
             uid=1000,
             gid=1000,
-            confirm=True,
+            confirmed=True,
             dry_run=True,
-            consent=_consent_always,
-            runner=FakeRunner(),
+            runner=FakeBuildExecutor(),
             gateway_probe_image="busybox:1.36",
             repo_root="/tmp",
-            _detect_docker_mode=_detect_rootful,
             _diagnose_gateway=_diag_reachable,
-            _plan_rootless_override=_plan_needed,
-            _apply_rootless_override=_apply_ok,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
@@ -194,11 +189,11 @@ class TestBuildRequestDto(unittest.TestCase):
         self.assertEqual("plain", req.progress)
         self.assertEqual(1000, req.uid)
         self.assertEqual(1000, req.gid)
-        self.assertTrue(req.confirm)
+        self.assertTrue(req.confirmed)
         self.assertTrue(req.dry_run)
 
     def test_build_result_carries_all_fields(self):
-        pr = ProcessResult(returncode=0, stdout="ok", stderr="")
+        pr = ProcessResult(argv=("docker", "build", "."), return_code=0, stdout="ok", stderr="")
         result = BuildResult(
             exit_kind=ExitKind.SUCCESS,
             message="done",
@@ -222,6 +217,61 @@ class TestBuildRequestDto(unittest.TestCase):
         with self.assertRaises(Exception):
             result.message = "nope"  # type: ignore[misc]
 
+    def test_overrides_normalized_to_immutable(self):
+        """Caller-side mutation of a mutable dict passed to ``overrides``
+        must **not** alter the frozen ``BuildRequest`` after construction."""
+        mutable = {"A": "1", "B": "2"}
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            overrides=mutable,
+        )
+        self.assertIsInstance(req.overrides, MappingProxyType)
+        self.assertEqual({"A": "1", "B": "2"}, dict(req.overrides))
+        # Mutate the caller-owned dict
+        mutable["A"] = "HACKED"
+        mutable["C"] = "3"
+        del mutable["B"]
+        # Request must be unchanged
+        self.assertEqual({"A": "1", "B": "2"}, dict(req.overrides),
+                         "caller mutation must not alter frozen request")
+        # Setting overrides on frozen instance must still fail
+        with self.assertRaises(Exception):
+            req.overrides = MappingProxyType({"X": "Y"})  # type: ignore[misc]
+
+    def test_overrides_default_is_empty_immutable(self):
+        """Default ``overrides`` (no argument) must be an empty immutable
+        mapping."""
+        req = BuildRequest(inventory_path="docker-constructor.toml")
+        self.assertIsInstance(req.overrides, MappingProxyType)
+        self.assertEqual({}, dict(req.overrides))
+
+    def test_process_result_boundary_match(self):
+        """``ProcessResult`` used by build orchestration is the same type
+        accepted by ``docker.networking`` — there is no duplicate."""
+        from docker.networking import ProcessResult as NetPR
+        self.assertIs(NetPR, ProcessResult,
+                      "build_orchestration must re-use networking.ProcessResult")
+
+    def test_build_executor_boundary(self):
+        """A ``FakeBuildExecutor`` satisfies the ``BuildExecutor`` Protocol —
+        ``run(tuple[str, ...])`` returns ``ProcessResult`` with ``argv`` /
+        ``return_code`` fields."""
+        runner = FakeBuildExecutor()
+        result = runner.run(("docker", "build", "-t", "pi:latest", "."))
+        self.assertIsInstance(result, ProcessResult)
+        self.assertEqual(("docker", "build", "-t", "pi:latest", "."), result.argv)
+        self.assertEqual(0, result.return_code)
+
+    def test_build_executor_distinct_from_networking_runner(self):
+        """``BuildExecutor`` is a separate contract from ``ProcessRunner`` —
+        build uses ``tuple[str, ...]`` while networking uses ``list[str]``."""
+        from docker.networking import ProcessRunner
+        from docker.versioning.build_orchestration import BuildExecutor
+        self.assertIsNot(BuildExecutor, ProcessRunner)
+        # A BuildExecutor is NOT a ProcessRunner (different signatures)
+        be = FakeBuildExecutor()
+        self.assertNotIsInstance(be, ProcessRunner)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 8.  Injectables wired through BuildRequest
@@ -233,23 +283,17 @@ class TestInjectablesWired(unittest.TestCase):
 
     def test_all_injectables_accepted(self):
         """BuildRequest must carry every injectable slot."""
-        runner = FakeRunner()
+        runner = FakeBuildExecutor()
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             runner=runner,
-            _detect_docker_mode=_detect_rootful,
             _diagnose_gateway=_diag_reachable,
-            _plan_rootless_override=_plan_needed,
-            _apply_rootless_override=_apply_ok,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         # Just verify the slots are populated
         self.assertIs(runner, req.runner)
-        self.assertIs(_detect_rootful, req._detect_docker_mode)
         self.assertIs(_diag_reachable, req._diagnose_gateway)
-        self.assertIs(_plan_needed, req._plan_rootless_override)
-        self.assertIs(_apply_ok, req._apply_rootless_override)
         self.assertIs(_persist_ok, req._persist_gateway)
         self.assertIs(_publish_ok, req._publish_projection)
 
@@ -460,7 +504,7 @@ class TestPlatformSelection(unittest.TestCase):
 
         def record_diag(**kw):
             diag_called.append(1)
-            return FakeGatewayDiagnosis()
+            return _make_diagnosis()
 
         req = BuildRequest(
             inventory_path="/nonexistent/inventory.toml",
@@ -630,19 +674,19 @@ class _RecordingFakes:
 
     def diagnose(self, **kw):
         _RecordingFakes.diagnose_calls += 1
-        return FakeGatewayDiagnosis()
+        return _make_diagnosis()
 
     def persist(self, path=None, gateway=None):
         _RecordingFakes.persist_calls += 1
-        return FakePersistenceResult(written=True)
+        return _persist_ok()
 
     def publish(self, inv=None, projection=None, path=None):
         _RecordingFakes.publish_calls += 1
         return PublishResult(published_path="/tmp/eff.toml")
 
-    def run(self, cmd, *, timeout=None):
+    def run(self, argv: tuple[str, ...]):
         _RecordingFakes.docker_calls += 1
-        return ProcessResult(returncode=0, stdout="", stderr="")
+        return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
 
 
 def _reset_recording():
@@ -767,6 +811,7 @@ class TestGatewayDiagnosis(unittest.TestCase):
     def test_no_working_gateway_fails_operational(self):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
+            confirmed=True,
             _diagnose_gateway=_diag_unreachable,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
@@ -783,7 +828,7 @@ class TestGatewayDiagnosis(unittest.TestCase):
 
         def record_persist(path, gateway):
             persisted.append(gateway)
-            return FakePersistenceResult(written=True)
+            return _persist_ok()
 
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
@@ -808,9 +853,10 @@ class TestPersistenceFailure(unittest.TestCase):
     """Task 17 — projection may resolve but Docker must not execute."""
 
     def test_persist_failure_blocks_docker(self):
-        docker_runner = FakeRunner()
+        docker_runner = FakeBuildExecutor()
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
+            confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_fail,
             _publish_projection=_publish_ok,
@@ -830,51 +876,42 @@ class TestPersistenceFailure(unittest.TestCase):
 
 
 class TestConfirmation(unittest.TestCase):
-    """Tasks 18–19 — consent semantics.
+    """Tasks 18–19 — confirmation flag (consent callbacks removed).
 
-    User cancellation is a deliberate no-op, **not** a configuration
-    error.  The exit kind for a denied build must be ``SUCCESS`` (the
-    operation completed successfully — by doing nothing).
+    The facade obtains confirmation and passes ``confirmed: bool`` as an
+    immutable decision.  Orchestration **never** prompts; it only enforces
+    the boolean.  ``confirmed=True`` means the user explicitly agreed or
+    ``--yes`` bypass was active."""
 
-    ``--yes`` / ``confirm=False`` must bypass the consent callback
-    entirely, proceeding as if consent were granted.
-
-    When consent is required and granted, it must be called after
-    inventory/projection validation but **before** any Docker activity
-    (gateway probes spawn ephemeral containers).
-    """
-
-    # -- helper bombs --------------------------------------------------
+    # -- helpers -------------------------------------------------------
 
     @staticmethod
     def _bomb_diagnose(**kw):
-        raise RuntimeError("diagnose must NOT be called")
+        raise RuntimeError("diagnose must NOT be called when not confirmed")
 
     @staticmethod
-    def _bomb_persist(p=None, g=None):
-        raise RuntimeError("persist must NOT be called")
+    def _bomb_persist(path=None, gateway=None):
+        raise RuntimeError("persist must NOT be called when not confirmed")
 
     @staticmethod
     def _bomb_publish(**kw):
-        raise RuntimeError("publish must NOT be called")
-
-    @staticmethod
-    def _bomb_consent(_prompt: str) -> bool:
-        raise RuntimeError("consent must NOT be called")
+        raise RuntimeError("publish must NOT be called when not confirmed")
 
     class _BombRunner:
-        def run(self, cmd, *, timeout=None):
-            raise RuntimeError("runner must NOT be called")
+        """Runner that explodes if ``.run()`` is ever invoked."""
+        def run(self, argv: tuple[str, ...]):
+            raise RuntimeError("runner must NOT be called when not confirmed")
 
-    # -- denied (successful no-op) -------------------------------------
+    # -- denied (successful cancellation) ------------------------------
 
-    def test_denied_build_is_successful_noop(self):
-        """Denied consent is a deliberate user action — SUCCESS no-op,
-        **not** a configuration error."""
+    def test_not_confirmed_is_successful_cancellation(self):
+        """``confirmed=False`` with ``dry_run=False`` is a deliberate
+        user decision — SUCCESS no-op.  Every side-effecting boundary
+        carries a bomb; the test passes only if none of them fire."""
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            confirm=True,
-            consent=_consent_never,
+            confirmed=False,
+            dry_run=False,
             _diagnose_gateway=self._bomb_diagnose,
             _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
@@ -882,93 +919,26 @@ class TestConfirmation(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
-                         f"denied consent is SUCCESS not {result.exit_kind}: {result.message}")
-        self.assertIn("denied", (result.message or "").lower(),
-                      "message must indicate consent was denied")
-
-    # -- --yes / assume-yes bypass ------------------------------------
-
-    def test_assume_yes_bypasses_consent(self):
-        """When ``confirm=False`` (``--yes``) the consent callback must
-        **never** be invoked — bomb consent proves this.  A successful
-        FakeRunner is injected so the test isolates the consent bypass
-        rather than failing at the execution boundary."""
-        runner = FakeRunner()
-        req = BuildRequest(
-            inventory_path="docker-constructor.toml",
-            confirm=False,
-            consent=self._bomb_consent,
-            _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
-            _publish_projection=_publish_ok,
-            runner=runner,
-        )
-        result = orchestrate_build(req)
-        self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
-                         f"expected SUCCESS, got {result.exit_kind}: {result.message}")
-        self.assertGreater(len(result.build_args), 0,
-                           "build must proceed without prompting")
-
-    # -- ordering ------------------------------------------------------
-
-    def test_consent_after_planning_before_diagnosis(self):
-        """Consent must be called after inventory/projection validation
-        but **before** gateway diagnosis (which spawns a container)."""
-        seq = []
-
-        def consent(prompt: str) -> bool:
-            seq.append("consent")
-            return True
-
-        def diagnose(**kw):
-            seq.append("diagnose")
-            return FakeGatewayDiagnosis()
-
-        def persist(p, g):
-            seq.append("persist")
-            return FakePersistenceResult(written=True)
-
-        def publish(**kw):
-            seq.append("publish")
-            return PublishResult(published_path="/tmp/eff.toml")
-
-        req = BuildRequest(
-            inventory_path="docker-constructor.toml",
-            confirm=True,
-            consent=consent,
-            _diagnose_gateway=diagnose,
-            _persist_gateway=persist,
-            _publish_projection=publish,
-        )
-        result = orchestrate_build(req)
-        self.assertIsInstance(result, BuildResult)
-        # Every phase must have been reached
-        for phase in ("consent", "diagnose", "persist", "publish"):
-            self.assertIn(phase, seq,
-                          f"{phase} was never called; stub may be active")
-        # Consent must precede the first Docker-using step (diagnosis)
-        consent_idx = seq.index("consent")
-        diagnose_idx = seq.index("diagnose")
-        self.assertLess(consent_idx, diagnose_idx,
-                        f"consent ({consent_idx}) must precede diagnosis ({diagnose_idx})")
-        # Diagnosis must precede persistence
-        persist_idx = seq.index("persist")
-        self.assertLess(diagnose_idx, persist_idx,
-                        f"diagnosis ({diagnose_idx}) must precede persistence ({persist_idx})")
-        # Publication may happen after persistence
-        publish_idx = seq.index("publish")
-        self.assertGreater(publish_idx, persist_idx,
-                           f"publication ({publish_idx}) must be after persistence ({persist_idx})")
+                         f"not-confirmed is SUCCESS not {result.exit_kind}: {result.message}")
+        self.assertIn("not confirmed", (result.message or "").lower(),
+                      "message must indicate build was not confirmed")
+        self.assertIsNone(result.process_result,
+                          "no Docker process must have run")
+        self.assertEqual(len(result.build_args), 0,
+                         "build args must be empty when cancelled")
+        self.assertIsNone(result.gateway,
+                          "no gateway must be selected")
+        self.assertIsNone(result.publish_result,
+                          "no projection must be published")
 
     # -- accepted ------------------------------------------------------
 
     def test_accepted_confirmation_runs(self):
-        """When consent is granted the full build transaction executes."""
-        docker_runner = FakeRunner()
+        """When ``confirmed=True`` the full build transaction executes."""
+        docker_runner = FakeBuildExecutor()
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            confirm=True,
-            consent=_consent_always,
+            confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
@@ -977,6 +947,42 @@ class TestConfirmation(unittest.TestCase):
         result = orchestrate_build(req)
         # Real impl returns SUCCESS with process_result; stub returns OPERATIONAL
         self.assertIsInstance(result, BuildResult)
+
+    def test_operation_order_diagnose_persist_publish(self):
+        """Build transaction order: validate → diagnose → persist → publish."""
+        seq = []
+
+        def diagnose(**kw):
+            seq.append("diagnose")
+            return _make_diagnosis()
+
+        def persist(p, g):
+            seq.append("persist")
+            return _persist_ok()
+
+        def publish(**kw):
+            seq.append("publish")
+            return PublishResult(published_path="/tmp/eff.toml")
+
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            confirmed=True,
+            _diagnose_gateway=diagnose,
+            _persist_gateway=persist,
+            _publish_projection=publish,
+        )
+        result = orchestrate_build(req)
+        self.assertIsInstance(result, BuildResult)
+        for phase in ("diagnose", "persist", "publish"):
+            self.assertIn(phase, seq,
+                          f"{phase} was never called; stub may be active")
+        diagnose_idx = seq.index("diagnose")
+        persist_idx = seq.index("persist")
+        self.assertLess(diagnose_idx, persist_idx,
+                        f"diagnosis ({diagnose_idx}) must precede persistence ({persist_idx})")
+        publish_idx = seq.index("publish")
+        self.assertGreater(publish_idx, persist_idx,
+                           f"publication ({publish_idx}) must be after persistence ({persist_idx})")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1007,20 +1013,17 @@ class TestDryRun(unittest.TestCase):
 
     class _BombRunner:
         """Process runner that explodes if its .run() is ever invoked."""
-        def run(self, cmd, *, timeout=None):
+        def run(self, argv: tuple[str, ...]):
             raise RuntimeError("process runner must NOT be called during dry-run")
 
-    # -- consent -------------------------------------------------------
+    # -- dry-run must not touch side effects -------------------------
 
-    def test_dry_run_no_prompt(self):
-        """Dry-run must never call the consent callback."""
-        def bomb_consent(_prompt: str) -> bool:
-            raise RuntimeError("consent must NOT be called during dry-run")
-
+    def test_dry_run_no_side_effects(self):
+        """Dry-run must not invoke Docker execution, persistence,
+        or publication.  Only the build vector is rendered."""
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=bomb_consent,
             _diagnose_gateway=self._bomb_diagnose,
             _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
@@ -1040,7 +1043,6 @@ class TestDryRun(unittest.TestCase):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=_consent_always,
             _diagnose_gateway=self._bomb_diagnose,
             _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
@@ -1058,7 +1060,6 @@ class TestDryRun(unittest.TestCase):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=_consent_always,
             _diagnose_gateway=self._bomb_diagnose,
             _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
@@ -1077,7 +1078,6 @@ class TestDryRun(unittest.TestCase):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=_consent_always,
             _diagnose_gateway=self._bomb_diagnose,
             _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
@@ -1094,7 +1094,6 @@ class TestDryRun(unittest.TestCase):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=_consent_always,
             _diagnose_gateway=self._bomb_diagnose,
             _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
@@ -1113,7 +1112,6 @@ class TestDryRun(unittest.TestCase):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=_consent_always,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
@@ -1131,7 +1129,6 @@ class TestDryRun(unittest.TestCase):
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
             dry_run=True,
-            consent=_consent_always,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
@@ -1152,10 +1149,10 @@ class TestDirectExecution(unittest.TestCase):
 
     def test_runner_receives_tuple_not_string(self):
         """The runner must receive a tuple (shell=False semantics)."""
-        runner = FakeRunner()
+        runner = FakeBuildExecutor()
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            consent=_consent_always,
+            confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
@@ -1164,15 +1161,15 @@ class TestDirectExecution(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertIsInstance(result, BuildResult)
         if runner.calls:
-            cmd, _ = runner.calls[0]
+            cmd = runner.calls[0]
             self.assertIsInstance(cmd, tuple,
                                   "runner must receive tuple, not string")
 
     def test_runner_command_starts_with_docker(self):
-        runner = FakeRunner()
+        runner = FakeBuildExecutor()
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            consent=_consent_always,
+            confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
@@ -1181,7 +1178,7 @@ class TestDirectExecution(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertIsInstance(result, BuildResult)
         if runner.calls:
-            cmd, _ = runner.calls[0]
+            cmd = runner.calls[0]
             self.assertEqual("docker", cmd[0])
 
 
@@ -1195,10 +1192,10 @@ class TestSubprocessOutcomes(unittest.TestCase):
     executable-not-found actionable."""
 
     def test_zero_exit_returns_success(self):
-        runner = FakeRunner(returncode=0)
+        runner = FakeBuildExecutor(returncode=0)
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            consent=_consent_always,
+            confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
@@ -1210,13 +1207,13 @@ class TestSubprocessOutcomes(unittest.TestCase):
         self.assertIsNotNone(result.process_result,
                              "process_result must be present")
         # When present, must match the runner's return code
-        self.assertEqual(0, result.process_result.returncode)
+        self.assertEqual(0, result.process_result.return_code)
 
     def test_nonzero_exit_returns_operational_failure(self):
-        runner = FakeRunner(returncode=1)
+        runner = FakeBuildExecutor(returncode=1)
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            consent=_consent_always,
+            confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
@@ -1226,13 +1223,13 @@ class TestSubprocessOutcomes(unittest.TestCase):
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
                          f"expected OPERATIONAL, got {result.exit_kind}")
         self.assertIsNotNone(result.process_result)
-        self.assertEqual(1, result.process_result.returncode)
+        self.assertEqual(1, result.process_result.return_code)
 
     def test_stderr_included_on_failure(self):
-        runner = FakeRunner(returncode=1)
+        runner = FakeBuildExecutor(returncode=1)
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            consent=_consent_always,
+            confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
@@ -1243,60 +1240,6 @@ class TestSubprocessOutcomes(unittest.TestCase):
         self.assertIsNotNone(result.process_result)
         # Message should surface stderr content or exit code
         self.assertIn("build error", result.message or "")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 9.2  Doctor RED tests (minimal set)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestDoctorMinimal(unittest.TestCase):
-    """Minimal doctor contract tests — expanded in 9.2 proper."""
-
-    def test_doctor_read_only_by_default(self):
-        result = orchestrate_doctor(
-            consent=_consent_always,
-            _diagnose_gateway=_diag_reachable,
-        )
-        self.assertFalse(result.repair_applied,
-                         "doctor must be read-only by default")
-
-    def test_doctor_applies_override_with_consent(self):
-        result = orchestrate_doctor(
-            consent=_consent_always,
-            apply_override=True,
-            _detect_docker_mode=_detect_rootless,
-            _diagnose_gateway=_diag_reachable,
-            _plan_rootless_override=_plan_needed,
-            _apply_rootless_override=_apply_ok,
-        )
-        self.assertTrue(result.repair_applied,
-                        "override must be applied with consent")
-
-    def test_doctor_denies_override_without_consent(self):
-        result = orchestrate_doctor(
-            consent=_consent_never,
-            apply_override=True,
-            _detect_docker_mode=_detect_rootless,
-            _diagnose_gateway=_diag_reachable,
-            _plan_rootless_override=_plan_needed,
-            _apply_rootless_override=_apply_ok,
-        )
-        self.assertFalse(result.repair_applied)
-
-    def test_doctor_returns_diagnosis_when_successful(self):
-        result = orchestrate_doctor(
-            consent=_consent_always,
-            _diagnose_gateway=_diag_reachable,
-        )
-        self.assertIsNotNone(result.gateway_diagnosis)
-
-    def test_doctor_preserves_diagnosis_on_failure(self):
-        result = orchestrate_doctor(
-            consent=_consent_always,
-            _diagnose_gateway=_diag_unreachable,
-        )
-        self.assertIsNotNone(result.gateway_diagnosis)
 
 
 if __name__ == "__main__":

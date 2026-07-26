@@ -27,6 +27,14 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Protocol, Sequence
 
+from docker.networking import (
+    GatewayDiagnosis,
+    OverrideFailure,
+    PersistenceResult,
+    ProcessResult,
+    ProcessRunner,
+    RootlessOverridePlan,
+)
 from docker.versioning.dispatch_types import CommandResult, ExitKind
 
 
@@ -35,27 +43,14 @@ from docker.versioning.dispatch_types import CommandResult, ExitKind
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class ProcessRunner(Protocol):
-    """Injected process execution — testable without Docker/systemd."""
+class BuildExecutor(Protocol):
+    """Injected Docker build execution — accepts the exact :func:`render_build_vector`
+    tuple (not a list) and returns a :class:`~docker.networking.ProcessResult`.
 
-    def run(
-        self, cmd: tuple[str, ...], *, timeout: float | None = None
-    ) -> ProcessResult: ...
+    Distinct from :class:`~docker.networking.ProcessRunner`, which uses
+    ``list[str]`` for gateway / service operations."""
 
-
-@dataclass(frozen=True)
-class ProcessResult:
-    """Outcome of a single process execution."""
-
-    returncode: int
-    stdout: str
-    stderr: str
-
-
-class ConsentFn(Protocol):
-    """Injected consent callback — returns ``True`` when the user approves."""
-
-    def __call__(self, prompt: str) -> bool: ...
+    def run(self, argv: tuple[str, ...]) -> ProcessResult: ...
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -122,26 +117,22 @@ class BuildRequest:
     from ``BuildRenderInputs`` (usually 1000).
     """
 
-    confirm: bool = False
-    """User consent granted before any mutable side effect.
+    confirmed: bool = False
+    """Facade-obtained confirmation — an immutable boolean decision.
 
-    Distinguished from ``dry_run``: confirmation controls mutation
-    (persistence, publication, Docker execution) while dry-run
-    skips execution but may still require consent for publication.
+    ``True`` means the user explicitly agreed or ``--yes`` was active.
+    Orchestration **never** prompts; it only enforces this flag.
+
+    When ``False`` (and ``dry_run=False``) the transaction must return
+    a ``SUCCESS`` cancellation without invoking any side effects
+    (diagnosis, persistence, publication, or Docker execution).
     """
 
     dry_run: bool = False
     """When ``True``, render the build vector but do not invoke Docker."""
 
-    consent: ConsentFn = lambda _: False
-    """Injected consent callback — default denies all prompts.
-
-    The callback is called *after* validation and rendering but
-    *before* mutable publication, gateway persistence, and execution.
-    """
-
-    runner: ProcessRunner | None = None
-    """Injected process runner; ``None`` means execution impossible."""
+    runner: BuildExecutor | None = None
+    """Injected build executor; ``None`` means execution impossible."""
 
     gateway_probe_image: str = "alpine:3.20"
     """Image used for ephemeral gateway probes."""
@@ -150,27 +141,31 @@ class BuildRequest:
     """Repository root directory (default: auto-detected from inventory)."""
 
     # ── injectable networking boundaries (faked in tests) ────────────
-    _detect_docker_mode: Callable[[], object] | None = None
-    """Injectable ``detect_docker_mode`` — returns ``DockerMode``."""
 
-    _diagnose_gateway: Callable[..., object] | None = None
+    _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
     """Injectable ``diagnose_gateway`` — returns ``GatewayDiagnosis``."""
 
-    _plan_rootless_override: Callable[..., object] | None = None
-    """Injectable ``plan_rootless_override`` — returns ``RootlessOverridePlan``."""
-
-    _apply_rootless_override: Callable[..., object | None] | None = None
-    """Injectable ``apply_rootless_override`` — returns ``OverrideFailure`` or ``None``."""
-
-    _persist_gateway: Callable[..., object] | None = None
+    _persist_gateway: Callable[..., PersistenceResult] | None = None
     """Injectable ``persist_gateway`` — returns ``PersistenceResult``."""
 
     # ── injectable projection boundary (faked in tests) ──────────────
-    _publish_projection: Callable[..., object] | None = None
+    _publish_projection: Callable[..., PublishResult] | None = None
     """Injectable projection publication — writes effective build projection.
 
     Returns a ``PublishResult`` or raises ``PublishError`` on failure.
     """
+
+    def __post_init__(self) -> None:
+        """Normalize ``overrides`` to an immutable mapping.
+
+        A frozen dataclass still stores the caller-owned dict; a caller
+        holding a reference to the original dict could mutate the request
+        after construction.  This normalizes any mutable ``dict`` to a
+        ``MappingProxyType``."""
+        if not isinstance(self.overrides, MappingProxyType):
+            object.__setattr__(self, "overrides", MappingProxyType(
+                dict(self.overrides),
+            ))
 
 
 @dataclass(frozen=True)
@@ -226,11 +221,58 @@ class DoctorResult:
     message: str | None = None
     """Human-readable diagnostic."""
 
-    gateway_diagnosis: object | None = None
-    """Raw ``GatewayDiagnosis`` from networking (or ``None`` on failure)."""
+    initial_diagnosis: GatewayDiagnosis | None = None
+    """Raw ``GatewayDiagnosis`` from the first probe run."""
+
+    override_plan: RootlessOverridePlan | None = None
+    """Derived ``RootlessOverridePlan`` (``None`` when not applicable)."""
 
     repair_applied: bool = False
-    """``True`` when a rootless override was applied."""
+    """``True`` when a rootless override was successfully applied."""
+
+    repair_failure: OverrideFailure | None = None
+    """Structured ``OverrideFailure`` when repair could not complete."""
+
+    post_repair_diagnosis: GatewayDiagnosis | None = None
+    """``GatewayDiagnosis`` after repair (``None`` when repair not performed)."""
+
+    selected_gateway: str | None = None
+    """IP address of the chosen gateway after successful diagnosis."""
+
+
+@dataclass(frozen=True)
+class DoctorRequest:
+    """Immutable all inputs for a doctor transaction.
+
+    Mirrors the typed request pattern of ``BuildRequest`` for symmetry.
+    """
+
+    apply_override: bool = False
+    """Explicit repair intent — only ``True`` when ``--apply-rootless-override``
+    is passed.  ``--yes`` alone must **not** imply repair."""
+
+    repair_consent: bool = False
+    """User consent for repair obtained by the facade before this call.
+
+    The facade handles all prompting; the orchestration receives an
+    immutable boolean.  True means the user explicitly confirmed
+    the repair intent.  Ignored when apply_override is False.
+    """
+
+    probe_image: str = "alpine:3.20"
+    """Docker image used for gateway probe containers."""
+
+    probe_timeout: float | None = None
+    """Timeout (seconds) for each gateway probe container."""
+
+    # -- injectables (all default to ``None`` = use real implementations) --
+
+    runner: ProcessRunner | None = None
+    """Injected process runner for probe containers / service commands."""
+
+    _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
+    _plan_rootless_override: Callable[..., RootlessOverridePlan] | None = None
+    _apply_rootless_override: Callable[..., OverrideFailure | None] | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -252,17 +294,7 @@ def orchestrate_build(request: BuildRequest) -> BuildResult:
     )
 
 
-def orchestrate_doctor(
-    *,
-    consent: ConsentFn = lambda _: False,
-    probe_image: str = "alpine:3.20",
-    apply_override: bool = False,
-    runner: ProcessRunner | None = None,
-    _detect_docker_mode: Callable[[], object] | None = None,
-    _diagnose_gateway: Callable[..., object] | None = None,
-    _plan_rootless_override: Callable[..., object] | None = None,
-    _apply_rootless_override: Callable[..., object | None] | None = None,
-) -> DoctorResult:
+def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
     """STUB — returns a placeholder ``OPERATIONAL`` result."""
     return DoctorResult(
         exit_kind=ExitKind.OPERATIONAL,
