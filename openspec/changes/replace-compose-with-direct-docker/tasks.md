@@ -157,7 +157,7 @@
 ### RED
 
 - [x] 8.1 Add failing facade tests for global options, help, one explicit inventory path, output modes, verbosity, color, input errors, and exit-code mapping.
-- [ ] 8.2 Add failing scoped tests for `validate`, `show`, and `check-updates` with `build|runtime|all`, effective display, provider/path filters, suggestions, prerelease, cache, policy exits, and JSON.
+- [x] 8.2 Add failing scoped tests for `validate`, `show`, and `check-updates` with `build|runtime|all`, effective display, provider/path filters, suggestions, prerelease, cache, policy exits, and JSON.
 - [ ] 8.3 Add failing tests proving `schema` is absent and read-only commands cannot invoke Docker or mutate the reviewed inventory.
 
 ### GREEN
