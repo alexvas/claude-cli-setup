@@ -167,7 +167,7 @@
 
 ### INTROSPECT
 
-- [ ] 8.6 Ensure the facade owns only argument validation, presentation, prompts, and exit-code mapping; inventory traversal and providers remain internal.
+- [x] 8.6 Ensure the facade owns only argument validation, presentation, prompts, and exit-code mapping; inventory traversal and providers remain internal.
 - [ ] 8.7 Verify help and errors consistently name `docker/docker-constructor.py` and only the agreed command surface.
 
 ### VALIDATE
