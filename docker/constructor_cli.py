@@ -107,8 +107,20 @@ def _resolve_inventory_path(request: CommandRequest) -> Path:
     return _REPO_ROOT / "docker-constructor.toml"
 
 
+def _to_bool(value: object) -> bool:
+    """Coerce a command-args value to bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes")
+    return bool(value)
+
+
 def _real_dispatcher(
-    command: str, request: CommandRequest,
+    command: str,
+    request: CommandRequest,
+    *,
+    _prompt_user: Callable[[str], bool] | None = None,
 ) -> CommandResult:
     """Thin facade wrapper that delegates to the internal services.
 
@@ -116,17 +128,218 @@ def _real_dispatcher(
     ``docker.versioning.readonly_service``.
     Build and doctor commands are routed to
     ``docker.versioning.build_orchestration``.
+
+    When ``_prompt_user`` is ``None`` (default), the real
+    ``_stdin_prompt`` is used.  Tests may inject a mock.
     """
-    # Commands that do not require an inventory path
-    if command == "doctor":
-        from docker.versioning.build_orchestration import dispatch as orch_dispatch
-        from pathlib import Path
-        return orch_dispatch(
-            Path("."),  # doctor does not read inventory
-            command,
-            command_args=request.command_args,
+    prompt = _stdin_prompt if _prompt_user is None else _prompt_user
+    # ── build confirmation ───────────────────────────────────────────
+    if command == "build":
+        from docker.versioning.build_orchestration import (
+            BuildRequest,
+            orchestrate_build,
         )
 
+        dry_run = bool(request.command_args.get("dry_run", False))
+        yes = bool(request.command_args.get("yes", False))
+
+        if not dry_run and not yes:
+            approval = prompt("Build the Pi container image?")
+            if not approval:
+                return CommandResult(
+                    exit_kind=ExitKind.SUCCESS,
+                    message="build cancelled by user",
+                )
+            c_args = dict(request.command_args)
+            c_args["yes"] = True
+        else:
+            c_args = dict(request.command_args)
+
+        c_args = _deep_freeze_command_args(c_args)
+
+        # Resolve inventory path
+        try:
+            inv_path = _resolve_inventory_path(request)
+        except OSError as exc:
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"cannot resolve inventory path: {exc}",
+            )
+
+        # Build typed DTO
+        raw_overrides = c_args.get("overrides")
+        if isinstance(raw_overrides, Mapping):
+            overrides = MappingProxyType(dict(raw_overrides))
+        else:
+            overrides = MappingProxyType({})
+
+        build_request = BuildRequest(
+            inventory_path=str(inv_path),
+            platform=str(c_args.get("platform", "linux-amd64")),
+            tag=c_args.get("tag") if c_args.get("tag") is not None else None,
+            overrides=overrides,
+            cache=_to_bool(c_args.get("cache", True)),
+            pull=_to_bool(c_args.get("pull", False)),
+            progress=str(c_args.get("progress", "auto")),
+            uid=c_args.get("uid") if c_args.get("uid") is not None else None,
+            gid=c_args.get("gid") if c_args.get("gid") is not None else None,
+            confirmed=_to_bool(c_args.get("yes", False)),
+            dry_run=dry_run,
+        )
+
+        result = orchestrate_build(build_request)
+
+        # BuildResult → CommandResult
+        data: dict[str, object] | None = None
+        if result.build_args:
+            data = {
+                "build_args": list(result.build_args),
+                "display_string": result.display_string,
+            }
+        if result.host_gateway_ip:
+            if data is None:
+                data = {}
+            data["host_gateway_ip"] = result.host_gateway_ip
+        if result.publish_result:
+            if data is None:
+                data = {}
+            data["published_path"] = result.publish_result.published_path
+
+        return CommandResult(
+            exit_kind=result.exit_kind,
+            message=result.message,
+            data=data,
+        )
+
+    # ── doctor confirmation ──────────────────────────────────────────
+    if command == "doctor":
+        from docker.versioning.build_orchestration import (
+            DoctorRequest,
+            orchestrate_doctor,
+        )
+
+        apply_override = bool(
+            request.command_args.get("apply_override", False),
+        )
+        yes = bool(request.command_args.get("yes", False))
+
+        if apply_override and not yes:
+            approval = prompt(
+                "Apply rootless Docker host-gateway override?"
+            )
+            if not approval:
+                return CommandResult(
+                    exit_kind=ExitKind.SUCCESS,
+                    message="rootless override repair denied by user",
+                )
+            c_args = dict(request.command_args)
+            c_args["yes"] = True
+        else:
+            c_args = dict(request.command_args)
+
+        c_args = _deep_freeze_command_args(c_args)
+
+        # Build typed DTO
+        doctor_kwargs: dict[str, object] = {
+            "apply_override": apply_override,
+            "repair_consent": _to_bool(c_args.get("yes", False)),
+        }
+        probe_image = c_args.get("probe_image")
+        if probe_image is not None:
+            doctor_kwargs["probe_image"] = probe_image
+        probe_timeout = c_args.get("probe_timeout")
+        if probe_timeout is not None:
+            doctor_kwargs["probe_timeout"] = probe_timeout
+
+        doctor_request = DoctorRequest(**doctor_kwargs)
+        result = orchestrate_doctor(doctor_request)
+
+        # DoctorResult → CommandResult
+        msg = result.message
+        network_ok = result.selected_gateway is not None
+        override_present = result.override_plan is not None
+        override_state = getattr(result.override_plan, "state", None)
+
+        lines: list[str] = []
+        if network_ok:
+            lines.append(f"Gateway reachable: {result.selected_gateway}")
+        else:
+            lines.append("No working gateway")
+        if override_present and override_state is not None:
+            lines.append(f"Override: {override_state.value}")
+        if result.repair_applied:
+            lines.append("Rootless override applied")
+            post = result.post_repair_diagnosis
+            if post is not None and post.host_gateway_ip:
+                lines.append(f"Post-repair gateway: {post.host_gateway_ip}")
+        if result.repair_failure is not None:
+            lines.append(f"Repair failed: {result.repair_failure.detail}")
+        if msg:
+            lines.append(msg)
+
+        # DoctorResult → CommandResult — always emit structured data
+        # so that JSON consumers get the full diagnosis even on failures.
+        data: dict[str, object] = {
+            "gateway": result.selected_gateway,
+            "repair_applied": result.repair_applied,
+        }
+
+        # -- initial diagnosis ----------------------------------------
+        init = result.initial_diagnosis
+        if init is not None:
+            data["docker_mode"] = init.mode.value
+            data["override_installed"] = init.override_installed
+            data["override_needed"] = init.override_needed
+            data["probes"] = [
+                {
+                    "candidate": p.candidate,
+                    "ok": p.ok,
+                    "resolved_ip": p.resolved_ip,
+                    "detail": p.detail,
+                }
+                for p in init.probes
+            ]
+
+        # -- override plan --------------------------------------------
+        if override_present and override_state is not None:
+            data["override_state"] = override_state.value
+
+        # -- repair failure (full structured) -------------------------
+        if result.repair_failure is not None:
+            rf = result.repair_failure
+            data["repair_failure"] = {
+                "operation": rf.operation,
+                "path_or_command": rf.path_or_command,
+                "detail": rf.detail,
+                "persistence_applied": rf.persistence_applied,
+            }
+
+        # -- post-repair diagnosis ------------------------------------
+        post = result.post_repair_diagnosis
+        if post is not None:
+            post_gw = post.host_gateway_ip
+            post_data: dict[str, object] = {
+                "gateway": post_gw,
+                "mode": post.mode.value,
+                "probes": [
+                    {
+                        "candidate": p.candidate,
+                        "ok": p.ok,
+                        "resolved_ip": p.resolved_ip,
+                        "detail": p.detail,
+                    }
+                    for p in post.probes
+                ],
+            }
+            data["post_repair"] = post_data
+
+        return CommandResult(
+            exit_kind=result.exit_kind,
+            message="\n".join(lines) if lines else None,
+            data=data,
+        )
+
+    # ── read-only commands ────────────────────────────────────────────
     try:
         inv_path = _resolve_inventory_path(request)
     except OSError as exc:
@@ -135,14 +348,57 @@ def _real_dispatcher(
             message=f"cannot resolve inventory path: {exc}",
         )
 
-    if command == "build":
-        from docker.versioning.build_orchestration import dispatch as orch_dispatch
-        return orch_dispatch(
-            inv_path, command, command_args=request.command_args,
-        )
-
     from docker.versioning.readonly_service import dispatch
     return dispatch(inv_path, command, command_args=request.command_args)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# User prompting (confirmation gate — Stage 9.4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _stdin_prompt(prompt_text: str) -> bool:
+    """Prompt the user for a yes/no confirmation on stderr.
+
+    Returns ``True`` for 'y' / 'yes', ``False`` for anything else
+    (including EOF or a non-interactive stdin).
+    """
+    if not _stdin_is_interactive():
+        return False
+    try:
+        response = input(f"{prompt_text} [y/N]: ")
+    except EOFError:
+        return False
+    return response.strip().lower() in ("y", "yes")
+
+
+def _stdin_is_interactive() -> bool:
+    """Check if stdin is attached to a terminal."""
+    try:
+        return sys.__stdin__.isatty()
+    except Exception:
+        return False
+
+
+def _deep_freeze_command_args(
+    cmd_args: dict[str, object],
+) -> Mapping[str, object]:
+    """Freeze nested lists/dicts in command_args so the downstream
+    dispatch receives only immutable containers (matching the
+    ``CommandRequest`` contract).
+    """
+    frozen: dict[str, object] = {}
+    for key, value in cmd_args.items():
+        if isinstance(value, dict):
+            frozen[key] = MappingProxyType({
+                k: tuple(v) if isinstance(v, list) else v
+                for k, v in value.items()
+            })
+        elif isinstance(value, list):
+            frozen[key] = tuple(value)
+        else:
+            frozen[key] = value
+    return MappingProxyType(frozen)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -169,6 +425,18 @@ def _coloured(text: str, code: str, color: str, *,
     if not _use_colour(color, stream_is_tty=stream_is_tty):
         return text
     return f"{code}{text}{_RESET}"
+
+
+def _render_data_text(data: object) -> str:
+    """Render CommandResult data for text-mode display.
+
+    Dicts with a ``display_string`` key (build dry-run, doctor
+    summaries) render that string verbatim.  Everything else falls
+    back to ``str(data)``.
+    """
+    if isinstance(data, dict) and "display_string" in data:
+        return str(data["display_string"])
+    return str(data)
 
 
 def _render(
@@ -230,11 +498,12 @@ def _render(
         if result.message:
             target.append(f"{prefix} {result.message}")
         if result.data is not None:
-            rendered_data = str(result.data)
-            if result.message:
-                target.append(f"       data: {rendered_data}")
-            else:
-                target.append(f"{prefix} {rendered_data}")
+            rendered = _render_data_text(result.data)
+            if rendered:
+                if result.message:
+                    target.append(f"       data: {rendered}")
+                else:
+                    target.append(f"{prefix} {rendered}")
         if not result.message and result.data is None:
             target.append(prefix)
 
@@ -277,6 +546,34 @@ def _add_global_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _parse_overrides(raw: Sequence[str]) -> dict[str, str]:
+    """Parse ``PATH=VALUE`` override tokens.
+
+    Rejects tokens without ``=``, leading/trailing spaces around ``=``,
+    empty paths, or duplicate paths.
+    """
+    result: dict[str, str] = {}
+    for token in raw:
+        if "=" not in token:
+            raise ValueError(
+                f"invalid override {token!r}: expected PATH=VALUE"
+            )
+        path, value = token.split("=", 1)
+        if path != path.strip() or value != value.strip():
+            raise ValueError(
+                f"invalid override {token!r}: no spaces allowed around '='"
+            )
+        if not path:
+            raise ValueError(f"invalid override {token!r}: empty path")
+        if path in result:
+            raise ValueError(
+                f"duplicate override path {path!r}: each path may only be "
+                f"specified once"
+            )
+        result[path] = value
+    return result
+
+
 def _dispatch_command(
     args: argparse.Namespace,
     *,
@@ -292,13 +589,32 @@ def _dispatch_command(
         value = getattr(args, attr)
         # Normalise overrides: raw PATH=VALUE list → parsed dict
         if attr == "overrides" and isinstance(value, list):
-            from docker.versioning.readonly_service import _parse_overrides
             try:
                 value = _parse_overrides(value)
-            except ValueError:
-                # Pass raw so the handler can surface a CLI error
-                pass
+            except ValueError as exc:
+                return CommandResult(
+                    exit_kind=ExitKind.CLI,
+                    message=str(exc),
+                )
         cmd_args[attr] = value
+
+    # ---- doctor-owned CLI validation --------------------------------
+    if args.command == "doctor":
+        timeout = cmd_args.get("probe_timeout")
+        if timeout is not None and (timeout < 1 or timeout > 300):
+            return CommandResult(
+                exit_kind=ExitKind.CLI,
+                message=(
+                    f"invalid --probe-timeout {timeout}: "
+                    f"must be 1–300"
+                ),
+            )
+        image = cmd_args.get("probe_image")
+        if image == "":
+            return CommandResult(
+                exit_kind=ExitKind.CLI,
+                message="--probe-image must not be empty",
+            )
 
     request = CommandRequest(
         command=args.command,
@@ -344,6 +660,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the image tag",
     )
     p_build.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        dest="overrides",
+        metavar="PATH=VALUE",
+        help="Override a version value (repeatable)",
+    )
+    p_build.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -354,6 +678,49 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Skip confirmation prompts",
+    )
+    p_build.add_argument(
+        "--cache",
+        action="store_true",
+        default=True,
+        dest="cache",
+        help="Enable Docker build cache (default)",
+    )
+    p_build.add_argument(
+        "--no-cache",
+        action="store_false",
+        dest="cache",
+        help="Disable Docker build cache",
+    )
+    p_build.add_argument(
+        "--pull",
+        action="store_true",
+        default=False,
+        help="Force pull base images",
+    )
+    p_build.add_argument(
+        "--no-pull",
+        action="store_false",
+        dest="pull",
+        help="Do not pull base images (default)",
+    )
+    p_build.add_argument(
+        "--progress",
+        default="auto",
+        choices=("auto", "plain", "tty"),
+        help="Progress output style (default: auto)",
+    )
+    p_build.add_argument(
+        "--uid",
+        type=int,
+        default=None,
+        help="Host UID for DEV_UID build arg",
+    )
+    p_build.add_argument(
+        "--gid",
+        type=int,
+        default=None,
+        help="Host GID for DEV_GID build arg",
     )
     p_build.set_defaults(func=_dispatch_command)
 
@@ -380,10 +747,30 @@ def _build_parser() -> argparse.ArgumentParser:
         "doctor", help="Diagnose host → container connectivity",
     )
     p_doc.add_argument(
+        "--apply-rootless-override",
+        action="store_true",
+        dest="apply_override",
+        default=False,
+        help="Repair host-gateway override for rootless Docker",
+    )
+    p_doc.add_argument(
         "--yes", "-y",
         action="store_true",
         default=False,
         help="Apply rootless override without prompting",
+    )
+    p_doc.add_argument(
+        "--probe-image",
+        default=None,
+        dest="probe_image",
+        help="Image used for gateway probes",
+    )
+    p_doc.add_argument(
+        "--probe-timeout",
+        type=int,
+        default=None,
+        dest="probe_timeout",
+        help="Timeout in seconds for probe containers (1-300)",
     )
     p_doc.set_defaults(func=_dispatch_command)
 
@@ -511,6 +898,7 @@ def main(
     dispatcher: Optional[CommandDispatcher | Callable[[str, CommandRequest], CommandResult]] = None,
     stdout_isatty: Optional[_IsAtty] = None,
     stderr_isatty: Optional[_IsAtty] = None,
+    _prompt_user: Callable[[str], bool] | None = None,
 ) -> int:
     """Parse arguments, dispatch, render, and map to exit code.
 
@@ -528,9 +916,18 @@ def main(
     stderr_isatty:
         Terminal-detection override for stderr (for colour logic).
         Defaults to ``sys.stderr.isatty``.
+    _prompt_user:
+        Confirmation prompt override.  Defaults to ``_stdin_prompt``
+        which reads from ``stdin``.  Tests may inject a mock.
     """
     parser = _build_parser()
-    disp = dispatcher or _real_dispatcher
+    if dispatcher is None:
+        prompt = _stdin_prompt if _prompt_user is None else _prompt_user
+        disp: Callable[[str, CommandRequest], CommandResult] = (
+            lambda c, r: _real_dispatcher(c, r, _prompt_user=prompt)
+        )
+    else:
+        disp = dispatcher
 
     try:
         args = parser.parse_args(argv)

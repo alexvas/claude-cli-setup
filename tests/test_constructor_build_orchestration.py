@@ -28,10 +28,14 @@ from docker.networking import (
 from docker.versioning.build_orchestration import (
     BuildRequest,
     BuildResult,
+    DoctorRequest,
+    DoctorResult,
     PublishError,
     PublishResult,
     ProcessResult,
+    diagnose_doctor,
     orchestrate_build,
+    repair_rootless,
 )
 from docker.versioning.dispatch_types import ExitKind
 
@@ -1477,6 +1481,32 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("permission denied", result.message or "")
         self.assertIsNone(result.process_result)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stage 9.4 — public API tests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestPublicDoctorAPI(unittest.TestCase):
+    """``diagnose_doctor`` and ``repair_rootless`` public functions."""
+
+    def test_diagnose_doctor_never_applies_repair(self) -> None:
+        result = diagnose_doctor()
+        self.assertIsInstance(result, DoctorResult)
+        self.assertFalse(result.repair_applied)
+
+    def test_repair_rootless_with_consent(self) -> None:
+        result = repair_rootless(consent=True)
+        self.assertIsInstance(result, DoctorResult)
+        # May succeed, fail operationally, or return POLICY for rootful
+        self.assertIn(result.exit_kind,
+                       (ExitKind.SUCCESS, ExitKind.OPERATIONAL, ExitKind.POLICY))
+
+    def test_repair_rootless_without_consent_does_not_apply(self) -> None:
+        result = repair_rootless(consent=False)
+        self.assertIsInstance(result, DoctorResult)
+        self.assertFalse(result.repair_applied)
 
 
 if __name__ == "__main__":

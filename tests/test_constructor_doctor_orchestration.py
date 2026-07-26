@@ -235,7 +235,7 @@ class TestDoctorRequestDto(unittest.TestCase):
             apply_override=True,
             repair_consent=True,
             probe_image="busybox:1.36",
-            probe_timeout=10.0,
+            probe_timeout=10,
             runner=FakeRunner(),
             _diagnose_gateway=_diag_reachable,
             _plan_rootless_override=_plan_needed,
@@ -243,11 +243,17 @@ class TestDoctorRequestDto(unittest.TestCase):
         )
         self.assertTrue(req.apply_override)
         self.assertEqual("busybox:1.36", req.probe_image)
-        self.assertEqual(10.0, req.probe_timeout)
+        self.assertEqual(10, req.probe_timeout)
         self.assertIsNotNone(req.runner)
         self.assertIsNotNone(req._diagnose_gateway)
         self.assertIsNotNone(req._plan_rootless_override)
         self.assertIsNotNone(req._apply_rootless_override)
+
+    def test_doctor_request_preserves_explicit_empty_probe_image(self):
+        """Explicit ``""`` probe_image must not be coerced to
+        the default "alpine:3.20"."""
+        req = DoctorRequest(probe_image="")
+        self.assertEqual("", req.probe_image)
 
     def test_doctor_result_all_fields(self):
         diag = _diag_reachable()
@@ -936,6 +942,299 @@ class TestDoctorPersistence(unittest.TestCase):
                          f"expected SUCCESS, got {result.exit_kind}")
         # Doctor returns diagnosis but does not write .env
         self.assertIsNotNone(result.initial_diagnosis)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Real-signature wrappers — catch wrong keyword arguments
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestRealSignatureWiring(unittest.TestCase):
+    """Verify that ``orchestrate_doctor`` passes the exact keyword
+    arguments expected by the real networking APIs, not relaxed
+    ``**kw`` names.  Each wrapper has the same signature as the
+    real function; a wrong keyword raises ``TypeError``."""
+
+    def _diagnose_wrapper(
+        self,
+        *,
+        probe_image: str = "alpine:3.20",
+        probe_timeout: int = 3,
+        _runner: object = None,
+        _host_probe_factory: object = None,
+        _fs: object = None,
+        _override_src: object = None,
+        _override_dest: object = None,
+    ) -> GatewayDiagnosis:
+        """Real-signature wrapper — delegates to a reachable diagnosis."""
+        return _diag_rootless_reachable()
+
+    def _plan_wrapper(
+        self,
+        *,
+        _mode: object = None,
+        _fs: object = None,
+        _override_src: object = None,
+        _override_dest: object = None,
+    ) -> RootlessOverridePlan:
+        """Real-signature wrapper — delegates to _plan_needed."""
+        return _plan_needed()
+
+    def _apply_wrapper(
+        self,
+        plan: object,
+        *,
+        consent: bool,
+        _fs: object = None,
+        _svc: object = None,
+        _clock: object = None,
+    ) -> OverrideFailure | None:
+        """Real-signature wrapper — delegates to _apply_ok."""
+        return _apply_ok()
+
+    def test_diagnosis_passes_correct_kwargs(self) -> None:
+        """``_runner``, ``probe_image``, ``probe_timeout`` must be
+        accepted by the real-signature wrapper."""
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=self._diagnose_wrapper,
+            _plan_rootless_override=self._plan_wrapper,
+            _apply_rootless_override=self._apply_wrapper,
+        )
+        result = orchestrate_doctor(req)
+        # Real-signature wrappers don't raise TypeError → wiring is correct
+        self.assertIn(result.exit_kind,
+                       (ExitKind.SUCCESS, ExitKind.OPERATIONAL, ExitKind.POLICY))
+
+    def test_plan_passes_mode_as_underscore_kwarg(self) -> None:
+        """The plan wrapper uses ``_mode=`` not ``mode=``.
+        If the orchestration passed ``mode=`` the wrapper would raise
+        ``TypeError``."""
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=self._diagnose_wrapper,
+            _plan_rootless_override=self._plan_wrapper,
+            _apply_rootless_override=self._apply_wrapper,
+        )
+        result = orchestrate_doctor(req)
+        self.assertIsNotNone(result.override_plan)
+
+    def test_probe_image_none_not_passed_to_diagnose(self) -> None:
+        """When ``probe_image`` is ``None`` in the DTO, it must not be
+        passed to ``diagnose_gateway`` (which has its own default).
+
+        The CLI dispatcher no longer passes ``None`` to the DTO
+        constructor, so the DTO default (``"alpine:3.20"``) applies
+        and is forwarded.  To test the ``None``-suppression path we
+        bypass the DTO default via ``object.__setattr__``."""
+        received: dict[str, object] = {}
+
+        def _recording_diagnose(**kwargs: object) -> GatewayDiagnosis:
+            received.update(kwargs)
+            return _diag_rootless_reachable()
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_recording_diagnose,
+            _plan_rootless_override=self._plan_wrapper,
+            _apply_rootless_override=self._apply_wrapper,
+        )
+        # Simulate a caller that explicitly set probe_image=None
+        object.__setattr__(req, "probe_image", None)
+        object.__setattr__(req, "probe_timeout", None)
+        orchestrate_doctor(req)
+        self.assertNotIn("probe_image", received,
+                         "probe_image=None should not be passed to diagnose")
+        self.assertNotIn("probe_timeout", received,
+                         "probe_timeout=None should not be passed to diagnose")
+
+    def test_explicit_probe_image_is_passed(self) -> None:
+        """When ``probe_image`` is set to an explicit value, it must
+        be forwarded to ``diagnose_gateway``."""
+        received: dict[str, object] = {}
+
+        def _recording_diagnose(**kwargs: object) -> GatewayDiagnosis:
+            received.update(kwargs)
+            return _diag_rootless_reachable()
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            probe_image="busybox:1.36",
+            probe_timeout=10,
+            _diagnose_gateway=_recording_diagnose,
+            _plan_rootless_override=self._plan_wrapper,
+            _apply_rootless_override=self._apply_wrapper,
+        )
+        orchestrate_doctor(req)
+        self.assertEqual("busybox:1.36", received.get("probe_image"))
+        self.assertEqual(10, received.get("probe_timeout"))
+
+    def test_runner_passed_as_underscore_runner(self) -> None:
+        """``DoctorRequest.runner`` must be wired as ``_runner=`` to
+        ``diagnose_gateway``."""
+        received: dict[str, object] = {}
+
+        def _recording_diagnose(**kwargs: object) -> GatewayDiagnosis:
+            received.update(kwargs)
+            return _diag_rootless_reachable()
+
+        runner = FakeRunner()
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            runner=runner,
+            _diagnose_gateway=_recording_diagnose,
+            _plan_rootless_override=self._plan_wrapper,
+            _apply_rootless_override=self._apply_wrapper,
+        )
+        orchestrate_doctor(req)
+        self.assertIs(runner, received.get("_runner"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Repair-from-unreachable tests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestUnreachableRepair(unittest.TestCase):
+    """Verify that ``orchestrate_doctor`` with repair intent can
+    recover from an initially unreachable gateway — the rootless
+    override exists precisely to fix this failure."""
+
+    def test_diagnosis_only_unreachable_stays_operational(self) -> None:
+        """Without repair intent, an unreachable gateway is still
+        OPERATIONAL (existing behaviour preserved)."""
+        req = DoctorRequest(
+            apply_override=False,
+            _diagnose_gateway=_diag_rootless_unreachable,
+            _plan_rootless_override=_plan_needed,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
+                         f"expected OPERATIONAL, got {result.exit_kind}")
+        self.assertIsNone(result.selected_gateway)
+        self.assertFalse(result.repair_applied)
+
+    def test_unreachable_rootful_with_repair_stays_operational(self) -> None:
+        """Repair intent on a rootful daemon with unreachable gateway
+        cannot repair — the override is not applicable."""
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_diag_unreachable,       # ROOTFUL
+            _plan_rootless_override=_plan_matching,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIsNone(result.selected_gateway)
+        self.assertFalse(result.repair_applied)
+
+    def test_repair_fixes_unreachable_gateway(self) -> None:
+        """When the initial probe fails, rootless repair with consent
+        proceeds through plan → apply → re-diagnose.  After a
+        successful repair the gateway is reachable."""
+        # Stateful fake: unreachable first, reachable after repair
+        call_count: list[int] = [0]
+
+        def _flip_diagnose(**kw: object) -> GatewayDiagnosis:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_diagnosis(
+                    mode=DockerMode.ROOTLESS,
+                    chosen_gateway=None,
+                )
+            return _make_diagnosis(
+                mode=DockerMode.ROOTLESS,
+                chosen_gateway="10.0.2.2",
+            )
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_flip_diagnose,
+            _plan_rootless_override=_plan_needed,
+            _apply_rootless_override=_apply_ok,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
+                         f"expected SUCCESS, got {result.exit_kind}")
+        self.assertTrue(result.repair_applied)
+        self.assertEqual("10.0.2.2", result.selected_gateway)
+        self.assertEqual(2, call_count[0],
+                         "expected both initial and post-repair diagnoses")
+
+    def test_post_repair_still_unreachable_returns_operational(self) -> None:
+        """When repair is applied but the gateway remains unreachable
+        after the override, the result is OPERATIONAL."""
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_diag_rootless_unreachable,
+            _plan_rootless_override=_plan_needed,
+            _apply_rootless_override=_apply_ok,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
+                         f"expected OPERATIONAL, got {result.exit_kind}")
+        self.assertTrue(result.repair_applied)
+        # selected_gateway derived solely from post-repair diagnosis;
+        # no fallback to the pre-repair (unreachable) gateway.
+        self.assertIsNone(result.selected_gateway)
+
+    def test_post_repair_loses_reachability_reported_as_operational(self) -> None:
+        """When the gateway was reachable before repair but becomes
+        unreachable after, the stale pre-repair gateway must NOT leak
+        into ``selected_gateway``.  Result is OPERATIONAL."""
+        call_count: list[int] = [0]
+
+        def _flip_down(**kw: object) -> GatewayDiagnosis:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_diagnosis(
+                    mode=DockerMode.ROOTLESS,
+                    chosen_gateway="10.0.2.2",  # reachable initially
+                )
+            return _make_diagnosis(
+                mode=DockerMode.ROOTLESS,
+                chosen_gateway=None,           # unreachable after repair
+            )
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_flip_down,
+            _plan_rootless_override=_plan_needed,
+            _apply_rootless_override=_apply_ok,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
+                         f"expected OPERATIONAL, got {result.exit_kind}")
+        self.assertTrue(result.repair_applied)
+        self.assertIsNone(result.selected_gateway,
+                          "stale pre-repair gateway must not leak")
+        self.assertIn("unreachable after repair", result.message or "")
+
+    def test_unreachable_with_matching_override_is_operational(self) -> None:
+        """When the gateway is unreachable and the override is already
+        MATCHING (installed), the no-op repair cannot help — result
+        must be OPERATIONAL, not SUCCESS."""
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_diag_rootless_unreachable,
+            _plan_rootless_override=_plan_matching,
+            _apply_rootless_override=_apply_ok,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
+                         f"expected OPERATIONAL, got {result.exit_kind}")
+        self.assertFalse(result.repair_applied)
+        self.assertIsNone(result.selected_gateway)
+        self.assertIn("already matching", result.message or "")
 
 
 if __name__ == "__main__":

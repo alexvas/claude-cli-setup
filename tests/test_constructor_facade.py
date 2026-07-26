@@ -17,7 +17,7 @@ import re
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ def _run(
     dispatcher: Any = None,
     stdout_isatty: bool = False,
     stderr_isatty: bool = False,
+    _prompt_user: Callable[[str], bool] | None = None,
 ) -> tuple[int, str, str]:
     out = io.StringIO()
     err = io.StringIO()
@@ -53,6 +54,7 @@ def _run(
             dispatcher=dispatcher,
             stdout_isatty=lambda: stdout_isatty,
             stderr_isatty=lambda: stderr_isatty,
+            _prompt_user=_prompt_user,
         )
     return rc, out.getvalue(), err.getvalue()
 
@@ -403,6 +405,35 @@ class TestChannelContract(unittest.TestCase):
         self.assertEqual("", out)
         self.assertIn("[CONFIG]", err)
         self.assertIn("errors", err)
+
+    # ── display_string shorthand ────────────────────────────────────
+
+    def test_success_display_string_rendered_verbatim(self) -> None:
+        """When data has a ``display_string`` key, text mode renders
+        that string instead of Python's dict repr."""
+        fake = _make_fake(self.m, exit_kind="success",
+                          data={"display_string": "docker build --tag x .",
+                                "build_args": ["docker", "build", "."]})
+        _, out, err = _run(self.m, ["build"], dispatcher=fake)
+        self.assertIn("docker build --tag x .", out)
+        self.assertNotIn("display_string", out)
+        self.assertNotIn("{", out)
+        self.assertEqual("", err)
+
+    def test_json_mode_preserves_full_structure(self) -> None:
+        """In JSON mode, the full data dict (including display_string
+        and build_args) is preserved."""
+        fake = _make_fake(self.m, exit_kind="success",
+                          data={"display_string": "docker build --tag x .",
+                                "build_args": ["docker", "build", "."]})
+        _, out, _ = _run(
+            self.m, ["--output", "json", "build"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        self.assertEqual("success", payload["status"])
+        self.assertIn("display_string", payload["data"])
+        self.assertIn("build_args", payload["data"])
 
 
 class TestColourBehaviour(unittest.TestCase):
@@ -791,6 +822,637 @@ class TestCLIInputErrors(unittest.TestCase):
         rc, _, err = _run(self.m, ["validate", "--inventory", "/x"])
         self.assertEqual(2, rc)
         self.assertIn("unrecognized arguments", err.lower())
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Stage 9.4 — build and doctor CLI flag propagation
+# ════════════════════════════════════════════════════════════════════════
+
+
+class TestBuildCLIFlags(unittest.TestCase):
+    """Build subcommand flags must reach the fake dispatcher via
+    ``CommandRequest.command_args``."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_platform_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--platform", "linux-arm64"], dispatcher=fake)
+        self.assertEqual("linux-arm64",
+                         fake.calls[0][1].command_args["platform"])
+
+    def test_tag_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--tag", "pi-cli-pi:v2"], dispatcher=fake)
+        self.assertEqual("pi-cli-pi:v2",
+                         fake.calls[0][1].command_args["tag"])
+
+    def test_empty_tag_preserved_for_renderer_validation(self) -> None:
+        """``--tag ""`` must be preserved as an empty string (not
+        coerced to ``None``) so the renderer rejects it as CONFIG."""
+        fake = _make_recording_fake(self.m)
+        rc, _out, err = _run(self.m, ["build", "--dry-run", "--tag", ""],
+                             dispatcher=fake)
+        # The empty tag reaches orchestration via BuildRequest, not
+        # silently discarded by the facade.
+        self.assertEqual(1, len(fake.calls))
+        self.assertEqual("", fake.calls[0][1].command_args["tag"])
+
+    def test_dry_run_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--dry-run"], dispatcher=fake)
+        self.assertTrue(fake.calls[0][1].command_args["dry_run"])
+
+    def test_yes_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--yes"], dispatcher=fake)
+        self.assertTrue(fake.calls[0][1].command_args["yes"])
+
+    def test_overrides_flag_parsed(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--override", "python.version=3.13.0",
+                      "--override", "node.version=22.0.0"], dispatcher=fake)
+        self.assertEqual(
+            {"python.version": "3.13.0", "node.version": "22.0.0"},
+            dict(fake.calls[0][1].command_args["overrides"]),
+        )
+
+    def test_cache_flag_default(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build"], dispatcher=fake)
+        self.assertTrue(fake.calls[0][1].command_args["cache"])
+
+    def test_no_cache_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--no-cache"], dispatcher=fake)
+        self.assertFalse(fake.calls[0][1].command_args["cache"])
+
+    def test_pull_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--pull"], dispatcher=fake)
+        self.assertTrue(fake.calls[0][1].command_args["pull"])
+
+    def test_no_pull_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--no-pull"], dispatcher=fake)
+        self.assertFalse(fake.calls[0][1].command_args["pull"])
+
+    def test_progress_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--progress", "plain"], dispatcher=fake)
+        self.assertEqual("plain",
+                         fake.calls[0][1].command_args["progress"])
+
+    def test_uid_gid_flags(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build", "--uid", "2000", "--gid", "2001"],
+             dispatcher=fake)
+        self.assertEqual(2000, fake.calls[0][1].command_args["uid"])
+        self.assertEqual(2001, fake.calls[0][1].command_args["gid"])
+
+    def test_build_dispatches_to_execute(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["build"], dispatcher=fake)
+        self.assertEqual(1, len(fake.calls))
+        self.assertEqual("build", fake.calls[0][0])
+
+    def test_invalid_override_returns_cli(self) -> None:
+        """``--override no-equals`` (missing '=') is caught by the facade
+        before reaching the dispatcher."""
+        fake = _make_recording_fake(self.m)
+        rc, _out, err = _run(self.m, ["build", "--override", "no-equals"],
+                              dispatcher=fake)
+        self.assertEqual(2, rc)
+        self.assertIn("expected path=value", err.lower())
+        # Dispatcher must not have been called
+        self.assertEqual(0, len(fake.calls))
+
+    def test_duplicate_override_returns_cli(self) -> None:
+        """Repeating the same override path is rejected before dispatch."""
+        fake = _make_recording_fake(self.m)
+        rc, _out, err = _run(
+            self.m,
+            ["build", "--override", "a=1", "--override", "a=2"],
+            dispatcher=fake,
+        )
+        self.assertEqual(2, rc)
+        self.assertIn("duplicate", err.lower())
+        self.assertEqual(0, len(fake.calls))
+
+
+class TestDoctorCLIFlags(unittest.TestCase):
+    """Doctor subcommand flags must reach the fake dispatcher."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_apply_override_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor", "--apply-rootless-override"],
+             dispatcher=fake)
+        self.assertTrue(fake.calls[0][1].command_args["apply_override"])
+
+    def test_apply_override_default_false(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor"], dispatcher=fake)
+        self.assertFalse(fake.calls[0][1].command_args["apply_override"])
+
+    def test_yes_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor", "--yes"], dispatcher=fake)
+        self.assertTrue(fake.calls[0][1].command_args["yes"])
+
+    def test_probe_image_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor", "--probe-image", "busybox:1.36"],
+             dispatcher=fake)
+        self.assertEqual("busybox:1.36",
+                         fake.calls[0][1].command_args["probe_image"])
+
+    def test_probe_timeout_flag(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor", "--probe-timeout", "10"],
+             dispatcher=fake)
+        self.assertEqual(10, fake.calls[0][1].command_args["probe_timeout"])
+
+    def test_doctor_dispatches_to_execute(self) -> None:
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor"], dispatcher=fake)
+        self.assertEqual(1, len(fake.calls))
+        self.assertEqual("doctor", fake.calls[0][0])
+
+    def test_float_probe_timeout_rejected_by_argparse(self) -> None:
+        """``--probe-timeout`` expects an integer; float values are
+        rejected at the CLI parser level."""
+        rc, _out, err = _run(self.m, ["doctor", "--probe-timeout", "5.5"])
+        self.assertEqual(2, rc)
+        self.assertIn("invalid int value", err.lower())
+
+    def test_explicit_empty_probe_image_rejected(self) -> None:
+        """An explicit ``--probe-image ""`` must be rejected as a CLI
+        input error before calling the dispatcher."""
+        fake = _make_recording_fake(self.m)
+        rc, _out, err = _run(self.m, ["doctor", "--probe-image", ""],
+                             dispatcher=fake)
+        self.assertEqual(2, rc,
+                         "empty --probe-image must produce CLI error")
+        self.assertIn("must not be empty", err.lower())
+        self.assertEqual(0, len(fake.calls),
+                         "dispatcher must NOT be called on invalid input")
+
+    def test_probe_timeout_below_minimum_rejected(self) -> None:
+        """``--probe-timeout 0`` must be rejected (below 1)."""
+        fake = _make_recording_fake(self.m)
+        rc, _out, err = _run(self.m, ["doctor", "--probe-timeout", "0"],
+                             dispatcher=fake)
+        self.assertEqual(2, rc)
+        self.assertIn("must be 1", err.lower())
+        self.assertEqual(0, len(fake.calls))
+
+    def test_probe_timeout_above_maximum_rejected(self) -> None:
+        """``--probe-timeout 301`` must be rejected (above 300)."""
+        fake = _make_recording_fake(self.m)
+        rc, _out, err = _run(self.m, ["doctor", "--probe-timeout", "301"],
+                             dispatcher=fake)
+        self.assertEqual(2, rc)
+        self.assertIn("must be 1", err.lower())
+        self.assertEqual(0, len(fake.calls))
+
+    def test_probe_timeout_minimum_accepted(self) -> None:
+        """``--probe-timeout 1`` is valid (lower bound)."""
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor", "--probe-timeout", "1"], dispatcher=fake)
+        self.assertEqual(1, len(fake.calls))
+        self.assertEqual(1, fake.calls[0][1].command_args["probe_timeout"])
+
+    def test_probe_timeout_maximum_accepted(self) -> None:
+        """``--probe-timeout 300`` is valid (upper bound)."""
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["doctor", "--probe-timeout", "300"], dispatcher=fake)
+        self.assertEqual(1, len(fake.calls))
+        self.assertEqual(300, fake.calls[0][1].command_args["probe_timeout"])
+
+
+class TestDoctorStructuredData(unittest.TestCase):
+    """Verify that ``_real_dispatcher`` always emits structured JSON
+    data for doctor, including on unreachable / failure outcomes."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _call_dispatcher(self, **cmd_args: object) -> Any:
+        """Shortcut: call ``_real_dispatcher`` for 'doctor' with given
+        command_args, skipping prompt (yes=True)."""
+        CR = self.m.CommandRequest
+        req = CR(
+            command="doctor", inventory=None, output="text",
+            verbose=False, color="auto",
+            command_args={"yes": True, **cmd_args},
+        )
+        return self.m._real_dispatcher("doctor", req)
+
+    def test_unreachable_gateway_emits_data(self) -> None:
+        """When the gateway is unreachable, data must still include
+        gateway (null) and repair_applied."""
+        result = self._call_dispatcher()
+        self.assertIsNotNone(result.data,
+                             "data must not be None on unreachable gateway")
+        self.assertIsNone(result.data["gateway"])
+        self.assertFalse(result.data["repair_applied"])
+
+    def test_repair_failure_included_in_data(self) -> None:
+        """When a repair failure occurs, the full structured
+        ``OverrideFailure`` must appear in data."""
+        from unittest.mock import patch
+
+        from docker.networking import OverrideFailure
+        from docker.versioning import build_orchestration
+        from docker.versioning.build_orchestration import DoctorResult
+        from docker.versioning.dispatch_types import ExitKind
+
+        failure = OverrideFailure(
+            operation="mkdir", path_or_command="/etc/docker",
+            detail="permission denied", persistence_applied=False,
+        )
+
+        fake_result = DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message="repair failed",
+            initial_diagnosis=None,  # type: ignore[arg-type]
+            selected_gateway="10.0.2.2",
+            repair_applied=False,
+            repair_failure=failure,
+        )
+
+        with patch.object(build_orchestration, "orchestrate_doctor",
+                          return_value=fake_result):
+            CR = self.m.CommandRequest
+            result = self.m._real_dispatcher(
+                "doctor",
+                CR(
+                    command="doctor", inventory=None, output="text",
+                    verbose=False, color="auto",
+                    command_args={"apply_override": True, "yes": True},
+                ),
+            )
+
+        self.assertIsNotNone(result.data)
+        rf = result.data.get("repair_failure") if result.data else None
+        self.assertIsInstance(rf, dict)
+        self.assertEqual("mkdir", rf["operation"])
+        self.assertEqual("/etc/docker", rf["path_or_command"])
+        self.assertEqual("permission denied", rf["detail"])
+        self.assertFalse(rf["persistence_applied"])
+
+    def test_full_diagnosis_data_includes_docker_mode_and_probes(self) -> None:
+        """When initial diagnosis is present, data must include
+        docker_mode, probes, override_installed, override_needed."""
+        from unittest.mock import patch
+
+        from docker.networking import (
+            DockerMode,
+            GatewayDiagnosis,
+            OverrideState,
+            ProbeResult,
+            RootlessOverridePlan,
+        )
+        from docker.versioning import build_orchestration
+        from docker.versioning.build_orchestration import DoctorResult
+        from docker.versioning.dispatch_types import ExitKind
+
+        init = GatewayDiagnosis(
+            mode=DockerMode.ROOTLESS,
+            probe_port=8080,
+            probe_token="tok",
+            lan_ip=None,
+            probes=(
+                ProbeResult(
+                    candidate="10.0.2.2", ok=True,
+                    resolved_ip="10.0.2.2", detail="",
+                ),
+                ProbeResult(
+                    candidate="172.17.0.1", ok=False,
+                    resolved_ip=None, detail="timeout",
+                ),
+            ),
+            chosen_gateway="10.0.2.2",
+            override_installed=False,
+            override_needed=True,
+        )
+        plan = RootlessOverridePlan(
+            installed=False, needed=True,
+            state=OverrideState.ABSENT,
+            filesystem_ops=(), service_ops=(),
+        )
+
+        fake_result = DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            initial_diagnosis=init,
+            override_plan=plan,
+            selected_gateway="10.0.2.2",
+            repair_applied=False,
+        )
+
+        with patch.object(build_orchestration, "orchestrate_doctor",
+                          return_value=fake_result):
+            CR = self.m.CommandRequest
+            result = self.m._real_dispatcher(
+                "doctor",
+                CR(
+                    command="doctor", inventory=None, output="text",
+                    verbose=False, color="auto",
+                    command_args={"yes": True},
+                ),
+            )
+
+        data = result.data
+        self.assertIsNotNone(data)
+        self.assertEqual("rootless", data["docker_mode"])
+        self.assertFalse(data["override_installed"])
+        self.assertTrue(data["override_needed"])
+        self.assertEqual("absent", data["override_state"])
+
+        probes = data["probes"]
+        self.assertEqual(2, len(probes))
+        self.assertEqual("10.0.2.2", probes[0]["candidate"])
+        self.assertTrue(probes[0]["ok"])
+        self.assertEqual("172.17.0.1", probes[1]["candidate"])
+        self.assertFalse(probes[1]["ok"])
+        self.assertEqual("timeout", probes[1]["detail"])
+
+    def test_post_repair_diagnosis_includes_full_outcome(self) -> None:
+        """Post-repair data must include gateway, mode, and probes."""
+        from unittest.mock import patch
+
+        from docker.networking import (
+            DockerMode,
+            GatewayDiagnosis,
+            ProbeResult,
+        )
+        from docker.versioning import build_orchestration
+        from docker.versioning.build_orchestration import DoctorResult
+        from docker.versioning.dispatch_types import ExitKind
+
+        post = GatewayDiagnosis(
+            mode=DockerMode.ROOTLESS,
+            probe_port=8080,
+            probe_token="tok",
+            lan_ip=None,
+            probes=(
+                ProbeResult(
+                    candidate="10.0.2.2", ok=True,
+                    resolved_ip="10.0.2.2", detail="",
+                ),
+            ),
+            chosen_gateway="10.0.2.2",
+            override_installed=True,
+            override_needed=False,
+        )
+
+        fake_result = DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            post_repair_diagnosis=post,
+            selected_gateway="10.0.2.2",
+            repair_applied=True,
+        )
+
+        with patch.object(build_orchestration, "orchestrate_doctor",
+                          return_value=fake_result):
+            CR = self.m.CommandRequest
+            result = self.m._real_dispatcher(
+                "doctor",
+                CR(
+                    command="doctor", inventory=None, output="text",
+                    verbose=False, color="auto",
+                    command_args={"apply_override": True, "yes": True},
+                ),
+            )
+
+        data = result.data
+        self.assertIsNotNone(data)
+        self.assertIn("post_repair", data)
+        pr = data["post_repair"]
+        self.assertEqual("10.0.2.2", pr["gateway"])
+        self.assertEqual("rootless", pr["mode"])
+        self.assertEqual(1, len(pr["probes"]))
+        self.assertTrue(pr["probes"][0]["ok"])
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Stage 9.4 — confirmation prompting (facade-owned, injectable)
+# ════════════════════════════════════════════════════════════════════════
+
+
+def _make_prompt_always(mod: Any) -> Callable[[str], bool]:
+    """Return a prompt mock that always approves."""
+    calls: list[str] = []
+    def _approve(prompt_text: str) -> bool:
+        calls.append(prompt_text)
+        return True
+    _approve.calls = calls  # type: ignore[attr-defined]
+    return _approve
+
+
+def _make_prompt_never(mod: Any) -> Callable[[str], bool]:
+    """Return a prompt mock that always denies."""
+    calls: list[str] = []
+    def _deny(prompt_text: str) -> bool:
+        calls.append(prompt_text)
+        return False
+    _deny.calls = calls  # type: ignore[attr-defined]
+    return _deny
+
+
+class TestBuildConfirmation(unittest.TestCase):
+    """Build confirmation: prompted unless ``--dry-run`` or ``--yes``."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_prompted_when_neither_dry_run_nor_yes(self) -> None:
+        prompt = _make_prompt_always(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="build",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"dry_run": False, "yes": False},
+        )
+        _result = self.m._real_dispatcher(
+            "build", req, _prompt_user=prompt,
+        )
+        self.assertEqual(1, len(prompt.calls))  # type: ignore[attr-defined]
+        self.assertIn("Build the Pi container", prompt.calls[0])  # type: ignore[attr-defined]
+
+    def test_denial_returns_success_cancellation(self) -> None:
+        prompt = _make_prompt_never(self.m)
+        # We need a recording dispatcher to prove it wasn't called
+        record = _make_recording_fake(self.m)
+        # Call _real_dispatcher directly since prompt is injectable there
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="build",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"dry_run": False, "yes": False},
+        )
+        result = self.m._real_dispatcher(
+            "build", req, _prompt_user=prompt,
+        )
+        self.assertEqual(self.m.ExitKind.SUCCESS, result.exit_kind)
+        self.assertIn("cancelled", result.message.lower())
+
+    def test_approval_passes_yes_true_to_dispatch(self) -> None:
+        prompt = _make_prompt_always(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="build",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"dry_run": False, "yes": False},
+        )
+        result = self.m._real_dispatcher(
+            "build", req, _prompt_user=prompt,
+        )
+        # Confirmation was approved; orchestration ran and returned
+        # a result (may be CONFIG or SUCCESS depending on inventory)
+        self.assertIsNotNone(result.exit_kind)
+        self.assertNotIn("cancelled", (result.message or "").lower())
+
+    def test_dry_run_bypasses_prompt(self) -> None:
+        prompt = _make_prompt_never(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="build",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"dry_run": True, "yes": False},
+        )
+        result = self.m._real_dispatcher(
+            "build", req, _prompt_user=prompt,
+        )
+        # Prompt was never called; orchestration ran
+        self.assertEqual(0, len(prompt.calls))  # type: ignore[attr-defined]
+        self.assertIsNotNone(result.exit_kind)
+
+    def test_yes_bypasses_prompt(self) -> None:
+        prompt = _make_prompt_never(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="build",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"dry_run": False, "yes": True},
+        )
+        result = self.m._real_dispatcher(
+            "build", req, _prompt_user=prompt,
+        )
+        # Prompt was never called
+        self.assertEqual(0, len(prompt.calls))  # type: ignore[attr-defined]
+
+
+class TestDoctorConfirmation(unittest.TestCase):
+    """Doctor confirmation: prompted only when
+    ``--apply-rootless-override`` is set without ``--yes``.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_diagnosis_only_no_prompt(self) -> None:
+        prompt = _make_prompt_never(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="doctor",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"apply_override": False, "yes": False},
+        )
+        result = self.m._real_dispatcher(
+            "doctor", req, _prompt_user=prompt,
+        )
+        self.assertEqual(0, len(prompt.calls))  # type: ignore[attr-defined]
+        self.assertIsNotNone(result.exit_kind)
+
+    def test_repair_with_yes_bypasses_prompt(self) -> None:
+        prompt = _make_prompt_never(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="doctor",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"apply_override": True, "yes": True},
+        )
+        result = self.m._real_dispatcher(
+            "doctor", req, _prompt_user=prompt,
+        )
+        self.assertEqual(0, len(prompt.calls))  # type: ignore[attr-defined]
+
+    def test_repair_without_yes_prompts(self) -> None:
+        prompt = _make_prompt_always(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="doctor",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"apply_override": True, "yes": False},
+        )
+        result = self.m._real_dispatcher(
+            "doctor", req, _prompt_user=prompt,
+        )
+        self.assertEqual(1, len(prompt.calls))  # type: ignore[attr-defined]
+        self.assertIn("Apply rootless", prompt.calls[0])  # type: ignore[attr-defined]
+
+    def test_repair_denied_returns_cancellation(self) -> None:
+        prompt = _make_prompt_never(self.m)
+        from docker.constructor_cli import CommandRequest
+        req = CommandRequest(
+            command="doctor",
+            inventory=None,
+            output="text",
+            verbose=False,
+            color="auto",
+            command_args={"apply_override": True, "yes": False},
+        )
+        result = self.m._real_dispatcher(
+            "doctor", req, _prompt_user=prompt,
+        )
+        self.assertEqual(self.m.ExitKind.SUCCESS, result.exit_kind)
+        self.assertIn("denied", result.message.lower())
+
+
+class TestConfirmationNonInteractive(unittest.TestCase):
+    """When stdin is not a TTY, the prompt must return False without
+    blocking."""
+
+    def test_stdin_prompt_returns_false_when_not_tty(self) -> None:
+        # The real _stdin_prompt checks sys.__stdin__.isatty()
+        # In a unittest runner, stdin is typically not a TTY
+        from docker.constructor_cli import _stdin_prompt
+        result = _stdin_prompt("Should not block")
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ from docker.networking import (
     plan_rootless_override,
     apply_rootless_override,
 )
-from docker.versioning.dispatch_types import CommandResult, ExitKind
+from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.effective import (
     EffectiveBuildProjection,
     resolve_build_projection,
@@ -316,8 +316,8 @@ class DoctorRequest:
     probe_image: str = "alpine:3.20"
     """Docker image used for gateway probe containers."""
 
-    probe_timeout: float | None = None
-    """Timeout (seconds) for each gateway probe container."""
+    probe_timeout: int | None = None
+    """Timeout (seconds) for each gateway probe container (1–300)."""
 
     # -- injectables (all default to ``None`` = use real implementations) --
 
@@ -617,11 +617,15 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
     """
     # 1. Initial diagnosis
     diagnose = request._diagnose_gateway or diagnose_gateway
+    diagnose_kwargs: dict[str, object] = {}
+    if request.probe_image is not None:
+        diagnose_kwargs["probe_image"] = request.probe_image
+    if request.probe_timeout is not None:
+        diagnose_kwargs["probe_timeout"] = request.probe_timeout
+    if request.runner is not None:
+        diagnose_kwargs["_runner"] = request.runner
     try:
-        initial = diagnose(
-            probe_image=request.probe_image,
-            probe_timeout=request.probe_timeout,
-        )
+        initial = diagnose(**diagnose_kwargs)
     except Exception as exc:
         return DoctorResult(
             exit_kind=ExitKind.OPERATIONAL,
@@ -630,27 +634,35 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
     gateway = initial.host_gateway_ip
 
     if gateway is None:
-        detail = "no route"
-        if initial.probes:
-            first = initial.probes[0]
-            if first.detail:
-                detail = first.detail
-        return DoctorResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"no working gateway IP found: {detail}",
-            initial_diagnosis=initial,
-            selected_gateway=None,
-        )
+        # Diagnosis-only (no repair intent) → permanently unreachable
+        if not request.apply_override:
+            detail = "no route"
+            if initial.probes:
+                first = initial.probes[0]
+                if first.detail:
+                    detail = first.detail
+            return DoctorResult(
+                exit_kind=ExitKind.OPERATIONAL,
+                message=f"no working gateway IP found: {detail}",
+                initial_diagnosis=initial,
+                selected_gateway=None,
+            )
+        # Repair requested and rootless → the override exists precisely
+        # to fix this connectivity failure.  Continue through plan/apply.
+        if initial.mode != DockerMode.ROOTLESS:
+            return DoctorResult(
+                exit_kind=ExitKind.OPERATIONAL,
+                message="no working gateway IP found and Docker is not rootless",
+                initial_diagnosis=initial,
+                selected_gateway=None,
+            )
 
-    # 2. Derive override plan — always when the caller explicitly injects
-    #    ``_plan_rootless_override``, or when repair is requested (so the
-    #    real plan is available for consent denial / matching checks).
-    #    Skipped for diagnosis-only calls with no injectable wired.
-    plan_fn = request._plan_rootless_override
-    if plan_fn is None and request.apply_override:
-        plan_fn = plan_rootless_override
+    # 2. Derive override plan — always (planning is read-only).
+    #    Uses the injected fake when present, otherwise the real
+    #    ``plan_rootless_override``.
+    plan_fn = request._plan_rootless_override or plan_rootless_override
     try:
-        override_plan = plan_fn(mode=initial.mode) if plan_fn else None
+        override_plan = plan_fn(_mode=initial.mode)
     except Exception as exc:
         return DoctorResult(
             exit_kind=ExitKind.OPERATIONAL,
@@ -692,7 +704,21 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
         )
 
     # 6. Already matching — no-op
+    #    If the override is already installed but the gateway is still
+    #    unreachable, the no-op repair cannot restore connectivity.
     if override_plan is not None and override_plan.state == OverrideState.MATCHING:
+        if gateway is None:
+            return DoctorResult(
+                exit_kind=ExitKind.OPERATIONAL,
+                message=(
+                    "gateway unreachable and rootless override "
+                    "already matching; repair cannot help"
+                ),
+                initial_diagnosis=initial,
+                override_plan=override_plan,
+                selected_gateway=None,
+                repair_applied=False,
+            )
         return DoctorResult(
             exit_kind=ExitKind.SUCCESS,
             initial_diagnosis=initial,
@@ -727,10 +753,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
 
     # 8. Re-diagnose after successful repair
     try:
-        post = diagnose(
-            probe_image=request.probe_image,
-            probe_timeout=request.probe_timeout,
-        )
+        post = diagnose(**diagnose_kwargs)
     except Exception as exc:
         return DoctorResult(
             exit_kind=ExitKind.OPERATIONAL,
@@ -741,24 +764,67 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             repair_applied=True,
         )
 
+    post_gateway = post.host_gateway_ip
     return DoctorResult(
-        exit_kind=ExitKind.SUCCESS,
+        exit_kind=ExitKind.SUCCESS if post_gateway else ExitKind.OPERATIONAL,
+        message=None if post_gateway else "gateway unreachable after repair",
         initial_diagnosis=initial,
         override_plan=override_plan,
         post_repair_diagnosis=post,
-        selected_gateway=post.host_gateway_ip or gateway,
+        selected_gateway=post_gateway,
         repair_applied=True,
     )
 
 
-def dispatch(
-    inventory_path: Path,
-    command: str,
+# ═══════════════════════════════════════════════════════════════════════
+# Public doctor API (Stage 9.4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def diagnose_doctor(
     *,
-    command_args: Mapping[str, object],
-) -> CommandResult:
-    """STUB — route build or doctor commands (not yet implemented)."""
-    return CommandResult(
-        exit_kind=ExitKind.OPERATIONAL,
-        message=f"'{command}' orchestration not implemented",
+    probe_image: str | None = None,
+    probe_timeout: int | None = None,
+    _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None,
+    _plan_rootless_override: Callable[..., RootlessOverridePlan] | None = None,
+) -> DoctorResult:
+    """Run gateway diagnosis without repair — always read-only.
+
+    Returns a ``DoctorResult`` with the initial diagnosis and override
+    plan, but ``repair_applied`` is always ``False``.
+    """
+    request = DoctorRequest(
+        apply_override=False,
+        repair_consent=False,
+        probe_image=probe_image,
+        probe_timeout=probe_timeout,
+        _diagnose_gateway=_diagnose_gateway,
+        _plan_rootless_override=_plan_rootless_override,
     )
+    return orchestrate_doctor(request)
+
+
+def repair_rootless(
+    *,
+    consent: bool,
+    probe_image: str | None = None,
+    probe_timeout: int | None = None,
+    _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None,
+    _plan_rootless_override: Callable[..., RootlessOverridePlan] | None = None,
+    _apply_rootless_override: Callable[..., OverrideFailure | None] | None = None,
+) -> DoctorResult:
+    """Diagnose gateway and apply rootless override when applicable.
+
+    *consent* must be ``True`` for the override to be applied.
+    When Docker is rootful, returns ``POLICY``.
+    """
+    request = DoctorRequest(
+        apply_override=True,
+        repair_consent=consent,
+        probe_image=probe_image,
+        probe_timeout=probe_timeout,
+        _diagnose_gateway=_diagnose_gateway,
+        _plan_rootless_override=_plan_rootless_override,
+        _apply_rootless_override=_apply_rootless_override,
+    )
+    return orchestrate_doctor(request)
