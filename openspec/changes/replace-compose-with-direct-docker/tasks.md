@@ -188,13 +188,13 @@
 
 ### INTROSPECT
 
-- [ ] 9.5 Confirm transaction/domain logic does not migrate into facade handlers and ordinary import or validation paths cannot execute Docker.
-- [ ] 9.6 Review failure ordering so invalid inventory or projection state cannot trigger gateway mutation or Docker execution.
+- [x] 9.5 Confirm transaction/domain logic does not migrate into facade handlers and ordinary import or validation paths cannot execute Docker.
+- [x] 9.6 Review failure ordering so invalid inventory or projection state cannot trigger gateway mutation or Docker execution.
 
 ### VALIDATE
 
-- [ ] 9.7 Run build/doctor orchestration, prompt, dry-run, and subprocess-failure tests with fakes.
-- [ ] 9.8 Run type/import checks and `git diff --check` without Docker.
+- [x] 9.7 Run build/doctor orchestration, prompt, dry-run, and subprocess-failure tests with fakes.
+- [x] 9.8 Run type/import checks and `git diff --check` without Docker.
 
 ## 10. Stage 10 — Protected Runtime Extension Installer
 
