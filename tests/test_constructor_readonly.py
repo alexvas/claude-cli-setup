@@ -836,5 +836,417 @@ class TestReadOnlySafety(unittest.TestCase):
             self.assertEqual(0, rc)
 
 
+# ════════════════════════════════════════════════════════════════════════
+# 8.3 — Command surface and execution-boundary safety
+# ════════════════════════════════════════════════════════════════════════
+
+_LEGACY_COMMANDS = {"compose", "env", "get", "extensions"}
+
+_READ_ONLY_COMMANDS = [
+    ["validate"],
+    ["validate", "--scope", "build"],
+    ["show", "--scope", "all"],
+    ["show", "--scope", "build", "--effective"],
+    ["check-updates"],
+    ["check-updates", "--suggest"],
+]
+
+
+class TestUnknownCommands(unittest.TestCase):
+    """Unrecognised commands (including legacy names) cause input errors."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_schema_rejected_as_unknown_command(self) -> None:
+        """``schema`` is not a command — it is a top-level TOML key."""
+        rc, _, err = _run(self.m, ["schema"])
+        self.assertEqual(2, rc)
+        self.assertIn("invalid choice", err.lower())
+
+    def test_legacy_compose_absent(self) -> None:
+        _, out, _ = _run(self.m, ["--help"])
+        self.assertNotIn("compose", out)
+
+    def test_legacy_env_absent(self) -> None:
+        _, out, _ = _run(self.m, ["--help"])
+        self.assertNotIn("env", out)
+
+    def test_legacy_get_absent(self) -> None:
+        _, out, _ = _run(self.m, ["--help"])
+        self.assertNotIn("get", out)
+
+    def test_legacy_extensions_absent(self) -> None:
+        _, out, _ = _run(self.m, ["--help"])
+        self.assertNotIn("extensions", out)
+
+    def test_legacy_commands_all_rejected(self) -> None:
+        for cmd in sorted(_LEGACY_COMMANDS):
+            rc, _, err = _run(self.m, [cmd])
+            self.assertEqual(2, rc, f"{cmd!r} must be rejected")
+            self.assertIn("invalid choice", err.lower(),
+                          f"{cmd!r} error must mention invalid choice")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 8.3 — Fake provider / transport boundary
+# ════════════════════════════════════════════════════════════════════════
+
+_RECORDING_PROVIDER_CALLS: list[dict] = []
+
+
+class _RecordingStubProvider:
+    """Fake provider that records every discover() call.
+
+    Returns the current value as candidate ("current" status) so
+    check-updates exits 0 without fabricating outdated results.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def discover(self, target: object, context: object) -> object:
+        from docker.versioning.model import UpdateCandidate, UpdateKind
+        from docker.versioning.providers.base import ProviderResult
+        _RECORDING_PROVIDER_CALLS.append({
+            "provider": self.name,
+            "path": getattr(target, "path", "?"),
+            "current": getattr(target, "current", "?"),
+        })
+        return ProviderResult(
+            candidate=UpdateCandidate(
+                value=getattr(target, "current", ""),
+                kind=UpdateKind.VERSION,
+                artifacts={},
+            ),
+        )
+
+
+def _make_recording_providers():
+    """Return a MappingProxyType with recording stubs for every known provider."""
+    from types import MappingProxyType
+    _RECORDING_PROVIDER_CALLS.clear()
+    return MappingProxyType({
+        k: _RecordingStubProvider(k)
+        for k in (
+            "docker-registry", "rust-channel", "static-url",
+            "github-release", "uv-python", "pypi", "npm", "git-ref",
+        )
+    })
+
+
+class TestAllExecutionBoundariesGuarded(unittest.TestCase):
+    """Every execution boundary must refuse to run during read-only commands.
+
+    subprocess.run, networking diagnosis, and gateway persistence are
+    blocked so any accidental invocation fails hard.
+
+    Pure rendering and in-memory serialization (e.g. effective projection
+    resolution) are NOT bombed — they are legitimate read-only operations.
+
+    Uses the real (default) dispatcher — no injected success fakes.
+    Commands exercise actual inventory parsing, which means these tests
+    are RED until Stage 8.4 wires the real dispatcher.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _patch_all_boundaries(self):
+        """Return a context manager that bombs every execution boundary."""
+        import contextlib
+        import subprocess
+        from unittest.mock import patch
+
+        def _bomb(*a: object, **kw: object) -> None:
+            raise RuntimeError("execution boundary must not be called")
+
+        patches = [
+            patch.object(subprocess, "run", side_effect=_bomb),
+            patch.object(subprocess, "Popen", side_effect=_bomb),
+        ]
+        try:
+            import docker.networking
+            for fn in ("diagnose_gateway", "probe_gateway",
+                       "apply_rootless_override", "persist_gateway"):
+                patches.append(
+                    patch.object(docker.networking, fn,
+                                 side_effect=_bomb))
+        except ImportError:
+            pass
+
+        @contextlib.contextmanager
+        def _manager():
+            entered: list = []
+            try:
+                for p in patches:
+                    entered.append(p.__enter__())
+                yield
+            finally:
+                for p in reversed(patches):
+                    p.__exit__(None, None, None)
+
+        return _manager()
+
+    # ── no fake — expects real dispatcher (RED until 8.4) ──────────
+
+    def test_validate_under_boundary_guard(self) -> None:
+        with self._patch_all_boundaries():
+            rc, out, _ = _run(self.m, ["validate"])
+        # RED: default dispatcher returns "unavailable" (exit 2);
+        # will pass with exit 0 when Stage 8.4 wires the real dispatcher
+        self.assertEqual(0, rc,
+                         "expected SUCCESS when real dispatcher is wired")
+        self.assertIn("valid", out.lower())
+
+    def test_show_under_boundary_guard(self) -> None:
+        with self._patch_all_boundaries():
+            rc, out, _ = _run(
+                self.m, ["show", "--scope", "build"],
+            )
+        self.assertEqual(0, rc)
+        self.assertIn("node", out.lower())
+
+    def test_show_effective_under_boundary_guard(self) -> None:
+        with self._patch_all_boundaries():
+            rc, out, _ = _run(
+                self.m,
+                ["show", "--scope", "build", "--effective"],
+            )
+        self.assertEqual(0, rc)
+        self.assertIn("rust", out.lower())
+
+    def test_check_updates_under_boundary_guard(self) -> None:
+        import docker.versioning.updates
+        from unittest.mock import patch
+        fake_providers = _make_recording_providers()
+        with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                          fake_providers):
+            with self._patch_all_boundaries():
+                rc, out, _ = _run(self.m, ["check-updates"])
+        self.assertEqual(0, rc,
+                         "expected SUCCESS when real dispatcher is wired")
+        provider_names = {c["provider"] for c in _RECORDING_PROVIDER_CALLS}
+        self.assertGreater(len(_RECORDING_PROVIDER_CALLS), 0,
+                           "providers must be called")
+        self.assertIn("docker-registry", provider_names)
+
+    def test_check_updates_suggest_under_boundary_guard(self) -> None:
+        import docker.versioning.updates
+        from unittest.mock import patch
+        fake_providers = _make_recording_providers()
+        with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                          fake_providers):
+            with self._patch_all_boundaries():
+                rc, out, _ = _run(
+                    self.m, ["check-updates", "--suggest"],
+                )
+        self.assertEqual(0, rc)
+        provider_names = {c["provider"] for c in _RECORDING_PROVIDER_CALLS}
+        self.assertIn("docker-registry", provider_names)
+
+
+class TestInventoryImmutability(unittest.TestCase):
+    """Read-only commands never mutate the on-disk inventory.
+
+    Uses the real (default) dispatcher — no injected success fakes.
+    Commands exercise actual inventory parsing against a real TOML file.
+    These tests are RED until Stage 8.4 wires the real dispatcher;
+    currently every command returns "unavailable".
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _temp_inventory(self) -> str:
+        """Return a temporary byte-for-byte copy of the canonical inventory."""
+        import pathlib
+        import tempfile
+        repo_root = pathlib.Path(__file__).resolve().parent.parent
+        canonical = repo_root / "docker-constructor.toml"
+        f = tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".toml", delete=False,
+        )
+        f.write(canonical.read_bytes())
+        f.close()
+        return f.name
+
+    # ── no fake — expects real dispatcher (RED until 8.4) ──────────
+
+    def test_validate_preserves_inventory_bytes(self) -> None:
+        import pathlib
+        path = pathlib.Path(self._temp_inventory())
+        try:
+            before = path.read_bytes()
+            rc, out, _ = _run(
+                self.m, ["--inventory", str(path), "validate"],
+            )
+            after = path.read_bytes()
+            # RED: default dispatcher returns "unavailable" (exit 2);
+            # will pass with exit 0 when Stage 8.4 wires the real dispatcher
+            self.assertEqual(0, rc,
+                             "validate must succeed with real dispatcher")
+            self.assertIn("valid", out.lower())
+            self.assertEqual(before, after,
+                             "validate must not mutate inventory")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_show_preserves_inventory_bytes(self) -> None:
+        import pathlib
+        path = pathlib.Path(self._temp_inventory())
+        try:
+            before = path.read_bytes()
+            rc, out, _ = _run(
+                self.m, ["--inventory", str(path),
+                         "show", "--scope", "build"],
+            )
+            after = path.read_bytes()
+            self.assertEqual(0, rc,
+                             "show must succeed with real dispatcher")
+            self.assertIn("node", out.lower())
+            self.assertEqual(before, after,
+                             "show must not mutate inventory")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_show_effective_preserves_inventory_bytes(self) -> None:
+        import pathlib
+        path = pathlib.Path(self._temp_inventory())
+        try:
+            before = path.read_bytes()
+            rc, out, _ = _run(
+                self.m, ["--inventory", str(path),
+                         "show", "--scope", "build", "--effective"],
+            )
+            after = path.read_bytes()
+            self.assertEqual(0, rc,
+                             "show --effective must succeed")
+            self.assertIn("rust", out.lower())
+            self.assertEqual(before, after,
+                             "show --effective must not mutate inventory")
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_check_updates_preserves_inventory_bytes(self) -> None:
+        import pathlib
+        import docker.versioning.updates
+        from unittest.mock import patch
+        path = pathlib.Path(self._temp_inventory())
+        try:
+            before = path.read_bytes()
+            fake_providers = _make_recording_providers()
+            with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                              fake_providers):
+                rc, out, _ = _run(
+                    self.m, ["--inventory", str(path), "check-updates"],
+                )
+            after = path.read_bytes()
+            self.assertEqual(0, rc,
+                             "check-updates must succeed with real dispatcher")
+            self.assertEqual(before, after,
+                             "check-updates must not mutate inventory")
+            self.assertGreater(len(_RECORDING_PROVIDER_CALLS), 0)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_check_updates_suggest_preserves_inventory_bytes(self) -> None:
+        import pathlib
+        import docker.versioning.updates
+        from unittest.mock import patch
+        path = pathlib.Path(self._temp_inventory())
+        try:
+            before = path.read_bytes()
+            fake_providers = _make_recording_providers()
+            with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                              fake_providers):
+                rc, out, _ = _run(
+                    self.m, ["--inventory", str(path),
+                             "check-updates", "--suggest"],
+                )
+            after = path.read_bytes()
+            self.assertEqual(0, rc,
+                             "check-updates --suggest must succeed")
+            self.assertEqual(before, after,
+                             "check-updates --suggest must not mutate"
+                             " inventory")
+            self.assertGreater(len(_RECORDING_PROVIDER_CALLS), 0)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_no_dot_docker_generated_created(self) -> None:
+        """Read-only commands must never create .docker-generated."""
+        import contextlib
+        import pathlib
+        import tempfile
+        import docker.versioning.updates
+        from unittest.mock import patch
+        path = pathlib.Path(self._temp_inventory())
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = os.getcwd()
+            try:
+                os.chdir(tmp)
+                for argv in _READ_ONLY_COMMANDS:
+                    ctx = contextlib.nullcontext()
+                    if "check-updates" in argv:
+                        fake_providers = _make_recording_providers()
+                        ctx = patch.object(
+                            docker.versioning.updates,
+                            "_DEFAULT_PROVIDERS", fake_providers,
+                        )
+                    with ctx:
+                        rc, out, _ = _run(
+                            self.m,
+                            ["--inventory", str(path)] + argv,
+                        )
+                    # RED until 8.4: default dispatcher returns "unavailable"
+                    self.assertEqual(0, rc,
+                                     f"{argv}: must succeed with real dispatcher")
+                    gen_dir = pathlib.Path(tmp) / ".docker-generated"
+                    self.assertFalse(
+                        gen_dir.exists(),
+                        f"{argv} created .docker-generated",
+                    )
+            finally:
+                os.chdir(orig)
+                path.unlink(missing_ok=True)
+
+    def test_custom_inventory_path_also_unchanged(self) -> None:
+        """An explicit --inventory PATH must be preserved byte-for-byte."""
+        import contextlib
+        import pathlib
+        import docker.versioning.updates
+        from unittest.mock import patch
+        path = pathlib.Path(self._temp_inventory())
+        try:
+            before = path.read_bytes()
+            for argv in _READ_ONLY_COMMANDS:
+                ctx = contextlib.nullcontext()
+                if "check-updates" in argv:
+                    fake_providers = _make_recording_providers()
+                    ctx = patch.object(
+                        docker.versioning.updates,
+                        "_DEFAULT_PROVIDERS", fake_providers,
+                    )
+                with ctx:
+                    rc, out, _ = _run(
+                        self.m,
+                        ["--inventory", str(path)] + argv,
+                    )
+                # RED until 8.4
+                self.assertEqual(0, rc,
+                                 f"{argv}: must succeed with real dispatcher")
+                after = path.read_bytes()
+                self.assertEqual(
+                    before, after,
+                    f"{argv} mutated --inventory {path}",
+                )
+        finally:
+            path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()
