@@ -395,6 +395,87 @@ class TestCheckUpdatesFilters(unittest.TestCase):
         self.assertIn("Known paths", msg)
         self.assertIn("Known providers", msg)
 
+    def test_only_filter_scoped_build_no_runtime_paths(self):
+        """With scope=build, unknown-filter diagnostics must not list
+        runtime.pi-extensions paths or runtime-only providers."""
+        from docker.versioning.updates import Scope, check_updates
+        from docker.versioning.providers.base import ProviderContext
+        ctx = ProviderContext(
+            http=_AllUnavailableHttp(), git=_AllUnavailableGit(),
+            include_prerelease=False, tokens={},
+        )
+        with self.assertRaises(UnknownFilterError) as ctx_exc:
+            check_updates(
+                self.inventory,
+                context=ctx,
+                scope=Scope.BUILD,
+                only=("pi-mux",),
+            )
+        msg = str(ctx_exc.exception)
+        self.assertIn("pi-mux", msg)
+        self.assertIn("Known paths (scope)", msg)
+        self.assertIn("Known providers (scope)", msg)
+        # Must not leak runtime extensions (not owned by build phase)
+        self.assertNotIn("runtime.pi-extensions", msg,
+                         "runtime.pi-extensions paths must not appear in build-scope diagnostics")
+        # Build-only providers must appear
+        self.assertIn("docker-registry", msg)
+
+    def test_only_filter_scoped_known_providers_excludes_unscoped(self):
+        """With scope=runtime, unknown-filter diagnostics must only list
+        runtime paths and providers.  When no runtime targets exist, the
+        scoped lists show (none)."""
+        from docker.versioning.updates import Scope, check_updates
+        from docker.versioning.providers.base import ProviderContext
+        ctx = ProviderContext(
+            http=_AllUnavailableHttp(), git=_AllUnavailableGit(),
+            include_prerelease=False, tokens={},
+        )
+        with self.assertRaises(UnknownFilterError) as ctx_exc:
+            check_updates(
+                self.inventory,
+                context=ctx,
+                scope=Scope.RUNTIME,
+                only=("typo-provider-xyz",),
+            )
+        msg = str(ctx_exc.exception)
+        self.assertIn("typo-provider-xyz", msg)
+        self.assertIn("Known paths (scope)", msg)
+        self.assertIn("Known providers (scope)", msg)
+        # This inventory has no runtime targets, so scope lists are (none)
+        self.assertIn("(none)", msg,
+                      "empty scope must show (none) for paths/providers")
+
+    def test_only_filter_scope_build_rejects_runtime_only(self):
+        """scope=build with a filter matching only runtime paths
+        must fail with build-scoped diagnostics."""
+        from docker.versioning.updates import Scope, check_updates
+        from docker.versioning.providers.base import ProviderContext
+        ctx = ProviderContext(
+            http=_AllUnavailableHttp(), git=_AllUnavailableGit(),
+            include_prerelease=False, tokens={},
+        )
+        with self.assertRaises(UnknownFilterError) as ctx_exc:
+            check_updates(
+                self.inventory,
+                context=ctx,
+                scope=Scope.BUILD,
+                only=("runtime.pi-extensions",),
+            )
+        msg = str(ctx_exc.exception)
+        self.assertIn("Known paths (scope)", msg)
+        self.assertIn("build.", msg,
+                      "error should list build paths as available")
+        # Verify the known-path list contains no runtime extension entries.
+        # (The quoted filter value also contains "runtime.pi-extensions".)
+        import re
+        m = re.search(r"Known paths \(scope\): (.+)", msg)
+        self.assertIsNotNone(m, "Known paths (scope) line missing")
+        scope_paths = m.group(1)
+        self.assertIn("build.", scope_paths)
+        self.assertNotIn("runtime.pi-extensions", scope_paths,
+                         "runtime.pi-extensions paths must not appear in build-scope diagnostics")
+
 
 class TestIncompleteResults(unittest.TestCase):
     def setUp(self):

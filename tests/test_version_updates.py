@@ -352,6 +352,24 @@ class TestCheckUpdates(unittest.TestCase):
         self.assertIn("results", data)
         self.assertEqual(len(data["results"]), 11)
 
+    def test_invalid_scope_value_error(self) -> None:
+        """Passing a string or other non-Scope value to check_updates()
+        must raise TypeError — the API boundary validates its inputs."""
+        inv = _minimal_inventory()
+        with self.assertRaises(TypeError) as ctx:
+            check_updates(
+                inv,
+                context=self._ctx(),
+                scope="invalid",
+            )
+        self.assertIn("Scope", str(ctx.exception))
+
+    def test_scope_none_rejected(self) -> None:
+        """None is not a valid scope."""
+        inv = _minimal_inventory()
+        with self.assertRaises(TypeError):
+            check_updates(inv, context=self._ctx(), scope=None)
+
 
 class TestSuggestions(unittest.TestCase):
     def test_render_suggestions_only_outdated_applicable(self):

@@ -163,7 +163,7 @@
 ### GREEN
 
 - [x] 8.4 Add `docker/docker-constructor.py` as the thin sole public facade and wire `validate`, `show`, and `check-updates` to focused internal APIs.
-- [ ] 8.5 Preserve provider behavior and scoped update discovery while rendering build/runtime source or effective projections as explicitly requested.
+- [x] 8.5 Preserve provider behavior and scoped update discovery while rendering build/runtime source or effective projections as explicitly requested.
 
 ### INTROSPECT
 

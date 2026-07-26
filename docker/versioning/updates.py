@@ -5,6 +5,7 @@ No network — delegates all HTTP/git through injected transports.
 from __future__ import annotations
 
 import json
+from enum import Enum
 from types import MappingProxyType
 from typing import (
     Callable,
@@ -85,6 +86,15 @@ _DEFAULT_PROVIDERS: Mapping[str, UpdateProvider] = MappingProxyType({
 # ---------------------------------------------------------------------------
 # Target traversal
 # ---------------------------------------------------------------------------
+
+
+class Scope(Enum):
+    """Target scope for update discovery."""
+    BUILD = "build"
+    RUNTIME = "runtime"
+    ALL = "all"
+
+
 
 def build_update_targets(
     inventory: Inventory,
@@ -299,6 +309,7 @@ def check_updates(
     providers: Mapping[str, UpdateProvider] | None = None,
     context: ProviderContext,
     only: tuple[str, ...] = (),
+    scope: Scope = Scope.ALL,
 ) -> tuple[UpdateResult, ...]:
     """Discover updates for every target in *inventory*.
 
@@ -307,11 +318,30 @@ def check_updates(
         providers: Provider registry (defaults to built-in providers).
         context: Transport and policy context.
         only: Optional filter — provider names or inventory paths.
+        scope: Target scope — ``Scope.BUILD``, ``Scope.RUNTIME``, or
+            ``Scope.ALL``.  Targets whose path does not start with the
+            scope prefix are excluded before any ``--only`` filter is
+            applied.
     """
     if providers is None:
         providers = _DEFAULT_PROVIDERS
 
+    if not isinstance(scope, Scope):
+        raise TypeError(
+            f"scope must be a Scope, got {type(scope).__name__}"
+        )
+
     targets = build_update_targets(inventory)
+
+    # Apply scope filter
+    if scope == Scope.BUILD:
+        targets = tuple(t for t in targets if t.path.startswith("build."))
+    elif scope == Scope.RUNTIME:
+        targets = tuple(t for t in targets if t.path.startswith("runtime."))
+
+    # ── remember scoped target set for diagnostics ──────────────────
+    _scoped_targets = targets
+    _scoped_providers = sorted({t.update.provider for t in _scoped_targets})
 
     # Apply --only filter
     if only:
@@ -326,13 +356,12 @@ def check_updates(
             # Gather known paths and provider names for a helpful
             # error message so users can spot typos.
             from .errors import UnknownFilterError
-            all_paths = sorted({t.path for t in build_update_targets(inventory)})
-            all_providers = sorted(providers.keys())
+            _scoped_paths = sorted({t.path for t in _scoped_targets})
             raise UnknownFilterError(
                 f"--only filter(s) matched nothing: "
-                f"{', '.join(repr(f) for f in only)}\n"
-                f"  Known paths: {', '.join(all_paths) or '(none)'}\n"
-                f"  Known providers: {', '.join(all_providers)}"
+                f"{', '.join(repr(f) for f in only)}"
+                f"\n  Known paths (scope): {', '.join(_scoped_paths) or '(none)'}"
+                f"\n  Known providers (scope): {', '.join(_scoped_providers) or '(none)'}"
             )
 
     # Resolve current_entry_digest for node
@@ -510,22 +539,28 @@ def render_table(results: Sequence[UpdateResult]) -> str:
     return "\n".join(lines)
 
 
-def render_json(results: Sequence[UpdateResult]) -> str:
-    """Render update results as a canonical JSON array."""
-    data = [r.to_dict() for r in results]
-    return json.dumps(
-        {"results": data},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
-def render_suggestions_json(
+def serialize_results(
     results: Sequence[UpdateResult],
-) -> str:
-    """Render JSON with both results and structured suggestions."""
-    results_data = [r.to_dict() for r in results]
+) -> list[dict[str, object]]:
+    """Serialize update results to the canonical dict contract.
+
+    Returns the full ``UpdateResult.to_dict()`` record for each result —
+    including ``applicable``, ``kind``, ``reason``, and artifact metadata.
+    Both the legacy CLI rendering and the read-only service consume this
+    so the contract never drifts between the two consumers.
+    """
+    return [r.to_dict() for r in results]
+
+
+def serialize_suggestions(
+    results: Sequence[UpdateResult],
+) -> list[dict[str, object]]:
+    """Build structured non-mutating suggestions from update results.
+
+    Only entries with ``status == OUTDATED and applicable == True`` are
+    included.  Each entry is a ``{"path": …, "changes": {…}}`` dict
+    suitable for rendering as TOML or JSON.
+    """
     suggestions: list[dict[str, object]] = []
     for r in results:
         if r.status != UpdateStatus.OUTDATED or not r.applicable:
@@ -552,9 +587,28 @@ def render_suggestions_json(
                 changes[f"artifacts.{platform}.sha256"] = art.sha256
 
         suggestions.append({"path": r.path, "changes": changes})
+    return suggestions
 
+
+def render_json(results: Sequence[UpdateResult]) -> str:
+    """Render update results as a canonical JSON array."""
     return json.dumps(
-        {"results": results_data, "suggestions": suggestions},
+        {"results": serialize_results(results)},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def render_suggestions_json(
+    results: Sequence[UpdateResult],
+) -> str:
+    """Render JSON with both results and structured suggestions."""
+    return json.dumps(
+        {
+            "results": serialize_results(results),
+            "suggestions": serialize_suggestions(results),
+        },
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

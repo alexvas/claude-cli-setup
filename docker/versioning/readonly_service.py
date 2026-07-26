@@ -148,18 +148,30 @@ def _handle_show(
 
     # ── effective mode: phase-specific projections ──────────────────
     overrides_map: Mapping[str, str] = MappingProxyType(overrides_parsed)
+
+    # Partition overrides by phase — each resolver rejects paths
+    # it does not own, so we must not pass the combined map to both.
+    build_overrides: Mapping[str, str] = MappingProxyType({
+        k: v for k, v in overrides_parsed.items()
+        if k.startswith("build.")
+    })
+    runtime_overrides: Mapping[str, str] = MappingProxyType({
+        k: v for k, v in overrides_parsed.items()
+        if k.startswith("runtime.")
+    })
+
     data: dict[str, object] = {"scope": scope, "effective": True}
 
     try:
         if scope in ("build", "all"):
             build_proj = resolve_build_projection(
-                inventory.build, overrides_map,
+                inventory.build, build_overrides,
             )
             data["build"] = to_plain_data(build_proj)
 
         if scope in ("runtime", "all"):
             runtime_proj = resolve_runtime(
-                inventory.runtime, overrides_map,
+                inventory.runtime, runtime_overrides,
             )
             data["runtime"] = to_plain_data(runtime_proj)
     except EffectiveConfigError as exc:
@@ -206,6 +218,9 @@ def _handle_check_updates(
         tokens=config.tokens,
     )
 
+    scope_str: str = str(command_args.get("scope", "all"))
+    from docker.versioning.updates import Scope
+    scope = Scope(scope_str)
     only: tuple[str, ...] = tuple(
         command_args.get("only_filter", ()) or ()
     )
@@ -216,6 +231,7 @@ def _handle_check_updates(
         providers=providers,
         context=context,
         only=only,
+        scope=scope,
     )
 
     suggest: bool = bool(command_args.get("suggest", False))
@@ -233,21 +249,21 @@ def _handle_check_updates(
     ):
         exit_kind = ExitKind.POLICY
 
+    # --- build structured data via canonical serializers ---
+    from docker.versioning.updates import serialize_results, serialize_suggestions
+
+    result_data: dict[str, object] = {
+        "results": serialize_results(results),
+        "suggest": suggest,
+    }
+    if suggest:
+        suggestion_entries = serialize_suggestions(results)
+        if suggestion_entries:
+            result_data["suggestions"] = suggestion_entries
+
     return CommandResult(
         exit_kind=exit_kind,
-        data={
-            "results": [
-                {
-                    "path": r.path,
-                    "provider": r.provider,
-                    "current": r.current,
-                    "candidate": r.candidate,
-                    "status": r.status.value,
-                }
-                for r in results
-            ],
-            "suggest": suggest,
-        },
+        data=result_data,
     )
 
 

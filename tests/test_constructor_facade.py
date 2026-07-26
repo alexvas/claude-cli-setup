@@ -221,6 +221,34 @@ class TestDefaultDispatcherReturnsUnavailable(unittest.TestCase):
         self.assertIn("node", out)
         self.assertEqual("", err)
 
+    def test_show_effective_mixed_overrides_scope_all(self) -> None:
+        """Mixed build + runtime overrides with --scope all --effective
+        must partition overrides by phase so each resolver only sees
+        its own paths."""
+        rc, out, err = _run(self.m, [
+            "--output", "json",
+            "show", "--scope", "all", "--effective",
+            "--override", "build.stages.toolchain.python.version=3.15.0",
+            "--override", "runtime.pi-extensions.pi-proxy.version=1.0.0",
+        ])
+        self.assertEqual(0, rc, f"exit {rc}: {err}")
+        self.assertEqual("", err)
+        payload = json.loads(out)
+        data = payload["data"]
+        self.assertIn("build", data, "build projection missing")
+        self.assertIn("runtime", data, "runtime projection missing")
+        # Build projection reflects the build override
+        self.assertEqual("3.15.0", data["build"]["python_version"])
+        # Runtime projection reflects the runtime override
+        extensions = data["runtime"]["extensions"]
+        pi_proxy = next(
+            (e for e in extensions.values()
+             if e.get("package", "").endswith("pi-proxy")),
+            None,
+        )
+        self.assertIsNotNone(pi_proxy, "pi-proxy not found in runtime")
+        self.assertEqual("1.0.0", pi_proxy["version"])
+
     def test_check_updates_with_stub_providers(self) -> None:
         import docker.versioning.updates
         from unittest.mock import patch
