@@ -801,6 +801,120 @@ class TestPostRepair(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 32a.  Doctor boundary failures — Stage 9.3 hardening
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestDoctorBoundaryFailures(unittest.TestCase):
+    """Diagnosis, planning, and application exceptions must produce
+    structured results and never escape."""
+
+    # -- diagnosis exceptions -------------------------------------------
+
+    def test_diagnosis_exception_returns_operational(self):
+        """A crashing diagnosis must produce OPERATIONAL with the
+        exception detail embedded."""
+        def broken_diagnose(**kw):
+            raise RuntimeError("Docker socket unreachable")
+
+        req = DoctorRequest(
+            _diagnose_gateway=broken_diagnose,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("Docker socket unreachable", result.message or "")
+        self.assertIsNone(result.initial_diagnosis)
+
+    def test_diagnosis_exception_with_repair_intent(self):
+        """Diagnosis failure stops execution before planning or repair."""
+        def broken_diagnose(**kw):
+            raise ConnectionError("no docker daemon")
+
+        def bomb_plan(**kw):
+            raise RuntimeError("plan must not be called")
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=broken_diagnose,
+            _plan_rootless_override=bomb_plan,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("no docker daemon", result.message or "")
+        self.assertIsNone(result.initial_diagnosis)
+
+    # -- planning exceptions --------------------------------------------
+
+    def test_plan_exception_returns_operational(self):
+        """A crashing plan derivation must produce OPERATIONAL."""
+        def broken_plan(**kw):
+            raise RuntimeError("cannot stat overrides directory")
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_diag_rootless_reachable,
+            _plan_rootless_override=broken_plan,
+            _apply_rootless_override=_apply_ok,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("cannot stat overrides directory", result.message or "")
+        self.assertIsNotNone(result.initial_diagnosis)
+        self.assertIsNone(result.override_plan)
+
+    # -- application exceptions -----------------------------------------
+
+    def test_apply_exception_returns_operational(self):
+        """A crashing apply must produce OPERATIONAL."""
+        def broken_apply(plan=None, consent=False):
+            raise RuntimeError("systemctl daemon-reload failed")
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=_diag_rootless_reachable,
+            _plan_rootless_override=_plan_needed,
+            _apply_rootless_override=broken_apply,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("systemctl daemon-reload failed", result.message or "")
+        self.assertIsNotNone(result.initial_diagnosis)
+        self.assertIsNotNone(result.override_plan)
+        self.assertFalse(result.repair_applied)
+
+    # -- post-repair diagnosis exceptions -------------------------------
+
+    def test_post_repair_diagnosis_exception_returns_operational(self):
+        """When the repair succeeds but re-diagnosis crashes, the result
+        must be OPERATIONAL with ``repair_applied=True``."""
+        post_diag_calls = []
+
+        def selective_diagnose(**kw):
+            post_diag_calls.append(1)
+            if len(post_diag_calls) > 1:
+                raise RuntimeError("post-repair probe failed")
+            return _diag_rootless_reachable(**kw)
+
+        req = DoctorRequest(
+            apply_override=True,
+            repair_consent=True,
+            _diagnose_gateway=selective_diagnose,
+            _plan_rootless_override=_plan_needed,
+            _apply_rootless_override=_apply_ok,
+        )
+        result = orchestrate_doctor(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("post-repair probe failed", result.message or "")
+        self.assertTrue(result.repair_applied,
+                       "repair was applied before diagnosis crashed")
+        self.assertIsNotNone(result.initial_diagnosis)
+        self.assertIsNotNone(result.override_plan)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 33.  Doctor gateway persistence decision
 # ═══════════════════════════════════════════════════════════════════════
 

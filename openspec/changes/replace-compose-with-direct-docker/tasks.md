@@ -183,7 +183,7 @@
 
 ### GREEN
 
-- [ ] 9.3 Implement the internal build transaction over validated source, effective build projection, gateway diagnosis, pure rendering, and injected Docker execution.
+- [x] 9.3 Implement the internal build transaction over validated source, effective build projection, gateway diagnosis, pure rendering, and injected Docker execution.
 - [ ] 9.4 Wire facade `build` and `doctor` commands to the internal APIs while preserving canonical image naming and explicit repair intent.
 
 ### INTROSPECT

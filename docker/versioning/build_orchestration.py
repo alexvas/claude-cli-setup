@@ -14,28 +14,52 @@ exit-code selection, or terminal inspection — those remain in the facade
 All side-effecting operations accept injectable fakes so tests require
 neither a Docker daemon nor systemd.
 
-**Stage 9.1 RED**: This file defines the immutable DTO contract and
-stub orchestration functions.  Every ``orchestrate_*`` returns a
-placeholder ``OPERATIONAL`` result so that the test suite can capture
-the full expected contract before implementation begins.
+**Stage 9.3 GREEN**: Real implementations of ``orchestrate_build``
+and ``orchestrate_doctor`` with planning/execution separation.
 """
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Protocol, Sequence
 
 from docker.networking import (
+    DockerMode,
     GatewayDiagnosis,
     OverrideFailure,
+    OverrideState,
     PersistenceResult,
     ProcessResult,
     ProcessRunner,
     RootlessOverridePlan,
+    diagnose_gateway,
+    persist_gateway,
+    plan_rootless_override,
+    apply_rootless_override,
 )
 from docker.versioning.dispatch_types import CommandResult, ExitKind
+from docker.versioning.effective import (
+    EffectiveBuildProjection,
+    resolve_build_projection,
+)
+from docker.versioning.errors import (
+    InventoryError,
+    UnsupportedOverrideError,
+    VersionConfigError,
+)
+from docker.versioning.inventory import load_inventory
+from docker.versioning.model import Inventory
+from docker.versioning.rendering import (
+    BuildRenderInputs,
+    CacheControls,
+    _docker_platform,
+    render_build_vector,
+    render_command_display,
+    write_effective_build,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -51,6 +75,30 @@ class BuildExecutor(Protocol):
     ``list[str]`` for gateway / service operations."""
 
     def run(self, argv: tuple[str, ...]) -> ProcessResult: ...
+
+
+class SubprocessBuildExecutor:
+    """Production :class:`BuildExecutor` that delegates to ``subprocess.run``
+    with ``shell=False``, capturing stdout and stderr."""
+
+    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+        """Execute *argv* via ``subprocess.run``.
+
+        Raises:
+            FileNotFoundError: when the ``docker`` binary is missing.
+            OSError: on permission or other low-level failures.
+        """
+        completed = subprocess.run(
+            list(argv),
+            capture_output=True,
+            text=True,
+        )
+        return ProcessResult(
+            argv=argv,
+            return_code=completed.returncode,
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -205,6 +253,12 @@ class BuildResult:
     host_gateway_ip: str | None = None
     """Persisted ``HOST_GATEWAY_IP`` (``None`` when probe failed)."""
 
+    gateway: str | None = None
+    """Selected gateway IP (diagnosis result)."""
+
+    publish_result: PublishResult | None = None
+    """Publication outcome when projection was written."""
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Doctor / repair types
@@ -276,29 +330,424 @@ class DoctorRequest:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Stubs (9.1 RED — returns placeholder results, defines the full contract)
+# Internal planning DTO (Stage 9.3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class BuildTransactionPlan:
+    """Immutable output of ``plan_build`` — everything needed to
+    display or execute a build, computed without side effects."""
+
+    exit_kind: ExitKind
+    """``SUCCESS`` when planning completed, ``CONFIG`` on validation failure."""
+
+    message: str | None = None
+    """Diagnostic when planning fails."""
+
+    build_args: tuple[str, ...] = ()
+    """Rendered ``docker build`` argument vector."""
+
+    display_string: str | None = None
+    """Human-readable shell-escaped display string."""
+
+    render_inputs: BuildRenderInputs | None = None
+    """Inputs used to produce *build_args* (available for publication)."""
+
+    inventory: Inventory | None = None
+    """Loaded inventory (available for effective-projection serialisation)."""
+
+    effective_projection: EffectiveBuildProjection | None = None
+    """Resolved build projection (available for publication)."""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Plan / execute (Stage 9.3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _publish_projection_default(projection, *, repo_root: Path) -> PublishResult:
+    """Default publisher — wraps ``write_effective_build``."""
+    try:
+        written = write_effective_build(
+            projection,
+            repo_root=repo_root,
+        )
+        return PublishResult(published_path=str(written))
+    except Exception as exc:
+        raise PublishError(detail=str(exc)) from exc
+
+
+def plan_build(request: BuildRequest) -> BuildTransactionPlan:
+    """Load, validate, resolve, and render — no side effects.
+
+    Returns a ``BuildTransactionPlan``.  When validation fails the plan
+    carries ``exit_kind=CONFIG`` and a diagnostic message; the caller
+    must not proceed to execution.
+    """
+    # 1. Load inventory (CONFIG on missing / invalid TOML / bad schema)
+    inv_path = Path(request.inventory_path)
+    try:
+        inventory = load_inventory(inv_path)
+    except (VersionConfigError, OSError, ValueError, KeyError) as exc:
+        return BuildTransactionPlan(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+
+    # 2. Resolve effective build projection (validates overrides inline)
+    try:
+        projection = resolve_build_projection(
+            inventory.build,
+            request.overrides,
+            platform=request.platform,
+        )
+    except (VersionConfigError, UnsupportedOverrideError, ValueError, KeyError) as exc:
+        return BuildTransactionPlan(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+
+    # 3. Build render inputs
+    build_context = request.context if request.context is not None else str(inv_path.parent.absolute())
+    tag = request.tag if request.tag is not None else "pi-cli-pi:latest"
+
+    try:
+        docker_platform = _docker_platform(request.platform)
+        render_inputs = BuildRenderInputs(
+            build_context=build_context,
+            projection=projection,
+            target_stage=request.target,
+            image_tag=tag,
+            platform=docker_platform,
+            cache=CacheControls(enabled=request.cache),
+            pull=request.pull,
+            progress=request.progress,
+            dockerfile=request.dockerfile,
+            dev_uid=request.uid if request.uid is not None else 1000,
+            dev_gid=request.gid if request.gid is not None else 1000,
+        )
+
+        # 4. Render
+        build_args = render_build_vector(render_inputs)
+        display_string = render_command_display(build_args)
+    except (ValueError, VersionConfigError) as exc:
+        return BuildTransactionPlan(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+
+    return BuildTransactionPlan(
+        exit_kind=ExitKind.SUCCESS,
+        build_args=build_args,
+        display_string=display_string,
+        render_inputs=render_inputs,
+        inventory=inventory,
+        effective_projection=projection,
+    )
+
+
+def execute_build(
+    plan: BuildTransactionPlan,
+    request: BuildRequest,
+) -> BuildResult:
+    """Diagnose gateway, persist, publish, and execute Docker.
+
+    Callers must have already validated ``plan.exit_kind == SUCCESS``
+    and confirmed ``request.confirmed is True`` (and that this is not
+    a dry-run).
+    """
+    build_args = plan.build_args
+    display_string = plan.display_string
+
+    # 1. Diagnose gateway
+    diagnose = request._diagnose_gateway or diagnose_gateway
+    try:
+        diagnosis = diagnose(probe_image=request.gateway_probe_image)
+    except Exception as exc:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"gateway diagnosis failed: {exc}",
+            build_args=build_args,
+            display_string=display_string,
+        )
+    gateway_ip = diagnosis.host_gateway_ip
+    if gateway_ip is None:
+        detail = "no route"
+        if diagnosis.probes:
+            first = diagnosis.probes[0]
+            if first.detail:
+                detail = first.detail
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"no working gateway IP found: {detail}",
+            build_args=build_args,
+            display_string=display_string,
+        )
+
+    # 2. Persist selected gateway
+    persist = request._persist_gateway or persist_gateway
+    repo_root = (
+        Path(request.repo_root) if request.repo_root
+        else Path(request.inventory_path).parent
+    )
+    persist_result = persist(repo_root / ".env", gateway_ip)
+    if not persist_result.written:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"cannot persist gateway: {persist_result.error or 'unknown error'}",
+            build_args=build_args,
+            display_string=display_string,
+            host_gateway_ip=gateway_ip,
+        )
+
+    # 3. Publish effective projection
+    publish = request._publish_projection
+    try:
+        if publish is not None:
+            publish_result = publish(
+                plan.effective_projection,
+                repo_root=repo_root,
+            )
+        else:
+            publish_result = _publish_projection_default(
+                plan.effective_projection, repo_root=repo_root,
+            )
+    except (PublishError, Exception) as exc:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"failed to publish effective projection: {getattr(exc, 'detail', str(exc))}",
+            build_args=build_args,
+            display_string=display_string,
+            host_gateway_ip=gateway_ip,
+        )
+
+    # 4. Execute Docker build
+    runner = request.runner or SubprocessBuildExecutor()
+
+    proc: ProcessResult
+    try:
+        proc = runner.run(build_args)
+    except FileNotFoundError as exc:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"docker executable not found: {exc}",
+            build_args=build_args,
+            display_string=display_string,
+            host_gateway_ip=gateway_ip,
+            publish_result=publish_result,
+        )
+    except OSError as exc:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"docker execution failed: {exc}",
+            build_args=build_args,
+            display_string=display_string,
+            host_gateway_ip=gateway_ip,
+            publish_result=publish_result,
+        )
+    exit_kind = ExitKind.SUCCESS if proc.return_code == 0 else ExitKind.OPERATIONAL
+    message: str | None = None
+    if proc.return_code != 0:
+        message = proc.stderr or f"build exited with code {proc.return_code}"
+
+    return BuildResult(
+        exit_kind=exit_kind,
+        message=message,
+        build_args=build_args,
+        display_string=display_string,
+        process_result=proc,
+        host_gateway_ip=gateway_ip,
+        publish_result=publish_result,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Public orchestration (Stage 9.3)
 # ═══════════════════════════════════════════════════════════════════════
 
 
 def orchestrate_build(request: BuildRequest) -> BuildResult:
-    """STUB — returns a placeholder ``OPERATIONAL`` result.
+    """Orchestrate a complete build transaction.
 
-    This stub exists so that 9.1 RED tests can define the full
-    expected contract before the real implementation is written.
-    Every test in ``test_constructor_build_orchestration.py`` must
-    fail against this stub (except a handful of shape-assertion tests).
+    Flow:
+    1. Plan — load, validate, resolve, render (no side effects)
+    2. If plan fails: return CONFIG
+    3. If dry-run: return plan with SUCCESS
+    4. If not confirmed: return SUCCESS cancellation
+    5. Execute — diagnose, persist, publish, Docker
     """
-    return BuildResult(
-        exit_kind=ExitKind.OPERATIONAL,
-        message="orchestrate_build not implemented",
-    )
+    plan = plan_build(request)
+    if plan.exit_kind != ExitKind.SUCCESS:
+        return BuildResult(
+            exit_kind=plan.exit_kind,
+            message=plan.message,
+            build_args=plan.build_args,
+            display_string=plan.display_string,
+        )
+
+    if request.dry_run:
+        return BuildResult(
+            exit_kind=ExitKind.SUCCESS,
+            build_args=plan.build_args,
+            display_string=plan.display_string,
+        )
+
+    if not request.confirmed:
+        return BuildResult(
+            exit_kind=ExitKind.SUCCESS,
+            message="build not confirmed",
+        )
+
+    return execute_build(plan, request)
 
 
 def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
-    """STUB — returns a placeholder ``OPERATIONAL`` result."""
+    """Orchestrate a complete doctor (gateway diagnosis + optional repair).
+
+    Flow:
+    1. Initial diagnosis (always)
+    2. Derive override plan (always, even without repair)
+    3. If ``apply_override`` and ``repair_consent`` and not rootful:
+       a. Skip apply when plan state is MATCHING (already no-op)
+       b. Apply override
+       c. Re-diagnose on success
+    4. If ``apply_override`` but rootful: return POLICY
+    5. Otherwise return diagnosis-only result
+    """
+    # 1. Initial diagnosis
+    diagnose = request._diagnose_gateway or diagnose_gateway
+    try:
+        initial = diagnose(
+            probe_image=request.probe_image,
+            probe_timeout=request.probe_timeout,
+        )
+    except Exception as exc:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"gateway diagnosis failed: {exc}",
+        )
+    gateway = initial.host_gateway_ip
+
+    if gateway is None:
+        detail = "no route"
+        if initial.probes:
+            first = initial.probes[0]
+            if first.detail:
+                detail = first.detail
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"no working gateway IP found: {detail}",
+            initial_diagnosis=initial,
+            selected_gateway=None,
+        )
+
+    # 2. Derive override plan — always when the caller explicitly injects
+    #    ``_plan_rootless_override``, or when repair is requested (so the
+    #    real plan is available for consent denial / matching checks).
+    #    Skipped for diagnosis-only calls with no injectable wired.
+    plan_fn = request._plan_rootless_override
+    if plan_fn is None and request.apply_override:
+        plan_fn = plan_rootless_override
+    try:
+        override_plan = plan_fn(mode=initial.mode) if plan_fn else None
+    except Exception as exc:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"override planning failed: {exc}",
+            initial_diagnosis=initial,
+            selected_gateway=gateway,
+        )
+
+    # 3. Repair not requested → diagnosis-only success
+    if not request.apply_override:
+        return DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            selected_gateway=gateway,
+            repair_applied=False,
+        )
+
+    # 4. Repair requested but Docker is rootful → POLICY
+    if initial.mode == DockerMode.ROOTFUL:
+        return DoctorResult(
+            exit_kind=ExitKind.POLICY,
+            message="rootless override not applicable: Docker is rootful",
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            selected_gateway=gateway,
+            repair_applied=False,
+        )
+
+    # 5. Repair requested — check consent
+    if not request.repair_consent:
+        return DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            message="repair consent denied",
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            selected_gateway=gateway,
+            repair_applied=False,
+        )
+
+    # 6. Already matching — no-op
+    if override_plan is not None and override_plan.state == OverrideState.MATCHING:
+        return DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            selected_gateway=gateway,
+            repair_applied=False,
+        )
+
+    # 7. Apply override
+    apply_fn = request._apply_rootless_override or apply_rootless_override
+    try:
+        failure = apply_fn(plan=override_plan, consent=request.repair_consent)
+    except Exception as exc:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"override application failed: {exc}",
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            selected_gateway=gateway,
+            repair_applied=False,
+        )
+    if failure is not None:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"override application failed: {failure.detail}",
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            repair_failure=failure,
+            selected_gateway=gateway,
+            repair_applied=False,
+        )
+
+    # 8. Re-diagnose after successful repair
+    try:
+        post = diagnose(
+            probe_image=request.probe_image,
+            probe_timeout=request.probe_timeout,
+        )
+    except Exception as exc:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"post-repair diagnosis failed: {exc}",
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            selected_gateway=gateway,
+            repair_applied=True,
+        )
+
     return DoctorResult(
-        exit_kind=ExitKind.OPERATIONAL,
-        message="orchestrate_doctor not implemented",
+        exit_kind=ExitKind.SUCCESS,
+        initial_diagnosis=initial,
+        override_plan=override_plan,
+        post_repair_diagnosis=post,
+        selected_gateway=post.host_gateway_ip or gateway,
+        repair_applied=True,
     )
 
 

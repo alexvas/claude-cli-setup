@@ -28,6 +28,7 @@ from docker.networking import (
 from docker.versioning.build_orchestration import (
     BuildRequest,
     BuildResult,
+    PublishError,
     PublishResult,
     ProcessResult,
     orchestrate_build,
@@ -121,7 +122,7 @@ def _persist_fail(path=None, gateway=None):
     )
 
 
-def _publish_ok(inv=None, projection=None, path=None):
+def _publish_ok(projection, *, repo_root=None):
     return PublishResult(published_path="/tmp/effective.toml")
 
 
@@ -334,10 +335,10 @@ class TestDefaultBuild(unittest.TestCase):
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
         self.assertGreater(len(result.build_args), 0,
                            "build args must not be empty")
-        # Canonical image tag: -t pi-cli-pi:latest
+        # Canonical image tag: --tag pi-cli-pi:latest
         found = False
         for i, a in enumerate(result.build_args):
-            if a == "-t" and i + 1 < len(result.build_args):
+            if a == "--tag" and i + 1 < len(result.build_args):
                 if result.build_args[i + 1] == "pi-cli-pi:latest":
                     found = True
                     break
@@ -530,19 +531,21 @@ class TestProjectionPublication(unittest.TestCase):
     host-side path, atomic, inventory not overwritten."""
 
     def test_projector_called_during_build(self):
-        """The _publish_projection injectable must be invoked."""
+        """The _publish_projection injectable must be invoked during
+        execution (not planning / dry-run)."""
         calls = []
 
-        def record_publish(inv=None, projection=None, path=None):
+        def record_publish(projection, *, repo_root=None):
             calls.append(1)
             return PublishResult(published_path="/tmp/eff.toml")
 
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            dry_run=True,
+            confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
             _publish_projection=record_publish,
+            runner=FakeBuildExecutor(),
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
@@ -786,6 +789,121 @@ class TestFailureOrdering(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 15a.  Render-validation failures (Stage 9.3 hardening)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestRenderValidationFailures(unittest.TestCase):
+    """Invalid render inputs (negative UID/GID, empty tag, etc.)
+    must return ``CONFIG`` from planning with zero side effects."""
+
+    # -- negative UID / GID ---------------------------------------------
+
+    def test_negative_uid_returns_config(self):
+        """Negative ``uid`` must produce CONFIG from ``plan_build``."""
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            uid=-5,
+            dry_run=True,
+            _diagnose_gateway=self._bomb_diagnose,
+            _persist_gateway=self._bomb_persist,
+            _publish_projection=self._bomb_publish,
+            runner=self._BombRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.CONFIG, result.exit_kind,
+                         f"expected CONFIG, got {result.exit_kind}: {result.message}")
+        self.assertIn("dev_uid", result.message or "")
+
+    def test_negative_gid_returns_config(self):
+        """Negative ``gid`` must produce CONFIG from ``plan_build``."""
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            gid=-3,
+            dry_run=True,
+            _diagnose_gateway=self._bomb_diagnose,
+            _persist_gateway=self._bomb_persist,
+            _publish_projection=self._bomb_publish,
+            runner=self._BombRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.CONFIG, result.exit_kind,
+                         f"expected CONFIG, got {result.exit_kind}: {result.message}")
+        self.assertIn("dev_gid", result.message or "")
+
+    def test_negative_uid_without_dry_run_still_config(self):
+        """Negative UID must return CONFIG even with ``confirmed=True``
+        and no dry-run — planning happens before execution."""
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            uid=-1,
+            confirmed=True,
+            _diagnose_gateway=self._bomb_diagnose,
+            _persist_gateway=self._bomb_persist,
+            _publish_projection=self._bomb_publish,
+            runner=self._BombRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.CONFIG, result.exit_kind)
+        # No build_args rendered
+        self.assertEqual((), result.build_args)
+
+    # -- empty tag / context --------------------------------------------
+
+    def test_empty_tag_returns_config(self):
+        """An explicit empty ``tag`` must reach the renderer's validation
+        and return CONFIG — not be silently replaced with the default."""
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            tag="",
+            dry_run=True,
+            _diagnose_gateway=self._bomb_diagnose,
+            _persist_gateway=self._bomb_persist,
+            _publish_projection=self._bomb_publish,
+            runner=self._BombRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.CONFIG, result.exit_kind,
+                         f"expected CONFIG, got {result.exit_kind}: {result.message}")
+        self.assertIn("image_tag", (result.message or "").lower())
+
+    def test_empty_context_returns_config(self):
+        """An explicit empty ``context`` must reach the renderer's
+        validation and return CONFIG."""
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            context="",
+            dry_run=True,
+            _diagnose_gateway=self._bomb_diagnose,
+            _persist_gateway=self._bomb_persist,
+            _publish_projection=self._bomb_publish,
+            runner=self._BombRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.CONFIG, result.exit_kind,
+                         f"expected CONFIG, got {result.exit_kind}: {result.message}")
+        self.assertIn("build_context", (result.message or "").lower())
+
+    # -- bomb injectables (shared) --------------------------------------
+
+    @staticmethod
+    def _bomb_diagnose(**kw):
+        raise RuntimeError("diagnose must NOT be called for render failure")
+
+    @staticmethod
+    def _bomb_persist(**kw):
+        raise RuntimeError("persist must NOT be called for render failure")
+
+    @staticmethod
+    def _bomb_publish(projection, *, repo_root=None):
+        raise RuntimeError("publish must NOT be called for render failure")
+
+    class _BombRunner:
+        def run(self, argv: tuple[str, ...]):
+            raise RuntimeError("runner must NOT be called for render failure")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 16.  Gateway tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -798,10 +916,11 @@ class TestGatewayDiagnosis(unittest.TestCase):
         """The gateway IP selected by diagnosis must be reported."""
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            dry_run=True,
+            confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
+            runner=FakeBuildExecutor(),
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
@@ -832,10 +951,11 @@ class TestGatewayDiagnosis(unittest.TestCase):
 
         req = BuildRequest(
             inventory_path="docker-constructor.toml",
-            dry_run=True,
+            confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _persist_gateway=record_persist,
             _publish_projection=_publish_ok,
+            runner=FakeBuildExecutor(),
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
@@ -894,7 +1014,7 @@ class TestConfirmation(unittest.TestCase):
         raise RuntimeError("persist must NOT be called when not confirmed")
 
     @staticmethod
-    def _bomb_publish(**kw):
+    def _bomb_publish(projection, *, repo_root=None):
         raise RuntimeError("publish must NOT be called when not confirmed")
 
     class _BombRunner:
@@ -960,7 +1080,7 @@ class TestConfirmation(unittest.TestCase):
             seq.append("persist")
             return _persist_ok()
 
-        def publish(**kw):
+        def publish(projection, *, repo_root=None):
             seq.append("publish")
             return PublishResult(published_path="/tmp/eff.toml")
 
@@ -970,6 +1090,7 @@ class TestConfirmation(unittest.TestCase):
             _diagnose_gateway=diagnose,
             _persist_gateway=persist,
             _publish_projection=publish,
+            runner=FakeBuildExecutor(),
         )
         result = orchestrate_build(req)
         self.assertIsInstance(result, BuildResult)
@@ -1008,7 +1129,7 @@ class TestDryRun(unittest.TestCase):
         raise RuntimeError("gateway persist must NOT be called during dry-run")
 
     @staticmethod
-    def _bomb_publish(**kw):
+    def _bomb_publish(projection, *, repo_root=None):
         raise RuntimeError("projection publish must NOT be called during dry-run")
 
     class _BombRunner:
@@ -1240,6 +1361,122 @@ class TestSubprocessOutcomes(unittest.TestCase):
         self.assertIsNotNone(result.process_result)
         # Message should surface stderr content or exit code
         self.assertIn("build error", result.message or "")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 23a.  Boundary failure tests — Stage 9.3 hardening
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestBuildBoundaryFailures(unittest.TestCase):
+    """Diagnosis, publication, and runner exceptions must produce
+    structured results and never escape."""
+
+    # -- diagnosis exceptions -------------------------------------------
+
+    def test_diagnosis_exception_returns_operational(self):
+        """A crashing diagnosis must produce OPERATIONAL with the
+        exception detail embedded in the message."""
+        def broken_diagnose(**kw):
+            raise RuntimeError("Docker socket unreachable")
+
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            confirmed=True,
+            _diagnose_gateway=broken_diagnose,
+            _persist_gateway=_persist_ok,
+            _publish_projection=_publish_ok,
+            runner=FakeBuildExecutor(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("Docker socket unreachable", result.message or "")
+        # Build never runs when diagnosis fails
+        self.assertIsNone(result.process_result)
+
+    # -- publication errors ---------------------------------------------
+
+    def test_publish_error_returns_operational(self):
+        """``PublishError`` raised by the injectable must produce
+        OPERATIONAL with the detail embedded."""
+        def broken_publish(projection, *, repo_root=None):
+            raise PublishError(detail="disk full")
+
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            confirmed=True,
+            _diagnose_gateway=_diag_reachable,
+            _persist_gateway=_persist_ok,
+            _publish_projection=broken_publish,
+            runner=FakeBuildExecutor(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("disk full", result.message or "")
+        # Gateway was diagnosed and persisted
+        self.assertEqual("172.17.0.1", result.host_gateway_ip)
+        # Docker must not run after publication failure
+        self.assertIsNone(result.process_result)
+
+    def test_publish_generic_exception_returns_operational(self):
+        """A generic exception during publication must also produce
+        OPERATIONAL (OS-level failures, etc.)."""
+        def broken_publish(projection, *, repo_root=None):
+            raise IOError("permission denied")
+
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            confirmed=True,
+            _diagnose_gateway=_diag_reachable,
+            _persist_gateway=_persist_ok,
+            _publish_projection=broken_publish,
+            runner=FakeBuildExecutor(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("permission denied", result.message or "")
+        self.assertIsNone(result.process_result)
+
+    # -- runner errors --------------------------------------------------
+
+    def test_runner_file_not_found_error(self):
+        """``FileNotFoundError`` (docker binary missing) must produce
+        OPERATIONAL."""
+        class MissingDockerRunner:
+            def run(self, argv: tuple[str, ...]):
+                raise FileNotFoundError("No such file: 'docker'")
+
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            confirmed=True,
+            _diagnose_gateway=_diag_reachable,
+            _persist_gateway=_persist_ok,
+            _publish_projection=_publish_ok,
+            runner=MissingDockerRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("not found", result.message or "")
+        self.assertIsNone(result.process_result)
+
+    def test_runner_permission_error(self):
+        """``PermissionError`` (OSError subclass) must produce OPERATIONAL."""
+        class DeniedDockerRunner:
+            def run(self, argv: tuple[str, ...]):
+                raise PermissionError("docker: permission denied")
+
+        req = BuildRequest(
+            inventory_path="docker-constructor.toml",
+            confirmed=True,
+            _diagnose_gateway=_diag_reachable,
+            _persist_gateway=_persist_ok,
+            _publish_projection=_publish_ok,
+            runner=DeniedDockerRunner(),
+        )
+        result = orchestrate_build(req)
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("permission denied", result.message or "")
+        self.assertIsNone(result.process_result)
 
 
 if __name__ == "__main__":
