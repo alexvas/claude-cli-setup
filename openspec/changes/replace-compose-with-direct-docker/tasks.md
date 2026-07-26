@@ -168,11 +168,11 @@
 ### INTROSPECT
 
 - [x] 8.6 Ensure the facade owns only argument validation, presentation, prompts, and exit-code mapping; inventory traversal and providers remain internal.
-- [ ] 8.7 Verify help and errors consistently name `docker/docker-constructor.py` and only the agreed command surface.
+- [x] 8.7 Verify help and errors consistently name `docker/docker-constructor.py` and only the agreed command surface.
 
 ### VALIDATE
 
-- [ ] 8.8 Run facade, inventory, effective-display, and provider tests with fake boundaries and no Docker.
+- [x] 8.8 Run facade, inventory, effective-display, and provider tests with fake boundaries and no Docker.
 
 ## 9. Stage 9 — Build and Doctor Orchestration
 
