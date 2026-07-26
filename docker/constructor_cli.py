@@ -110,19 +110,35 @@ def _resolve_inventory_path(request: CommandRequest) -> Path:
 def _real_dispatcher(
     command: str, request: CommandRequest,
 ) -> CommandResult:
-    """Thin facade wrapper that delegates to the internal read-only service.
+    """Thin facade wrapper that delegates to the internal services.
 
-    The facade resolves the inventory path; the service owns inventory
-    loading, validation, scoped traversal, effective resolution, override
-    application, provider setup, transport/token resolution, filtering,
-    and update execution.
+    Read-only commands (validate, show, check-updates) are routed to
+    ``docker.versioning.readonly_service``.
+    Build and doctor commands are routed to
+    ``docker.versioning.build_orchestration``.
     """
+    # Commands that do not require an inventory path
+    if command == "doctor":
+        from docker.versioning.build_orchestration import dispatch as orch_dispatch
+        from pathlib import Path
+        return orch_dispatch(
+            Path("."),  # doctor does not read inventory
+            command,
+            command_args=request.command_args,
+        )
+
     try:
         inv_path = _resolve_inventory_path(request)
     except OSError as exc:
         return CommandResult(
             exit_kind=ExitKind.CONFIG,
             message=f"cannot resolve inventory path: {exc}",
+        )
+
+    if command == "build":
+        from docker.versioning.build_orchestration import dispatch as orch_dispatch
+        return orch_dispatch(
+            inv_path, command, command_args=request.command_args,
         )
 
     from docker.versioning.readonly_service import dispatch

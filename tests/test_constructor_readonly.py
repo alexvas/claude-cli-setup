@@ -473,6 +473,20 @@ class TestShowOverrides(unittest.TestCase):
             finally:
                 os.chdir(orig)
 
+    def test_duplicate_override_rejected_at_cli(self) -> None:
+        """Repeated ``--override`` with the same path must be rejected
+        by the facade's ``_parse_overrides``, producing a CLI error."""
+        _, out, err = _run(
+            self.m,
+            ["show", "--scope", "build", "--effective",
+             "--override", "build.stages.toolchain.python.version=3.14.0",
+             "--override", "build.stages.toolchain.python.version=3.15.0"],
+            dispatcher=None,  # dispatcher never reached — parse fails first
+        )
+        self.assertEqual("", out, "must not produce stdout on parse error")
+        self.assertIn("duplicate", err.lower(),
+                      f"expected 'duplicate' in stderr, got: {err}")
+
 
 # ════════════════════════════════════════════════════════════════════════
 # check-updates — scope, filters, policy exits
