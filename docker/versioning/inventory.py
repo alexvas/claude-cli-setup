@@ -61,10 +61,9 @@ from .model import (
     UvEntry,
     UvPythonSource,
     UvPythonUpdate,
-    _MOVING_VERSION_TAGS,
-    _SEMVER_RE,
-    _validate_npm_tarball_url as _validate_npm_tarball_url_model,
 )
+from .npm_tarball import validate as _validate_npm_tarball_url_model
+from .semver import SemverError, validate as _validate_semver
 
 
 # ---------------------------------------------------------------------------
@@ -316,15 +315,10 @@ def _validate_extension_version(version: str, path: str) -> None:
     Rejects moving tags like 'latest', 'stable', 'next', 'dev', 'canary', 'nightly',
     and malformed suffixes like '-!!!' or '-01'.
     """
-    lower = version.lower()
-    if lower in _MOVING_VERSION_TAGS:
-        raise InventoryError(
-            f"{path}: moving version tag {version!r} is not allowed"
-        )
-    if not _SEMVER_RE.match(version):
-        raise InventoryError(
-            f"{path}: invalid semver version {version!r}"
-        )
+    try:
+        _validate_semver(version)
+    except SemverError as exc:
+        raise InventoryError(f"{path}: {exc}") from exc
 
 
 def _validate_artifact_catalog_key(key: str, path: str) -> None:
@@ -335,25 +329,23 @@ def _validate_artifact_catalog_key(key: str, path: str) -> None:
     ``[runtime.pi-extensions.<name>.artifacts]`` table so that malformed
     entries never escape to the model layer.
     """
-    lower = key.lower()
-    if lower in _MOVING_VERSION_TAGS:
-        raise InventoryError(
-            f"{path}: moving version tag {key!r} is not allowed"
-        )
-    if not _SEMVER_RE.match(key):
-        raise InventoryError(
-            f"{path}: invalid semver version {key!r}"
-        )
+    try:
+        _validate_semver(key)
+    except SemverError as exc:
+        raise InventoryError(f"{path}: {exc}") from exc
 
 
 def _validate_npm_tarball_url(
     url: str, package: str, version_key: str, path: str
 ) -> None:
-    """Thin wrapper — calls model validator, maps ``InvalidArtifactKey``
+    """Thin wrapper — calls shared validator, maps
+    :class:`~docker.versioning.npm_tarball.NpmTarballUrlError`
     to ``InventoryError`` with the canonical TOML path."""
+    from .npm_tarball import NpmTarballUrlError
+
     try:
         _validate_npm_tarball_url_model(url, package, version_key)
-    except InvalidArtifactKey as exc:
+    except NpmTarballUrlError as exc:
         raise InventoryError(f"{path}.url: {exc}") from exc
 
 

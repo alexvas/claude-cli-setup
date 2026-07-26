@@ -200,8 +200,8 @@
 
 ### RED
 
-- [ ] 10.1 Add failing installer tests for closed DTO validation, exact artifact resolution, checksum/integrity rejection, interrupted installation, and actionable failures.
-- [ ] 10.2 Add failing tests for idempotent installation, mismatched installed packages, post-install identity/version validation, Pi-home ownership, and dry-run behavior.
+- [x] 10.1 Add failing installer tests for closed DTO validation, exact artifact resolution, checksum/integrity rejection, interrupted installation, and actionable failures.
+- [x] 10.2 Add failing tests for idempotent installation, mismatched installed packages, post-install identity/version validation, Pi-home ownership, and dry-run behavior.
 
 ### GREEN
 

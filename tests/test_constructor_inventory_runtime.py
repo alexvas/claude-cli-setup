@@ -606,7 +606,7 @@ validation = 42
             load_inventory(self._write(toml))
         msg = str(ctx.exception)
         self.assertIn("1.2.3+build!", msg)
-        self.assertIn("invalid semver", msg)
+        self.assertIn("semver", msg.lower())
 
     # ── strict npm tarball URL validation ────────────────────────────
 

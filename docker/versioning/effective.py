@@ -33,9 +33,8 @@ from .model import (
     PiExtensionEntry,
     PythonEntry,
     RuntimeInventory,
-    _MOVING_VERSION_TAGS,
-    _SEMVER_RE,
 )
+from .semver import SemverError, validate as _validate_semver
 
 # ---------------------------------------------------------------------------
 # Override register
@@ -480,17 +479,12 @@ def _validate_runtime_override(
     path: str,
 ) -> str:
     """Validate an override value against the extension's policy."""
-    lower = value.lower()
-    if lower in _MOVING_VERSION_TAGS:
+    try:
+        _validate_semver(value)
+    except SemverError as exc:
         raise OverrideValidationError(
-            f"{path}: {value!r} is a moving tag, not an exact version"
-        )
-
-    m = _SEMVER_RE.match(value)
-    if not m:
-        raise OverrideValidationError(
-            f"{path}: {value!r} is not a valid semver version"
-        )
+            f"{path}: {value!r} — {exc}"
+        ) from exc
 
     policy = entry.override
     if policy.scheme != "numeric":

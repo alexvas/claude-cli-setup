@@ -18,7 +18,7 @@ from ..model import (
     UpdateKind,
     UpdateTarget,
 )
-from ..versions import SemanticVersion, parse_semver
+from ..semver import SemanticVersion, parse
 
 # Strip v-prefix for semver parsing
 _SEMVER_TAG_RE = re.compile(
@@ -56,7 +56,7 @@ def _parse_tag_semver(tag: str, prefix: str) -> Optional[SemanticVersion]:
     """Parse a tag like v1.2.3 or 1.2.3 into a SemanticVersion."""
     stripped = _strip_prefix(tag, prefix)
     try:
-        return parse_semver(stripped)
+        return parse(stripped)
     except ValueError:
         return None
 

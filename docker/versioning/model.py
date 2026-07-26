@@ -22,33 +22,9 @@ from .constraints import Constraint, NumericVersion  # re-export for convenience
 # Shared semver validation (used by both model and inventory layers)
 # ---------------------------------------------------------------------------
 
-_MOVING_VERSION_TAGS = frozenset({"latest", "stable", "next", "dev", "canary", "nightly"})
-
-# Semver pattern: X.Y.Z with optional prerelease/build.
-# Must match https://semver.org — rejects malformed suffixes like "-!!!" or "-01".
-_SEMVER_RE = re.compile(
-    r"""
-    ^
-    (0|[1-9]\d*)               # major
-    \.
-    (0|[1-9]\d*)               # minor
-    \.
-    (0|[1-9]\d*)               # patch
-    (?:
-        -                      # prerelease hyphen
-        (                      # prerelease identifiers
-            (?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)
-            (?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*
-        )
-    )?
-    (?:
-        \+                     # build hyphen
-        [0-9a-zA-Z-]+          # build identifiers
-        (?:\.[0-9a-zA-Z-]+)*
-    )?
-    $
-    """,
-    re.VERBOSE,
+from .semver import (
+    SemverError,
+    validate as _validate_semver,
 )
 
 
@@ -269,16 +245,13 @@ class OhMyZshEntry:
 
 def _validate_artifact_key(key: str, ext_name: str) -> None:
     """Reject artifact-map keys that are not exact non-moving semver."""
-    if key.lower() in _MOVING_VERSION_TAGS:
+    try:
+        _validate_semver(key)
+    except SemverError as exc:
         raise InvalidArtifactKey(
             f"PiExtensionEntry({ext_name!r}): artifact key {key!r} "
-            f"is a moving tag, not an exact semver"
-        )
-    if not _SEMVER_RE.match(key):
-        raise InvalidArtifactKey(
-            f"PiExtensionEntry({ext_name!r}): artifact key {key!r} "
-            f"is not a valid semver"
-        )
+            f"{exc}"
+        ) from exc
 
 
 def _validate_npm_tarball_url(
@@ -286,62 +259,16 @@ def _validate_npm_tarball_url(
 ) -> None:
     """Validate *url* is an exact npm registry tarball for *package*.
 
-    Expected format::
-
-        https://registry.npmjs.org/<package>/-/<pkg_name>-<version>.tgz
-
-    where ``<pkg_name>`` is the last path segment of *package*.
+    Delegates to :func:`docker.versioning.npm_tarball.validate`,
+    mapping :class:`~docker.versioning.npm_tarball.NpmTarballUrlError`
+    to :class:`InvalidArtifactKey` for the model boundary.
     """
-    from urllib.parse import urlparse
+    from .npm_tarball import NpmTarballUrlError, validate
 
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise InvalidArtifactKey(
-            f"npm tarball URL must use HTTPS, got {url!r}"
-        )
-
-    url_path = parsed.path
-
-    # Package stem: /@scope/name/-/  or  /name/-/
-    expected_stem = f"/{package}/-/"
-    if expected_stem not in url_path:
-        raise InvalidArtifactKey(
-            f"expected npm tarball for {package!r}, got {url!r}"
-        )
-
-    # Extract the part after /-/
-    _, _, tarball_name = url_path.partition(expected_stem)
-    if not tarball_name:
-        raise InvalidArtifactKey(
-            f"missing tarball filename after /-/, got {url!r}"
-        )
-
-    # Tarball must end with .tgz
-    if not tarball_name.endswith(".tgz"):
-        raise InvalidArtifactKey(
-            f"expected .tgz tarball, got {tarball_name!r}"
-        )
-
-    # Strip build metadata for filename matching (npm tarballs never include it)
-    base_version = version_key.split("+", 1)[0]
-
-    # The last path segment of the package (e.g. "pi-read" from "@arcanemachine/pi-read")
-    pkg_name = package.rsplit("/", 1)[-1]
-
-    # Expected filename: <pkg_name>-<base_version>.tgz
-    expected_filename = f"{pkg_name}-{base_version}.tgz"
-    if tarball_name != expected_filename:
-        raise InvalidArtifactKey(
-            f"expected tarball {expected_filename!r} "
-            f"for {package!r} version {base_version!r}, got {tarball_name!r}"
-        )
-
-    # No query / fragment allowed — prevents version-leak via ?ref=1.2.3
-    if parsed.query or parsed.fragment:
-        raise InvalidArtifactKey(
-            f"query/fragment not allowed in reviewed artifact URL, "
-            f"got {url!r}"
-        )
+    try:
+        validate(url, package, version_key)
+    except NpmTarballUrlError as exc:
+        raise InvalidArtifactKey(str(exc)) from exc
 
 
 def _validate_runtime_projection(projection: object) -> None:

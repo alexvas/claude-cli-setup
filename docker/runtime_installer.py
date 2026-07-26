@@ -1,0 +1,639 @@
+"""Protected Runtime Extension Installer (Stage 10).
+
+Reads the mounted effective runtime projection
+(``/run/pi-cli/docker-constructor.runtime.toml``), verifies artifact
+integrity, and installs Pi extensions idempotently into the mounted
+Pi home directory.
+
+This module SHALL NOT read:
+  - ``docker-constructor.toml`` (reviewed inventory)
+  - effective build projection
+  - update providers
+  - override policy
+  - ``docker/versions.py``
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass, field
+from typing import Protocol
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Shared URL identity validator
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def validate_npm_tarball_url(url: str, package: str, version: str) -> None:
+    """Validate *url* against the npm tarball identity contract.
+
+    Delegates to the shared canonical implementation in
+    :mod:`docker.versioning.npm_tarball`, then maps
+    :class:`~docker.versioning.npm_tarball.NpmTarballUrlError`
+    to :class:`ProjectionError` for the installer boundary.
+
+    A valid npm tarball URL::
+
+        https://registry.npmjs.org/<package>/-/<pkg_name>-<base_version>.tgz
+
+    where ``<pkg_name>`` is the last path segment of *package* and
+    ``<base_version>`` is *version* with any ``+build`` metadata
+    stripped (npm tarball filenames never include build metadata).
+    """
+    from docker.versioning.npm_tarball import (
+        NpmTarballUrlError,
+        validate,
+    )
+
+    try:
+        validate(url, package, version)
+    except NpmTarballUrlError as exc:
+        raise ProjectionError(str(exc)) from exc
+
+
+def _reject_path_traversal(value: str, *, field_name: str) -> None:
+    """Validate that *value* is a safe relative path with no traversal.
+
+    Rejects:
+
+    * absolute paths (leading ``/`` or platform-absolute)
+    * backslashes
+    * empty segments (``//``, trailing ``/``, leading ``/``)
+    * segments that are exactly ``.`` (same-dir)
+    * segments that are exactly ``..`` (parent-dir)
+    * normalized paths that escape the logical root (e.g. ``a/../../b``)
+
+    The check is component-aware — ``".."`` is rejected only when it
+    appears as a standalone path *segment*, not when it appears inside
+    a longer name like ``"a..b"``.
+    """
+    import os.path
+
+    exc: type[MetadataValidationError | ProjectionError]
+    if field_name == "metadata_file":
+        exc = MetadataValidationError
+    else:
+        exc = ProjectionError
+
+    if not value or value.isspace():
+        raise exc(f"{field_name} must not be empty")
+
+    if os.path.isabs(value) or value.startswith("/"):
+        raise exc(f"{field_name} must not be absolute: {value!r}")
+
+    if "\\" in value:
+        raise exc(
+            f"{field_name} must not contain backslashes: {value!r}"
+        )
+
+    segments = value.split("/")
+    for seg in segments:
+        if seg == "":
+            raise exc(
+                f"{field_name} must not contain empty path segments "
+                f"(leading/trailing/double slash): {value!r}"
+            )
+        if seg in (".", ".."):
+            raise exc(
+                f"{field_name} contains reserved path segment "
+                f"{seg!r}: {value!r}"
+            )
+
+    # Final: normalized path must remain beneath its logical root.
+    normalized = os.path.normpath(value)
+    if normalized.startswith("..") or os.path.isabs(normalized):
+        raise exc(
+            f"{field_name} normalizes to escape root "
+            f"({value!r} → {normalized!r})"
+        )
+
+
+def _validate_downloaded_artifact(
+    fs: ArtifactFilesystem,
+    workspace_dir: str,
+    artifact_path: str,
+) -> str:
+    """Trust-boundary check on a downloaded artifact path.
+
+    The downloader returns an unverified local path.  Before the
+    installer reads or hashes anything at that path it MUST prove:
+
+    * the path is absolute
+    * the path resolves to a direct child of *workspace_dir*
+    * the path refers to a regular file (not a symlink, directory,
+      or special file)
+
+    All filesystem queries go through the injected *fs* boundary so
+    that tests can prove behaviour with fakes instead of real
+    filesystem state.
+
+    Symlinks are always rejected — even if their current target
+    is inside the workspace — because accepting and resolving
+    them preserves a TOCTOU path-swap window.
+
+    Returns the real (normalized) path that should be used for
+    reading, hashing, and installation.
+
+    Raises :class:`InstallError` on any violation.
+    """
+    import os
+    import stat
+
+    if not fs.is_absolute(artifact_path):
+        raise InstallError(
+            f"downloaded artifact path must be absolute: "
+            f"{artifact_path!r}"
+        )
+
+    # Resolve workspace directory (could be a symlink itself).
+    real_ws = fs.realpath(workspace_dir)
+
+    # Must be a regular file — NOT a symlink, directory, FIFO, etc.
+    # os.lstat follows no links, so symlinks are rejected here.
+    try:
+        if not stat.S_ISREG(fs.lstat_mode(artifact_path)):
+            raise InstallError(
+                f"downloaded artifact is not a regular file: "
+                f"{artifact_path!r}"
+            )
+    except FileNotFoundError:
+        raise InstallError(
+            f"downloaded artifact does not exist: {artifact_path!r}"
+        )
+
+    # Ensure the artifact (fully normalized, no symlinks followed
+    # since we already rejected them) is inside the workspace.
+    real_artifact = fs.realpath(artifact_path)
+    if not real_artifact.startswith(real_ws + os.sep):
+        raise InstallError(
+            f"downloaded artifact {artifact_path!r} "
+            f"(resolved: {real_artifact!r}) is outside workspace "
+            f"{real_ws!r}"
+        )
+
+    return real_artifact
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DTOs
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class InstallStatus(enum.Enum):
+    """Per-extension outcome."""
+    OK = "ok"                       # installed and verified
+    ALREADY_INSTALLED = "already_installed"  # no-op, already present
+    FAILED = "failed"               # installation or verification failed
+
+
+@dataclass(frozen=True)
+class ExtensionResult:
+    """Structured outcome for a single Pi extension."""
+    package: str
+    version: str
+    status: InstallStatus
+    detail: str | None = None       # error detail when status == FAILED
+
+
+@dataclass(frozen=True)
+class InstallResult:
+    """Structured outcome of :func:`install_extensions`."""
+    results: tuple[ExtensionResult, ...]
+    dry_run: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return all(
+            r.status != InstallStatus.FAILED
+            for r in self.results
+        )
+
+
+@dataclass(frozen=True)
+class ProjectionEntry:
+    """A single extension entry read from the runtime projection."""
+    package: str
+    version: str
+    artifact_url: str
+    artifact_integrity: str
+    metadata_file: str
+
+    def __post_init__(self) -> None:
+        import base64
+        import re
+
+        # -- package ---------------------------------------------------
+        pkg = self.package
+        _reject_path_traversal(pkg, field_name="package")
+        if not pkg:
+            raise ProjectionError("package name must not be empty")
+        if pkg.startswith("@"):
+            if not re.fullmatch(_SAFE_SCOPED_RE, pkg, re.VERBOSE):
+                raise ProjectionError(
+                    f"invalid scoped package name: {pkg!r}"
+                )
+        else:
+            if "/" in pkg:
+                raise ProjectionError(
+                    f"unscoped package name must not contain '/': {pkg!r}"
+                )
+            if not re.fullmatch(_SAFE_PACKAGE_RE, pkg, re.VERBOSE):
+                raise ProjectionError(
+                    f"invalid package name: {pkg!r}"
+                )
+
+        # -- version ---------------------------------------------------
+        ver = self.version
+        from docker.versioning.semver import (
+            SemverError,
+            validate as _validate_semver,
+        )
+        try:
+            _validate_semver(ver)
+        except SemverError as exc:
+            raise ProjectionError(f"version {exc} — want exact semver") from exc
+
+        # -- artifact_url ----------------------------------------------
+        validate_npm_tarball_url(self.artifact_url, pkg, ver)
+
+        # -- artifact_integrity ----------------------------------------
+        integ = self.artifact_integrity
+        m = re.fullmatch(
+            r"(sha(?:256|384|512))-(.+)", integ,
+        )
+        if not m:
+            raise ProjectionError(
+                f"artifact integrity must be 'shaNNN-<base64>': "
+                f"{integ!r}"
+            )
+        try:
+            digest = base64.b64decode(m.group(2), validate=True)
+        except Exception:
+            raise ProjectionError(
+                f"artifact integrity has invalid base64: {integ!r}"
+            ) from None
+        expected_len = {"sha256": 32, "sha384": 48, "sha512": 64}
+        if len(digest) != expected_len[m.group(1)]:
+            raise ProjectionError(
+                f"artifact integrity digest length {len(digest)} "
+                f"!= {expected_len[m.group(1)]} for {m.group(1)}: "
+                f"{integ!r}"
+            )
+
+        # -- metadata_file ---------------------------------------------
+        _reject_path_traversal(self.metadata_file, field_name="metadata_file")
+
+
+# -- package-name safety regexes (module level, not DTO fields) ---------
+
+_SAFE_PACKAGE_RE = r"""\A
+    (?!\.)                          # no leading dot
+    [a-z0-9_\-](?:[a-z0-9_\-.]*[a-z0-9_\-])?  # unscoped-npm-name
+    \Z
+    """
+
+_SAFE_SCOPED_RE = r"""\A
+    @
+    (?!\.)                          # scope: no leading dot
+    [a-z0-9_\-](?:[a-z0-9_\-.]*[a-z0-9_\-])?  # scope-name
+    /
+    (?!\.)                          # name: no leading dot
+    [a-z0-9_\-](?:[a-z0-9_\-.]*[a-z0-9_\-])?  # package-name
+    \Z
+    """
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Injectable boundaries (Protocols)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class MountChecker(Protocol):
+    """Verify that *path* is a mount point."""
+
+    def is_mount(self, path: str) -> bool:
+        ...
+
+
+class ArtifactDownloader(Protocol):
+    """Download an artifact to a local file.
+
+    Returns the path to the downloaded (unverified) artifact.
+    Integrity verification is *not* performed here — it is owned
+    by the installer module over the returned bytes.
+
+    Raises :class:`InstallError` on download failure.
+    """
+
+    def fetch(self, *, url: str, dest_dir: str) -> str:
+        ...
+
+
+class ArtifactFilesystem(Protocol):
+    """Read and manage a downloaded artifact file on disk.
+
+    Provides injectable read/remove/stat operations so that
+    installer-owned integrity verification, path validation, and
+    cleanup are testable without real filesystem effects.
+
+    The path is the one returned by :meth:`ArtifactDownloader.fetch`.
+    """
+
+    def is_absolute(self, path: str) -> bool:
+        """Return ``True`` when *path* is absolute."""
+        ...
+
+    def lstat_mode(self, path: str) -> int:
+        """Return the ``st_mode`` bits of *path* without following
+        symlinks (semantics of :func:`os.lstat`).
+
+        Raises :class:`FileNotFoundError` when *path* does not
+        exist.
+        """
+        ...
+
+    def realpath(self, path: str) -> str:
+        """Return the canonical path of *path* with all symlinks
+        resolved (semantics of :func:`os.path.realpath`).
+        """
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Read the *entire* artifact file at *path*.
+
+        Raises :class:`InstallError` on failure (missing,
+        permissions, truncated).
+        """
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete the artifact at *path*.
+
+        Called on success (after install), on integrity failure,
+        on install failure, and on interruption.
+        Must not raise if the file is already absent.
+        """
+        ...
+
+
+class TempWorkspace(Protocol):
+    """Create and destroy private temp directories for downloads.
+
+    Each call to :meth:`create` returns:
+
+    * **Absolute** — the returned path is an absolute filesystem path.
+    * **Unique** — no two calls to ``create`` (across processes or
+      threads) may return the same path.
+    * **Owner-only** — the directory MUST be created with mode
+      ``0o700`` so that only the calling user can read, write, or
+      traverse it.
+
+    :meth:`cleanup` removes the directory and all contents.
+    """
+
+    def create(self) -> str:
+        """Create a unique private temp directory.
+
+        Returns the absolute path.
+
+        Raises :class:`InstallError` on failure (e.g. permission
+        denied, no space).
+        """
+        ...
+
+    def cleanup(self, path: str) -> None:
+        """Remove the workspace directory and all contents.
+
+        Must not raise if already removed or if *path* does not
+        exist.
+        """
+        ...
+
+
+class PackageInstaller(Protocol):
+    """Install a Pi extension from an already-verified local artifact.
+
+    *artifact_path* points to a local file whose checksum has been
+    verified by the installer module against the projection.
+    The installer MUST NOT download bytes or query registries.
+
+    Returns ``None`` on success or raises :class:`InstallError`.
+    """
+
+    def install(self, *, package: str, artifact_path: str) -> None:
+        ...
+
+
+class MetadataReader(Protocol):
+    """Read installed package metadata from disk.
+
+    *metadata_file* is the validated relative path from the
+    projection (e.g. ``"package.json"``, ``"nested/pkg/package.json"``).
+    The caller resolves it against *pi_home*.
+    """
+
+    def read(self, *, pi_home: str, metadata_file: str, package: str) -> dict[str, object]:
+        ...
+
+
+class PrivilegeContext(Protocol):
+    """Execution-identity and ownership-validation boundary.
+
+    The installer runs as ``dev`` inside the container and must
+    verify that identity before performing any mutation.  After
+    installing files into *pi_home* it performs a *read-only*
+    validation that the installed artefacts are owned by
+    ``dev:dev``.  Actual ``chown`` is the responsibility of the
+    root entrypoint (Stage 10.4) and happens before the privilege
+    drop — ``dev`` cannot mutate ownership.
+    """
+
+    def verify_user(self, expected: str) -> None:
+        """Raise :class:`InstallError` if the current process owner
+        does not match *expected*."""
+        ...
+
+    def validate_owner(self, path: str, expected_owner: str) -> None:
+        """Read-only check: the file at *path* is owned by *expected_owner*.
+
+        Called after installation (and after the root entrypoint has
+        repaired ownership).  Must not attempt ``chown`` — the
+        installer process cannot change ownership.
+
+        Raises :class:`InstallError` if ownership does not match.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class InstallContext:
+    """Injectable boundary implementations for the installer."""
+
+    mount_check: MountChecker
+    workspace: TempWorkspace
+    download: ArtifactDownloader
+    file: ArtifactFilesystem
+    installer: PackageInstaller
+    metadata: MetadataReader
+    privilege: PrivilegeContext
+
+    # ------------------------------------------------------------------
+    # Real implementations (used when not injected by tests)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def real_mount_check() -> MountChecker:
+        ...
+
+    @staticmethod
+    def real_workspace() -> TempWorkspace:
+        import os
+        import shutil
+        import tempfile
+
+        class _RealTempWorkspace:
+            def create(self) -> str:
+                path = tempfile.mkdtemp(suffix=".pi-workspace")
+                os.chmod(path, 0o700)
+                return path
+
+            def cleanup(self, path: str) -> None:
+                shutil.rmtree(path, ignore_errors=True)
+
+        return _RealTempWorkspace()
+
+    @staticmethod
+    def real_download() -> ArtifactDownloader:
+        ...
+
+    @staticmethod
+    def real_file() -> ArtifactFilesystem:
+        ...
+
+    @staticmethod
+    def real_installer() -> PackageInstaller:
+        ...
+
+    @staticmethod
+    def real_metadata() -> MetadataReader:
+        ...
+
+    @staticmethod
+    def real_privilege() -> PrivilegeContext:
+        ...
+
+    @staticmethod
+    def make_real() -> "InstallContext":
+        ...
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Domain errors
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class InstallError(RuntimeError):
+    """A recoverable installation failure with structured detail."""
+
+
+class IntegrityError(InstallError):
+    """Checksum verification failed.
+
+    Fields:
+        algorithm: ``"sha256"``, ``"sha384"``, or ``"sha512"``.
+        expected:  Hex-encoded expected digest.
+        actual:    Hex-encoded actual digest.
+    """
+    def __init__(
+        self,
+        message: str,
+        *,
+        algorithm: str,
+        expected: str,
+        actual: str,
+    ) -> None:
+        super().__init__(message)
+        self.algorithm = algorithm
+        self.expected = expected
+        self.actual = actual
+
+
+class ProjectionError(InstallError):
+    """The mounted projection TOML is structurally invalid."""
+
+
+class MetadataValidationError(InstallError):
+    """The projection ``metadata_file`` path is unsafe."""
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Public API
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def read_projection(path: str) -> list[ProjectionEntry]:
+    """Read and validate the effective runtime projection from *path*.
+
+    Returns a list of :class:`ProjectionEntry` objects in
+    deterministic (sorted-by-name) order.
+
+    Raises:
+        ProjectionError: the TOML is structurally invalid.
+        MetadataValidationError: a ``metadata_file`` value is unsafe.
+        IntegrityError: an SRI integrity string is malformed or
+            uses an unsupported algorithm.
+    """
+    ...
+
+
+def install_extensions(
+    ctx: InstallContext,
+    *,
+    entries: list[ProjectionEntry],
+    pi_home: str,
+    dry_run: bool = False,
+) -> InstallResult:
+    """Install Pi extensions into *pi_home*.
+
+    Operates in strict order per entry:
+      1. mount check + user-identity verification (once, before any work)
+      2. for each extension:
+         a. metadata check (skip if already correctly installed)
+         b. download (unverified bytes)
+         c. **integrity verification** (installer-owned, over file bytes)
+         d. install from verified local artifact path
+         e. post-install metadata match
+         f. read-only owner validation (dev:dev)
+
+    Integrity verification is performed by this module between
+    download and install — the downloader never sees the expected
+    checksum and the installer never fetches bytes.
+
+    Reads no files beyond *entries* and *pi_home*.  All I/O goes
+    through the injected *ctx* boundaries.
+
+    Returns a structured :class:`InstallResult`.
+    """
+    ...
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Exit-code mapping (shell wrapper owned)
+# ═══════════════════════════════════════════════════════════════════════
+
+_EXIT_OK = 0
+_EXIT_MOUNT = 10
+_EXIT_PROJECTION = 11
+_EXIT_INTEGRITY = 12
+_EXIT_INSTALL = 13
+_EXIT_VERIFY = 14
+_EXIT_USAGE = 2
+
+
+def exit_code_for(result: InstallResult | InstallError | Exception) -> int:
+    """Map an installer outcome to a process exit code.
+
+    Shell wrappers call this after :func:`install_extensions`.
+    """
+    ...

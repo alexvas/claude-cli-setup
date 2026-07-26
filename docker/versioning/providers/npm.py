@@ -16,7 +16,7 @@ from ..model import (
     UpdateKind,
     UpdateTarget,
 )
-from ..versions import SemanticVersion, parse_semver
+from ..semver import SemanticVersion, parse
 
 
 def _encode_package(pkg: str) -> str:
@@ -34,7 +34,7 @@ def _latest_stable(versions: dict[str, object]) -> Optional[str]:
     best_raw: Optional[str] = None
     for raw in versions:
         try:
-            sv = parse_semver(raw)
+            sv = parse(raw)
         except ValueError:
             continue
         if sv.is_prerelease:
@@ -51,7 +51,7 @@ def _latest_any(versions: dict[str, object]) -> Optional[str]:
     best_raw: Optional[str] = None
     for raw in versions:
         try:
-            sv = parse_semver(raw)
+            sv = parse(raw)
         except ValueError:
             continue
         if best is None or sv > best:
@@ -136,8 +136,8 @@ class NpmProvider:
         # Prevent downgrade: if upstream maximum is older than selected,
         # report CURRENT rather than OUTDATED.
         try:
-            cur_sv = parse_semver(current)
-            cand_sv = parse_semver(candidate_raw)
+            cur_sv = parse(current)
+            cand_sv = parse(candidate_raw)
             if cand_sv < cur_sv:
                 return ProviderResult(
                     candidate=UpdateCandidate(
