@@ -499,7 +499,26 @@ class InstallContext:
 
     @staticmethod
     def real_mount_check() -> MountChecker:
-        ...
+        import os
+        import stat as st
+
+        class _RealMountCheck:
+            @staticmethod
+            def is_mount(path: str) -> bool:
+                """Return True if *path* is a mount point, False otherwise.
+
+                Uses ``mountpoint -q`` because bind mounts share
+                ``st_dev`` with their parent, making device-ID
+                comparison unreliable.
+                """
+                import subprocess
+                result = subprocess.run(
+                    ["mountpoint", "-q", "--", path],
+                    capture_output=True,
+                )
+                return result.returncode == 0
+
+        return _RealMountCheck()
 
     @staticmethod
     def real_workspace() -> TempWorkspace:
@@ -520,27 +539,205 @@ class InstallContext:
 
     @staticmethod
     def real_download() -> ArtifactDownloader:
-        ...
+        import subprocess
+        import shutil
+
+        class _RealArtifactDownloader:
+            def fetch(self, url: str, dest_dir: str) -> str:
+                """Download *url* to *dest_dir* via curl.
+
+                Returns the absolute path to the downloaded file.
+                The caller owns integrity verification.
+                """
+                import os
+                basename = url.rstrip("/").rsplit("/", 1)[-1] or "artifact"
+                dest = os.path.join(dest_dir, basename)
+                result = subprocess.run(
+                    [
+                        "curl", "--fail", "--location",
+                        "--silent", "--show-error",
+                        "--output", dest,
+                        url,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    raise InstallError(
+                        f"download of {url!r} failed (exit {result.returncode}): "
+                        f"{result.stderr.strip()}"
+                    )
+                return dest
+
+        return _RealArtifactDownloader()
 
     @staticmethod
     def real_file() -> ArtifactFilesystem:
-        ...
+        import os
+        import stat as st
+
+        class _RealArtifactFilesystem:
+            def read_bytes(self, path: str) -> bytes:
+                with open(path, "rb") as fh:
+                    return fh.read()
+
+            def remove(self, path: str) -> None:
+                os.unlink(path)
+
+            def is_absolute(self, path: str) -> bool:
+                return os.path.isabs(path)
+
+            def lstat_mode(self, path: str) -> int:
+                return os.lstat(path).st_mode
+
+            def realpath(self, path: str) -> str:
+                return os.path.realpath(path)
+
+        return _RealArtifactFilesystem()
 
     @staticmethod
     def real_installer() -> PackageInstaller:
-        ...
+        import json
+        import subprocess
+
+        class _RealPackageInstaller:
+            def install(self, package: str, artifact_path: str) -> None:
+                """Install a local npm tarball for *package*.
+
+                Uses ``pi install`` which handles npm layout and
+                metadata population under ``$PI_HOME/agent/npm/node_modules``.
+                """
+                result = subprocess.run(
+                    ["pi", "install", artifact_path],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    raise InstallError(
+                        f"pi install {package!r} failed (exit {result.returncode}): "
+                        f"{result.stderr.strip()}"
+                    )
+
+        return _RealPackageInstaller()
 
     @staticmethod
     def real_metadata() -> MetadataReader:
-        ...
+        import json
+        import os
+
+        class _RealMetadataReader:
+            def read(
+                self,
+                *,
+                pi_home: str,
+                metadata_file: str,
+                package: str,
+            ) -> dict[str, object]:
+                """Read and parse installed package metadata.
+
+                Raises :class:`MetadataNotFoundError` when the
+                metadata file genuinely does not exist.
+                Raises :class:`InstallError` for read, parse,
+                or permission failures.
+                """
+                npm_root = os.path.join(
+                    pi_home, "agent", "npm", "node_modules",
+                )
+                pkg_dir = os.path.join(npm_root, package)
+                meta_path = os.path.join(pkg_dir, metadata_file)
+                try:
+                    with open(meta_path, "rb") as fh:
+                        raw = json.loads(fh.read())
+                except FileNotFoundError:
+                    raise MetadataNotFoundError(
+                        f"metadata not found for {package!r} at {meta_path!r}"
+                    ) from None
+                except json.JSONDecodeError as exc:
+                    raise InstallError(
+                        f"invalid JSON in {meta_path!r}: {exc}"
+                    ) from exc
+                except PermissionError as exc:
+                    raise InstallError(
+                        f"permission denied reading {meta_path!r}: {exc}"
+                    ) from exc
+                except OSError as exc:
+                    raise InstallError(
+                        f"failed to read {meta_path!r}: {exc}"
+                    ) from exc
+                if not isinstance(raw, dict):
+                    raise InstallError(
+                        f"metadata at {meta_path!r} is not a JSON object"
+                    )
+                return raw
+
+        return _RealMetadataReader()
 
     @staticmethod
     def real_privilege() -> PrivilegeContext:
-        ...
+        import os
+        import pwd
+        import stat as st
+
+        class _RealPrivilegeContext:
+            def verify_user(self, expected: str) -> None:
+                """Raise :class:`InstallError` if the current process
+                user does not match *expected*."""
+                try:
+                    pw = pwd.getpwuid(os.getuid())
+                except KeyError:
+                    raise InstallError(
+                        f"current uid {os.getuid()} has no passwd entry"
+                    )
+                if pw.pw_name != expected:
+                    raise InstallError(
+                        f"running as {pw.pw_name!r}, must be {expected!r}"
+                    )
+
+            def validate_owner(self, path: str, expected_owner: str) -> None:
+                """Read-only check: the file at *path* is owned by
+                *expected_owner* (format ``"user:group"``)."""
+                try:
+                    st_result = os.lstat(path)
+                except OSError as exc:
+                    raise InstallError(
+                        f"cannot stat {path!r}: {exc}"
+                    ) from exc
+
+                user, _, group = expected_owner.partition(":")
+
+                import grp
+                try:
+                    owner_name = pwd.getpwuid(st_result.st_uid).pw_name
+                except KeyError:
+                    owner_name = str(st_result.st_uid)
+                try:
+                    group_name = grp.getgrgid(st_result.st_gid).gr_name
+                except KeyError:
+                    group_name = str(st_result.st_gid)
+
+                actual = f"{owner_name}:{group_name}"
+                if actual != expected_owner:
+                    raise InstallError(
+                        f"{path!r} is owned by {actual!r}, "
+                        f"expected {expected_owner!r}"
+                    )
+
+        return _RealPrivilegeContext()
 
     @staticmethod
     def make_real() -> "InstallContext":
-        ...
+        """Create an :class:`InstallContext` wired to real system
+        boundaries (mount-point check, curl download, filesystem,
+        pi install, user/group introspection)."""
+        return InstallContext(
+            mount_check=InstallContext.real_mount_check(),
+            workspace=InstallContext.real_workspace(),
+            download=InstallContext.real_download(),
+            file=InstallContext.real_file(),
+            installer=InstallContext.real_installer(),
+            metadata=InstallContext.real_metadata(),
+            privilege=InstallContext.real_privilege(),
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1097,3 +1294,83 @@ def exit_code_for(result: InstallResult | InstallError | Exception) -> int:
     if isinstance(result, InstallError):
         return _EXIT_INSTALL
     return _EXIT_USAGE
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═══════════════════════════════════════════════════════════════════════
+
+_FIXED_PROJECTION = "/run/pi-cli/docker-constructor.runtime.toml"
+_FIXED_PI_HOME = "/home/dev/.pi"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Thin CLI entry point invoked by the shell wrapper.
+
+    Accepts the fixed runtime projection path and Pi home;
+    exposes ``--dry-run`` for pre-flight inspection.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Protected runtime extension installer",
+    )
+    parser.add_argument(
+        "command",
+        choices=("install",),
+        default="install",
+        nargs="?",
+        help="Command (default: install)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate projection and inspect metadata; do not download or install",
+    )
+
+    args = parser.parse_args(argv)
+
+    try:
+        entries = read_projection(_FIXED_PROJECTION)
+    except ProjectionError as exc:
+        import sys
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return _EXIT_PROJECTION
+
+    if not entries:
+        print("Nothing to install.", file=sys.stderr)
+        return _EXIT_OK
+
+    ctx = InstallContext.make_real()
+
+    try:
+        result = install_extensions(
+            ctx,
+            entries=entries,
+            pi_home=_FIXED_PI_HOME,
+            dry_run=args.dry_run,
+        )
+    except InstallError as exc:
+        import sys
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return _EXIT_INSTALL
+
+    if result.dry_run:
+        ok_count = sum(
+            1 for r in result.results
+            if r.status == InstallStatus.ALREADY_INSTALLED
+        )
+        planned = sum(
+            1 for r in result.results
+            if r.status == InstallStatus.PLANNED
+        )
+        print(
+            f"Dry-run: {ok_count} already installed, "
+            f"{planned} would be installed",
+        )
+
+    return _EXIT_OK if result.ok else _EXIT_INSTALL
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -204,6 +204,7 @@ RUN chown root:root /usr/local/share/pi-cli/docker-constructor.toml \
 # Runtime resolver modules for inventory-backed scripts
 COPY docker/versions.py /usr/local/lib/pi-cli/docker/versions.py
 COPY docker/versioning/ /usr/local/lib/pi-cli/docker/versioning/
+COPY docker/runtime_installer.py /usr/local/lib/pi-cli/docker/runtime_installer.py
 RUN chown -R root:root /usr/local/lib/pi-cli \
     && chmod -R a+rX /usr/local/lib/pi-cli
 

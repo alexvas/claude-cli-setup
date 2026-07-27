@@ -52,7 +52,7 @@ if [ "$(id -u)" = "0" ]; then
       echo "mountpoint command is required when CHOWN_WORK_ON_START is enabled" >&2
       exit 1
     fi
-    # Repair project mount points and the user-provided .pi mount.
+    # Repair project mount points.
     for var in ${!PROJECT_PATH_@}; do
       path="${!var}"
       if [ -n "${path}" ] && [ -d "${path}" ] && is_mount_point "${path}"; then
@@ -60,10 +60,39 @@ if [ "$(id -u)" = "0" ]; then
         gosu dev:dev git config --global --add safe.directory "${path}" 2>/dev/null || true
       fi
     done
+  fi
+
+  # ── Protected runtime extension installer ─────────────────────────
+  # Runs whenever the runtime projection is mounted.  Pi-home
+  # ownership/permissions are repaired before the installer
+  # regardless of CHOWN_WORK_ON_START — the runtime contract
+  # requires dev:dev ownership before the installer runs.
+  RUNTIME_PROJECTION="/run/pi-cli/docker-constructor.runtime.toml"
+  if [ -f "${RUNTIME_PROJECTION}" ]; then
     if [ -d /home/dev/.pi ] && is_mount_point /home/dev/.pi; then
       fix_ownership_and_permissions /home/dev/.pi
     fi
+    echo "==> Installing Pi extensions from runtime projection"
+    if ! gosu dev:dev env PYTHONPATH=/usr/local/lib/pi-cli python3 -m docker.runtime_installer install; then
+      echo "ERROR: Extension installation failed — aborting startup" >&2
+      exit 1
+    fi
+
+    # ── rtk integration (idempotent, runs as dev) ───────────────────
+    # Required by openspec/specs/docker-runtime/spec.md: rtk init and
+    # telemetry disablement.  Scoped to the mounted-home flow so it
+    # never mutates an image-layer /home/dev/.pi.
+    echo "==> Configuring rtk integration"
+    if ! gosu dev:dev rtk init -g --agent pi; then
+      echo "ERROR: rtk init failed — aborting startup" >&2
+      exit 1
+    fi
+    if ! gosu dev:dev rtk telemetry disable; then
+      echo "ERROR: rtk telemetry disable failed — aborting startup" >&2
+      exit 1
+    fi
   fi
+
   exec gosu dev:dev "$@"
 fi
 

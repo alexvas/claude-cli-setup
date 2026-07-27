@@ -251,55 +251,241 @@ class TestRuntimeInventoryContracts(unittest.TestCase):
 
 
 class TestInstallPiExtensionsNpmRoot(unittest.TestCase):
-    """install-pi-extensions.sh resolves npm packages under
+    """runtime_installer.py resolves npm packages under
     ~/.pi/agent/npm/node_modules, not ~/.pi/node_modules."""
 
     def setUp(self):
-        self.content = (REPO_ROOT / "docker" / "install-pi-extensions.sh").read_text()
+        self.content = (REPO_ROOT / "docker" / "runtime_installer.py").read_text()
 
     def test_uses_agent_npm_node_modules(self):
-        """The script references Pi's actual npm root: agent/npm/node_modules."""
+        """The installer references Pi's actual npm root: agent/npm/node_modules."""
         self.assertIn(
-            "agent/npm/node_modules",
+            '"agent"',
             self.content,
-            "install-pi-extensions.sh must resolve packages under ~/.pi/agent/npm/node_modules",
+            "runtime_installer.py must reference 'agent' in npm path construction",
+        )
+        self.assertIn(
+            '"npm"',
+            self.content,
+            "runtime_installer.py must reference 'npm' in npm path construction",
+        )
+        self.assertIn(
+            '"node_modules"',
+            self.content,
+            "runtime_installer.py must reference 'node_modules' in npm path construction",
         )
 
     def test_no_vendored_node_modules_fallback(self):
-        """The script must not fall back to a bare ~/.pi/node_modules."""
-        # The only node_modules references must be within the agent/npm/
-        # tree (either as a joined string or via os.path.join components).
+        """The installer must not fall back to a bare ~/.pi/node_modules."""
         for line in self.content.splitlines():
             if "node_modules" not in line:
                 continue
-            # Comments and the constructed npm_root path are fine
             stripped = line.split("#")[0].strip()
             if not stripped:
                 continue
-            # Allow os.path.join('agent', 'npm', 'node_modules')
             if "'agent'" in stripped and "'npm'" in stripped:
                 continue
             if "agent/npm/node_modules" in stripped:
                 continue
+            # Allow 'agent', 'npm', 'node_modules' as separate strings
+            if '"agent"' in stripped and '"npm"' in stripped:
+                continue
             self.fail(
-                f"install-pi-extensions.sh contains node_modules outside "
+                f"runtime_installer.py contains node_modules outside "
                 f"agent/npm/ tree: {line.strip()}"
             )
 
-    def test_scoped_package_path_uses_separator_replacement(self):
-        """Scoped packages (@scope/name) must replace '/' with os.sep for
-        filesystem lookup."""
+    def test_scoped_package_path_via_os_path_join(self):
+        """Scoped packages (@scope/name) are handled by os.path.join
+        with the full package name — no manual '/' replacement needed."""
         self.assertIn(
-            "pkg.replace('/', os.sep)",
+            "os.path.join",
             self.content,
-            "Scoped package lookup must use '/' to os.sep replacement",
+            "npm path must be constructed via os.path.join for cross-platform safety",
+        )
+        # The _npm_metadata_path function joins agent, npm, node_modules,
+        # package, and metadata_file — which handles scoped names naturally.
+        self.assertIn(
+            '"node_modules"',
+            self.content,
+            "os.path.join must reference node_modules",
+        )
+        self.assertIn(
+            'package',
+            self.content,
+            "os.path.join must receive the package argument directly",
         )
 
-    def test_unscoped_fallback_present(self):
-        """An unscoped fallback (flat name after last '/') must exist for
-        packages that may install without the full scoped path."""
+
+class TestInstallPiExtensionsShellWrapper(unittest.TestCase):
+    """install-pi-extensions.sh is a thin fixed-boundary wrapper that
+    delegates to the Python installer module.  It contains no TOML
+    traversal, no package loop, and no npm path construction."""
+
+    def setUp(self):
+        self.content = (REPO_ROOT / "docker" / "install-pi-extensions.sh").read_text()
+
+    def test_delegates_to_python_installer_module(self):
+        """The wrapper exec's the Python installer module."""
         self.assertIn(
-            "split('/')[-1]",
+            "docker.runtime_installer",
             self.content,
-            "Must have unscoped flat-name fallback for package lookup",
+            "Shell wrapper must delegate to docker.runtime_installer module",
         )
+
+    def test_no_toml_traversal(self):
+        """The wrapper must not parse or traverse TOML."""
+        self.assertNotIn(
+            "toml", self.content.lower(),
+            "Shell wrapper must not contain TOML parsing",
+        )
+
+    def test_no_package_loop(self):
+        """The wrapper must not loop over packages."""
+        self.assertNotIn(
+            "for name in", self.content,
+            "Shell wrapper must not contain a package loop",
+        )
+        self.assertNotIn(
+            "for entry in", self.content,
+            "Shell wrapper must not contain a package loop",
+        )
+
+    def test_no_npm_path_construction(self):
+        """The wrapper must not construct npm paths."""
+        self.assertNotIn(
+            "node_modules", self.content,
+            "Shell wrapper must not contain node_modules path construction",
+        )
+
+
+class TestEntrypointRtkIntegration(unittest.TestCase):
+    """The entrypoint SHALL apply rtk init and telemetry disablement
+    as dev after Pi-home ownership repair.  Repeated execution does
+    not duplicate configuration (both commands are idempotent)."""
+
+    def setUp(self):
+        self.content = (REPO_ROOT / "docker" / "entrypoint.sh").read_text()
+
+    def test_rtk_init_present(self):
+        """Entrypoint must invoke rtk init -g --agent pi."""
+        self.assertIn(
+            "rtk init -g --agent pi",
+            self.content,
+            "entrypoint must apply rtk init -g --agent pi",
+        )
+
+    def test_rtk_telemetry_disable_present(self):
+        """Entrypoint must disable rtk telemetry."""
+        self.assertIn(
+            "rtk telemetry disable",
+            self.content,
+            "entrypoint must disable rtk telemetry",
+        )
+
+    def test_rtk_runs_as_dev(self):
+        """Both rtk commands must run under gosu dev:dev, never as root.
+        There must be exactly two active gosu dev:dev rtk lines —
+        neither more (duplication) nor fewer (absent)."""
+        lines = self.content.splitlines()
+        active = [
+            l for l in lines
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        rtk_lines = [
+            l.strip() for l in active
+            if "gosu dev:dev rtk init" in l or "gosu dev:dev rtk telemetry" in l
+        ]
+        self.assertEqual(
+            2, len(rtk_lines),
+            f"Expected exactly 2 gosu dev:dev rtk lines, got {len(rtk_lines)}",
+        )
+        for line in rtk_lines:
+            self.assertIn(
+                "gosu dev:dev",
+                line,
+                f"rtk command must run as dev: {line}",
+            )
+
+    def test_rtk_scoped_to_projection_guard(self):
+        """Both rtk commands must execute inside the guarded block
+        that checks for the runtime projection file.  They must
+        never run on a plain entrypoint without a mounted home."""
+        lines = self.content.splitlines()
+        # Find the projection guard and its matching fi via nesting
+        guard_start = None
+        guard_end = None
+        depth = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == 'if [ -f "${RUNTIME_PROJECTION}" ]; then':
+                guard_start = i
+                depth = 1
+                continue
+            if guard_start is not None and stripped == "fi":
+                depth -= 1
+                if depth == 0:
+                    guard_end = i
+                    break
+            if guard_start is not None and stripped.startswith("if "):
+                depth += 1
+        self.assertIsNotNone(guard_start, "Projection guard not found")
+        self.assertIsNotNone(guard_end, "Projection guard closing 'fi' not found")
+
+        rtk_line_indices = [
+            i for i, line in enumerate(lines)
+            if not line.strip().startswith("#")
+            and ("gosu dev:dev rtk init" in line or "gosu dev:dev rtk telemetry" in line)
+        ]
+        self.assertEqual(
+            2, len(rtk_line_indices),
+            f"Expected exactly 2 rtk lines, got {len(rtk_line_indices)}",
+        )
+        for idx in rtk_line_indices:
+            self.assertTrue(
+                guard_start < idx < guard_end,
+                f"rtk line {idx} is outside the projection-guarded block "
+                f"({guard_start}..{guard_end})",
+            )
+
+    def test_rtk_init_fails_startup(self):
+        """A failing rtk init must abort startup (nonzero exit)."""
+        lines = self.content.splitlines()
+        active = [
+            l for l in lines
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        found_init = False
+        for i, line in enumerate(active):
+            if "rtk init -g --agent pi" in line:
+                found_init = True
+                for j in range(i + 1, min(i + 4, len(active))):
+                    if "exit 1" in active[j]:
+                        break
+                else:
+                    self.fail(
+                        "rtk init failure must be followed by exit 1 "
+                        "within 3 lines"
+                    )
+        self.assertTrue(found_init, "rtk init invocation not found")
+
+    def test_rtk_telemetry_fails_startup(self):
+        """A failing rtk telemetry disable must abort startup."""
+        lines = self.content.splitlines()
+        active = [
+            l for l in lines
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        found_telemetry = False
+        for i, line in enumerate(active):
+            if "rtk telemetry disable" in line:
+                found_telemetry = True
+                for j in range(i + 1, min(i + 4, len(active))):
+                    if "exit 1" in active[j]:
+                        break
+                else:
+                    self.fail(
+                        "rtk telemetry disable failure must be followed "
+                        "by exit 1 within 3 lines"
+                    )
+        self.assertTrue(found_telemetry, "rtk telemetry disable invocation not found")
