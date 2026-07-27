@@ -205,7 +205,7 @@
 
 ### GREEN
 
-- [ ] 10.3 Implement the internal runtime installer over the mounted projection with integrity verification before mutation and injected download/package boundaries.
+- [x] 10.3 Implement the internal runtime installer over the mounted projection with integrity verification before mutation and injected download/package boundaries.
 - [ ] 10.4 Integrate extension setup with entrypoint ownership repair, safe-directory setup, and privilege drop without broadening the runtime DTO.
 
 ### INTROSPECT

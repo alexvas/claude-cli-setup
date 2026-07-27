@@ -15,7 +15,13 @@ This module SHALL NOT read:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import enum
+import hashlib
+import hmac
+import os
+import stat
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -185,6 +191,7 @@ class InstallStatus(enum.Enum):
     OK = "ok"                       # installed and verified
     ALREADY_INSTALLED = "already_installed"  # no-op, already present
     FAILED = "failed"               # installation or verification failed
+    PLANNED = "planned"             # dry-run: would install or reinstall
 
 
 @dataclass(frozen=True)
@@ -431,6 +438,14 @@ class MetadataReader(Protocol):
     *metadata_file* is the validated relative path from the
     projection (e.g. ``"package.json"``, ``"nested/pkg/package.json"``).
     The caller resolves it against *pi_home*.
+
+    Raises:
+        :class:`MetadataNotFoundError`: The package is genuinely
+            absent — no metadata file exists.  This is the *only*
+            error that triggers a fresh install.
+        :class:`InstallError`: Read, parse, or permission failure.
+            These are surfaced immediately as installation failures
+            and never trigger a download.
     """
 
     def read(self, *, pi_home: str, metadata_file: str, package: str) -> dict[str, object]:
@@ -537,6 +552,16 @@ class InstallError(RuntimeError):
     """A recoverable installation failure with structured detail."""
 
 
+class MetadataNotFoundError(InstallError):
+    """The requested package is not installed — no metadata file exists.
+
+    This is distinct from read/parse/permission failures:
+    it signals that a fresh install is expected and safe.  All
+    other :class:`InstallError` subclasses during metadata
+    pre-check are surfaced immediately without invoking
+    download or install."""
+
+
 class IntegrityError(InstallError):
     """Checksum verification failed.
 
@@ -572,6 +597,17 @@ class MetadataValidationError(InstallError):
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _require_str(value: object, section: str, field: str) -> str:
+    """Require *value* to be a :class:`str`, raising
+    :class:`ProjectionError` with a focused diagnostic otherwise."""
+    if not isinstance(value, str):
+        raise ProjectionError(
+            f"[extensions.{section}].{field} must be "
+            f"a string, not {type(value).__name__}"
+        )
+    return value
+
+
 def read_projection(path: str) -> list[ProjectionEntry]:
     """Read and validate the effective runtime projection from *path*.
 
@@ -584,7 +620,122 @@ def read_projection(path: str) -> list[ProjectionEntry]:
         IntegrityError: an SRI integrity string is malformed or
             uses an unsupported algorithm.
     """
-    ...
+    import sys
+
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    raw: dict[str, object]
+    try:
+        with open(path, "rb") as fh:
+            raw = tomllib.load(fh)
+    except FileNotFoundError:
+        raise ProjectionError(f"projection file not found: {path!r}") from None
+    except Exception as exc:
+        raise ProjectionError(
+            f"failed to parse projection TOML: {exc}"
+        ) from None
+
+    # ── closed schema: root table ─────────────────────────────────
+    allowed_root = {"extensions"}
+    unknown_root = set(raw) - allowed_root
+    if unknown_root:
+        raise ProjectionError(
+            f"unknown top-level key(s) in runtime projection: "
+            f"{sorted(unknown_root)!r}"
+        )
+
+    ext_table = raw.get("extensions")
+    if not isinstance(ext_table, dict):
+        raise ProjectionError(
+            "[extensions] must be a TOML table"
+        )
+    ext_table = raw["extensions"]
+
+    # ── allowed per-extension and per-artifact keys ────────────────
+    allowed_ext = {"package", "version", "artifact", "metadata_file"}
+    allowed_artifact = {"url", "integrity"}
+
+    entries: list[ProjectionEntry] = []
+    for ext_name, ext_val in ext_table.items():
+        if not isinstance(ext_val, dict):
+            raise ProjectionError(
+                f"[extensions.{ext_name!s}] must be a TOML table"
+            )
+
+        unknown_ext = set(ext_val) - allowed_ext
+        if unknown_ext:
+            raise ProjectionError(
+                f"[extensions.{ext_name!s}]: unknown key(s) "
+                f"{sorted(unknown_ext)!r}"
+            )
+
+        # ── validate artifact sub-table ──────────────────────────
+        artifact_raw = ext_val.get("artifact")
+        if not isinstance(artifact_raw, dict):
+            raise ProjectionError(
+                f"[extensions.{ext_name!s}].artifact must be a TOML inline table"
+            )
+        unknown_artifact = set(artifact_raw) - allowed_artifact
+        if unknown_artifact:
+            raise ProjectionError(
+                f"[extensions.{ext_name!s}].artifact: unknown key(s) "
+                f"{sorted(unknown_artifact)!r}"
+            )
+
+        # ── construct validated DTO ───────────────────────────────
+        try:
+            section = str(ext_name)
+
+            # Require every projected value to already be a string —
+            # silently coercing ints, floats, etc. would mask TOML
+            # authoring mistakes.
+            pkg = _require_str(
+                ext_val["package"], section, "package",
+            )
+            ver = _require_str(
+                ext_val["version"], section, "version",
+            )
+            meta = _require_str(
+                ext_val["metadata_file"], section, "metadata_file",
+            )
+            url = _require_str(
+                artifact_raw["url"], section, "artifact.url",
+            )
+            integrity = _require_str(
+                artifact_raw["integrity"], section, "artifact.integrity",
+            )
+
+            entry = ProjectionEntry(
+                package=pkg,
+                version=ver,
+                artifact_url=url,
+                artifact_integrity=integrity,
+                metadata_file=meta,
+            )
+        except KeyError as exc:
+            raise ProjectionError(
+                f"[extensions.{ext_name!s}]: missing required key {exc}"
+            ) from exc
+
+        entries.append(entry)
+
+    if not entries:
+        raise ProjectionError("projection contains no extensions")
+
+    entries.sort(key=lambda e: e.package)
+
+    # ── reject duplicate package identities ────────────────────────
+    for i in range(1, len(entries)):
+        if entries[i].package == entries[i - 1].package:
+            raise ProjectionError(
+                f"duplicate package in projection: "
+                f"{entries[i].package!r}"
+            )
+
+    return entries
 
 
 def install_extensions(
@@ -613,9 +764,314 @@ def install_extensions(
     Reads no files beyond *entries* and *pi_home*.  All I/O goes
     through the injected *ctx* boundaries.
 
+    The temp workspace is cleaned up on **all** exit paths,
+    including :class:`KeyboardInterrupt`, :class:`SystemExit`,
+    and any other :class:`BaseException`.
+
     Returns a structured :class:`InstallResult`.
     """
-    ...
+
+    results: list[ExtensionResult] = []
+    workspace_dir: str | None = None
+
+    # ── 1. Mount check + user identity ───────────────────────
+    if not ctx.mount_check.is_mount(pi_home):
+        raise InstallError(
+            f"pi-home is not a mount point: {pi_home!r}"
+        )
+    ctx.privilege.verify_user("dev")
+
+    if dry_run:
+        planned: list[ExtensionResult] = []
+        for e in entries:
+            try:
+                installed = ctx.metadata.read(
+                    pi_home=pi_home,
+                    metadata_file=e.metadata_file,
+                    package=e.package,
+                )
+            except MetadataNotFoundError:
+                # Package genuinely absent — would install fresh.
+                planned.append(ExtensionResult(
+                    package=e.package,
+                    version=e.version,
+                    status=InstallStatus.PLANNED,
+                ))
+                continue
+            except InstallError:
+                # Read/parse/permission failure — surface without
+                # mutation; do not swallow.
+                raise
+
+            pkg_name = installed.get("name")
+            pkg_version = installed.get("version")
+            if pkg_name == e.package and pkg_version == e.version:
+                # Name + version match — validate ownership before
+                # reporting ALREADY_INSTALLED.
+                metadata_path = _npm_metadata_path(
+                    pi_home, e.package, e.metadata_file,
+                )
+                try:
+                    ctx.privilege.validate_owner(
+                        metadata_path, "dev:dev",
+                    )
+                except InstallError as exc:
+                    raise InstallError(
+                        f"owner validation failed for {e.package}: {exc}"
+                    ) from exc
+                planned.append(ExtensionResult(
+                    package=e.package,
+                    version=e.version,
+                    status=InstallStatus.ALREADY_INSTALLED,
+                ))
+            else:
+                # Name/version mismatch — would reinstall.
+                planned.append(ExtensionResult(
+                    package=e.package,
+                    version=e.version,
+                    status=InstallStatus.PLANNED,
+                ))
+        return InstallResult(results=tuple(planned), dry_run=True)
+
+    # ── 2. Create temp workspace (reused across extensions) ──
+    try:
+        workspace_dir = ctx.workspace.create()
+    except Exception as exc:
+        raise InstallError(
+            f"failed to create temp workspace: {exc}"
+        ) from exc
+
+    # ── 3. Install each extension — cleanup workspace on all exits ──
+    try:
+        for entry in entries:
+            try:
+                result = _install_one(
+                    ctx, entry, pi_home, workspace_dir,
+                )
+                results.append(result)
+            except InstallError as exc:
+                results.append(ExtensionResult(
+                    package=entry.package,
+                    version=entry.version,
+                    status=InstallStatus.FAILED,
+                    detail=f"[{entry.package}@{entry.version}] {exc}",
+                ))
+                # First failure stops subsequent mutations
+                break
+    finally:
+        ctx.workspace.cleanup(workspace_dir)
+
+    return InstallResult(results=tuple(results))
+
+
+def _install_one(
+    ctx: InstallContext,
+    entry: ProjectionEntry,
+    pi_home: str,
+    workspace_dir: str,
+) -> ExtensionResult:
+    """Install (or skip) a single extension."""
+
+    # ── 2a. Metadata pre-check ────────────────────────────────────
+    try:
+        installed = ctx.metadata.read(
+            pi_home=pi_home,
+            metadata_file=entry.metadata_file,
+            package=entry.package,
+        )
+    except MetadataNotFoundError:
+        pass  # not installed — proceed to fresh install
+    except InstallError:
+        # Read / parse / permission failures — surface immediately.
+        raise
+    else:
+        pkg_name = installed.get("name")
+        pkg_version = installed.get("version")
+        if pkg_name == entry.package and pkg_version == entry.version:
+            # Validate metadata ownership before accepting the
+            # cached install — root- or foreign-owned metadata
+            # must never be reported as ALREADY_INSTALLED.
+            metadata_path = _npm_metadata_path(
+                pi_home, entry.package, entry.metadata_file,
+            )
+            try:
+                ctx.privilege.validate_owner(metadata_path, "dev:dev")
+            except InstallError as exc:
+                raise InstallError(
+                    f"owner validation failed for {entry.package}: {exc}"
+                ) from exc
+            return ExtensionResult(
+                package=entry.package,
+                version=entry.version,
+                status=InstallStatus.ALREADY_INSTALLED,
+            )
+        # Name/version mismatch — fall through to reinstall
+
+    # ── 2b. Download + post-download transaction ──────────────────
+    # Wrap the entire download→verify→install sequence so that the
+    # artifact is removed on ALL exit paths, including
+    # KeyboardInterrupt and SystemExit.
+    artifact_path: str | None = None
+    try:
+        try:
+            artifact_path = ctx.download.fetch(
+                url=entry.artifact_url,
+                dest_dir=workspace_dir,
+            )
+        except InstallError:
+            raise
+        except Exception as exc:
+            raise InstallError(
+                f"download failed for {entry.package}: {exc}"
+            ) from exc
+
+        return _install_one_after_download(
+            ctx, entry, pi_home, workspace_dir, artifact_path,
+        )
+    finally:
+        if artifact_path is not None:
+            _remove_artifact(ctx, artifact_path)
+
+
+def _install_one_after_download(
+    ctx: InstallContext,
+    entry: ProjectionEntry,
+    pi_home: str,
+    workspace_dir: str,
+    artifact_path: str,
+) -> ExtensionResult:
+    """Verify integrity, install, and post-validate — called
+    after the artifact has been downloaded to *artifact_path*.
+
+    ``_install_one`` wraps this with artifact-cleanup on all
+    exit paths."""
+
+    # ── 2b'. Path-trust validation ───────────────────────────────
+    verified_path = _validate_downloaded_artifact(
+        ctx.file, workspace_dir, artifact_path,
+    )
+
+    # ── 2c. Integrity verification ───────────────────────────────
+    try:
+        content = ctx.file.read_bytes(verified_path)
+    except InstallError:
+        raise
+    except Exception as exc:
+        raise InstallError(
+            f"failed to read downloaded artifact for {entry.package}: {exc}"
+        ) from exc
+
+    if not content:
+        raise InstallError(
+            f"downloaded artifact for {entry.package} is empty"
+        )
+
+    algo, _, b64 = entry.artifact_integrity.partition("-")
+    hasher: "hashlib._Hash"
+    if algo == "sha256":
+        hasher = hashlib.sha256()
+    elif algo == "sha384":
+        hasher = hashlib.sha384()
+    elif algo == "sha512":
+        hasher = hashlib.sha512()
+    else:
+        raise IntegrityError(
+            f"unsupported integrity algorithm: {algo!r}",
+            algorithm=algo,
+            expected=entry.artifact_integrity,
+            actual="<none>",
+        )
+
+    hasher.update(content)
+    actual_digest = hasher.digest()
+
+    try:
+        expected_digest = base64.b64decode(b64, validate=True)
+    except Exception:
+        raise IntegrityError(
+            f"invalid base64 in projected integrity for {entry.package}",
+            algorithm=algo,
+            expected=entry.artifact_integrity,
+            actual="<invalid-base64>",
+        ) from None
+
+    if not hmac.compare_digest(actual_digest, expected_digest):
+        raise IntegrityError(
+            f"integrity check failed for {entry.package}: "
+            f"expected {algo}:{binascii.hexlify(expected_digest).decode()}, "
+            f"got {algo}:{binascii.hexlify(actual_digest).decode()}",
+            algorithm=algo,
+            expected=binascii.hexlify(expected_digest).decode(),
+            actual=binascii.hexlify(actual_digest).decode(),
+        )
+
+    # ── 2d. Install from verified artifact ───────────────────────
+    try:
+        ctx.installer.install(
+            package=entry.package,
+            artifact_path=verified_path,
+        )
+    except InstallError:
+        raise
+    except Exception as exc:
+        raise InstallError(
+            f"install failed for {entry.package} ({entry.version}): {exc}"
+        ) from exc
+
+    # ── 2e. Post-install metadata verification ───────────────────
+    try:
+        new_meta = ctx.metadata.read(
+            pi_home=pi_home,
+            metadata_file=entry.metadata_file,
+            package=entry.package,
+        )
+    except InstallError as exc:
+        raise InstallError(
+            f"post-install metadata read failed for {entry.package} "
+            f"({entry.version}): {exc}"
+        ) from exc
+
+    new_name = new_meta.get("name")
+    new_version = new_meta.get("version")
+    if new_name != entry.package or new_version != entry.version:
+        raise InstallError(
+            f"post-install metadata mismatch for {entry.package}: "
+            f"expected name={entry.package!r} version={entry.version!r}, "
+            f"got name={new_name!r} version={new_version!r}"
+        )
+
+    # ── 2g. Owner validation ─────────────────────────────────────
+    metadata_path = _npm_metadata_path(
+        pi_home, entry.package, entry.metadata_file,
+    )
+    try:
+        ctx.privilege.validate_owner(metadata_path, "dev:dev")
+    except InstallError as exc:
+        raise InstallError(
+            f"owner validation failed for {entry.package}: {exc}"
+        ) from exc
+
+    return ExtensionResult(
+        package=entry.package,
+        version=entry.version,
+        status=InstallStatus.OK,
+    )
+
+
+def _remove_artifact(ctx: InstallContext, path: str) -> None:
+    """Best-effort artifact removal."""
+    try:
+        ctx.file.remove(path)
+    except Exception:
+        pass  # removal is best-effort; failures are swallowed
+
+
+def _npm_metadata_path(pi_home: str, package: str, metadata_file: str) -> str:
+    """Resolve the installed metadata path in the Pi CLI npm layout."""
+    import os
+    return os.path.join(
+        pi_home, "agent", "npm", "node_modules", package, metadata_file,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -636,4 +1092,8 @@ def exit_code_for(result: InstallResult | InstallError | Exception) -> int:
 
     Shell wrappers call this after :func:`install_extensions`.
     """
-    ...
+    if isinstance(result, InstallResult):
+        return _EXIT_OK if result.ok else _EXIT_INSTALL
+    if isinstance(result, InstallError):
+        return _EXIT_INSTALL
+    return _EXIT_USAGE
