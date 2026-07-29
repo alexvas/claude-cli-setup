@@ -21,16 +21,23 @@ Design constraints:
 
 from __future__ import annotations
 
+import os
 import unittest
 
 from docker.launcher import (
     ContainerInspectError,
     ContainerNameInspector,
     NoMainProjectError,
+    ProcessResult,
     ProjectSelection,
     ProjectSelector,
+    ProjectionFactory,
+    RunExecutor,
+    RunRequest,
+    RunResult,
 )
 from docker.versioning.rendering import RunRenderInputs, render_run_vector
+from docker.versioning.dispatch_types import ExitKind
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -761,6 +768,719 @@ def _parse_mount_spec(
         k, _, v = part.partition("=")
         result[k] = v
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 11.2 - Run transaction (orchestrate_run)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class FakeRunExecutor:
+    """Recording :class:`RunExecutor` for deterministic tests."""
+
+    def __init__(
+        self,
+        *,
+        returncode: int = 0,
+        fail_with: Exception | None = None,
+    ) -> None:
+        self.returncode = returncode
+        self._fail_with = fail_with
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+        if self._fail_with is not None:
+            raise self._fail_with
+        self.calls.append(argv)
+        return ProcessResult(
+            argv=argv,
+            return_code=self.returncode,
+            stdout="ok" if self.returncode == 0 else "",
+            stderr="" if self.returncode == 0 else "container failed",
+        )
+
+
+class _BombExecutor:
+    """Executor that explodes if ``run()`` is ever invoked.
+
+    Used in dry-run tests to prove the orchestrator never calls
+    Docker — including ``docker run``.  Any invocation is a test
+    failure."""
+
+    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+        raise AssertionError(
+            "_BombExecutor.run() called — dry-run must not invoke Docker",
+        )
+
+
+class _BombInspector:
+    """Inspector that explodes if ``list_names()``
+    is ever invoked.
+
+    Used in dry-run tests to prove the orchestrator never calls
+    ``docker ps`` for pi-N allocation.  Any invocation is a test
+    failure."""
+
+    def list_names(self) -> frozenset[str]:
+        raise AssertionError(
+            "_BombInspector.list_names() called — "
+            "dry-run must not invoke docker ps",
+        )
+
+
+class _BombProjectionFactory:
+    """Projection factory that explodes if called.
+
+    Used in dry-run tests to prove the orchestrator never creates
+    a temporary projection file — not even "create then delete".
+    """
+
+    def __call__(
+        self,
+        projection: object,
+        *,
+        parent_dir: str,
+    ) -> object:
+        raise AssertionError(
+            "_BombProjectionFactory called — "
+            "dry-run must not create projection files",
+        )
+
+
+class _RecordingHandle:
+    """Spy context manager that records enter/exit calls and
+    creates/removes a real file for observable cleanup assertions."""
+
+    def __init__(self, path: str, content_hash: str) -> None:
+        self._path = path
+        self._hash = content_hash
+        self.entered = False
+        self.exited = False
+        self.exit_args: tuple[object, object, object] | None = None
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def content_hash(self) -> str:
+        return self._hash
+
+    def __enter__(self) -> "_RecordingHandle":
+        self.entered = True
+        os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        with open(self._path, "w") as fh:
+            fh.write("fake-projection-content")
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_val: object,
+        exc_tb: object,
+    ) -> bool:
+        self.exited = True
+        self.exit_args = (exc_type, exc_val, exc_tb)
+        if os.path.exists(self._path):
+            os.remove(self._path)
+        return False  # never suppress
+
+
+class RecordingProjectionFactory:
+    """Spy :class:`ProjectionFactory` that records every call and
+    returns :class:`_RecordingHandle` instances for inspection."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, str]] = []
+        self.handles: list[_RecordingHandle] = []
+
+    def __call__(
+        self,
+        projection: object,
+        *,
+        parent_dir: str,
+    ) -> _RecordingHandle:
+        path = os.path.join(parent_dir, "proj.toml")
+        h = _RecordingHandle(path, "sha256-000102030405060708090a0b0c0d0e0f")
+        self.calls.append((projection, parent_dir))
+        self.handles.append(h)
+        return h
+
+
+class TestRunTransaction(unittest.TestCase):
+    """Run-transaction contract for :func:`orchestrate_run`.
+
+    Covers: runtime overrides, private projection creation, read-only
+    mount, gateway mapping, TTY modes, dry-run, Docker failure, and
+    projection cleanup."""
+
+    def setUp(self) -> None:
+        import tempfile
+        self._tmpdir = tempfile.TemporaryDirectory()
+        # projection_parent_dir must contain the .docker-generated/runtime
+        # segments required by run-renderer validation.
+        self._proj_parent = os.path.join(
+            self._tmpdir.name, ".docker-generated", "runtime",
+        )
+        # Build a fixture TOML that adds a second artifact version for
+        # pi-read so override-selection tests can prove a non-default
+        # artifact is resolved.
+        self._inventory_path = self._make_fixture_toml()
+
+    def _make_fixture_toml(self) -> str:
+        """Copy the real docker-constructor.toml and inject an
+        additional ``pi-read`` artifact at version ``0.3.0`` so
+        override-version selection is observable."""
+        import shutil
+        real = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "docker-constructor.toml"),
+        )
+        fixture = os.path.join(self._tmpdir.name, "docker-constructor.toml")
+        shutil.copy2(real, fixture)
+        with open(fixture, "a") as fh:
+            fh.write(
+                '\n'
+                '[runtime.pi-extensions.pi-read.artifacts."0.3.0"]\n'
+                'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.3.0.tgz"\n'
+                'integrity = "sha512-HVRCJdfUNS4642pHcL57fyprYKNZGK2Szx+7i2DHTIAacwqTdlxGN7NwiVi2QtXSwcC1j7/w8xZeNJ9u6ioQ6g=="\n'
+            )
+        return fixture
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    # ── helpers ──────────────────────────────────────────────────
+
+    def _request(self, **overrides: object) -> RunRequest:
+        from docker.launcher import orchestrate_run  # keep import alive
+        kwargs: dict[str, object] = {
+            "inventory_path": self._inventory_path,
+            "image": "pi-cli-pi:latest",
+            "selection": ProjectSelection(main_project="/work/p1"),
+            "pi_home_host": "/home/alice/.pi",
+            "projection_parent_dir": self._proj_parent,
+        }
+        kwargs.update(overrides)
+        return RunRequest(**kwargs)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _run(req: RunRequest) -> RunResult:
+        from docker.launcher import orchestrate_run
+        return orchestrate_run(req)
+
+    # ── happy path ───────────────────────────────────────────────
+
+    def test_successful_run_produces_run_args(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertTrue(len(result.run_args) > 0,
+                        "run_args must be non-empty")
+        self.assertEqual(result.run_args[:3], ("docker", "run", "--rm"))
+
+    def test_successful_run_invokes_executor(self) -> None:
+        executor = FakeRunExecutor(returncode=0)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertEqual(len(executor.calls), 1,
+                         "executor must be called exactly once")
+        self.assertEqual(
+            executor.calls[0], result.run_args,
+            "executor must receive exactly the rendered args",
+        )
+
+    def test_process_result_captured(self) -> None:
+        executor = FakeRunExecutor(returncode=0)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertIsNotNone(result.process_result)
+        self.assertEqual(result.process_result.return_code, 0)  # type: ignore[union-attr]
+
+    # ── private projection ───────────────────────────────────────
+
+    def test_projection_created_under_docker_generated_runtime(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertIsNotNone(result.projection_path)
+        self.assertIn(
+            ".docker-generated/runtime",
+            result.projection_path,  # type: ignore[arg-type]
+            "projection must be under .docker-generated/runtime/",
+        )
+
+    def test_projection_has_content_hash(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertIsNotNone(result.projection_hash)
+        self.assertEqual(len(result.projection_hash or ""), 64,  # type: ignore[arg-type]
+                         "SHA-256 hash must be 64 hex chars")
+
+    # ── read-only mount ──────────────────────────────────────────
+
+    def test_projection_mounted_readonly(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        # Find the projection mount and verify 'readonly' is in the spec.
+        proj_idx = _find_mount(
+            result.run_args,
+            dst="/run/pi-cli/docker-constructor.runtime.toml",
+        )
+        spec = result.run_args[proj_idx + 1]
+        self.assertIn("readonly", spec,
+                      "runtime projection must be mounted read-only")
+
+    # ── gateway mapping ──────────────────────────────────────────
+
+    def test_gateway_passed_to_add_host(self) -> None:
+        """The persisted operational gateway must appear in
+        ``--add-host`` exactly, not a default or fallback."""
+        req = self._request(
+            gateway="192.0.2.77",
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertIn("--add-host", result.run_args)
+        host_idx = result.run_args.index("--add-host")
+        self.assertEqual(
+            result.run_args[host_idx + 1],
+            "host.docker.internal:192.0.2.77",
+            "gateway must be used exactly, not silently defaulted",
+        )
+
+    # ── TTY modes ────────────────────────────────────────────────
+
+    def test_tty_on_by_default(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertIn("--tty", result.run_args)
+
+    def test_tty_off_when_requested(self) -> None:
+        req = self._request(
+            tty=False,
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertNotIn("--tty", result.run_args)
+
+    def test_interactive_on_by_default(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertIn("--interactive", result.run_args)
+
+    def test_interactive_off_when_requested(self) -> None:
+        req = self._request(
+            stdin_open=False,
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertNotIn("--interactive", result.run_args)
+
+    # ── pi-N allocation ──────────────────────────────────────────
+
+    def test_container_name_allocated(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector({"pi-1", "pi-2"}),
+        )
+        result = self._run(req)
+        self.assertEqual(result.container_name, "pi-3")
+        name_idx = result.run_args.index("--name")
+        self.assertEqual(result.run_args[name_idx + 1], "pi-3")
+
+    # ── dry-run ──────────────────────────────────────────────────
+
+    def test_dry_run_produces_display_string(self) -> None:
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertIsNotNone(result.display_string)
+        self.assertIn("docker run", result.display_string or "")
+
+    def test_dry_run_does_not_invoke_executor(self) -> None:
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        # If any bomb exploded the test would have already failed.
+
+    def test_dry_run_still_renders_args(self) -> None:
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertTrue(len(result.run_args) > 0)
+
+    # ── Docker failure ───────────────────────────────────────────
+
+    def test_executor_nonzero_exit_is_operational_error(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=1),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertIsNotNone(result.process_result)
+        self.assertEqual(
+            result.process_result.return_code, 1,  # type: ignore[union-attr]
+        )
+
+    def test_executor_raises_oserror(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(
+                fail_with=OSError("docker not found"),
+            ),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertIn("docker not found", result.message or "")
+
+    def test_executor_exception_mapped_not_propagated(self) -> None:
+        """Unexpected executor exceptions (OSError, RuntimeError,
+        etc.) must be mapped to an OPERATIONAL :class:`RunResult`,
+        never propagated to the caller."""
+        req = self._request(
+            executor=FakeRunExecutor(
+                fail_with=RuntimeError("unexpected crash"),
+            ),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.OPERATIONAL,
+            "unexpected executor exception must be mapped, not raised",
+        )
+        self.assertIsNotNone(result.message)
+
+    # ── projection cleanup (recording factory) ───────────────────
+
+    def test_projection_created_and_cleaned_up_on_success(self) -> None:
+        """On success the projection handle must be entered (file
+        created), then exited (file removed)."""
+        factory = RecordingProjectionFactory()
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+            _create_projection=factory,
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertEqual(len(factory.handles), 1)
+        h = factory.handles[0]
+        self.assertTrue(h.entered, "projection must be entered (file created)")
+        self.assertTrue(h.exited, "projection must be exited (file removed)")
+        self.assertFalse(
+            os.path.exists(h.path),
+            "projection file must be gone after success",
+        )
+
+    def test_projection_created_and_cleaned_up_on_nonzero_exit(self) -> None:
+        """Docker non-zero exit → handle entered, exited, file gone."""
+        factory = RecordingProjectionFactory()
+        req = self._request(
+            executor=FakeRunExecutor(returncode=1),
+            inspector=FakeContainerNameInspector(set()),
+            _create_projection=factory,
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertEqual(len(factory.handles), 1)
+        h = factory.handles[0]
+        self.assertTrue(h.entered)
+        self.assertTrue(h.exited)
+        self.assertFalse(os.path.exists(h.path))
+
+    def test_projection_created_and_cleaned_up_on_executor_oserror(self) -> None:
+        """When the executor raises OSError the handle must still
+        be exited and the file removed."""
+        factory = RecordingProjectionFactory()
+        req = self._request(
+            executor=FakeRunExecutor(
+                fail_with=OSError("docker not found"),
+            ),
+            inspector=FakeContainerNameInspector(set()),
+            _create_projection=factory,
+        )
+        result = self._run(req)
+        self.assertEqual(len(factory.handles), 1)
+        h = factory.handles[0]
+        self.assertTrue(h.entered)
+        self.assertTrue(
+            h.exited,
+            "projection must be cleaned up even when executor raises OSError",
+        )
+        self.assertFalse(os.path.exists(h.path))
+
+    def test_projection_created_and_cleaned_up_on_runtime_error(self) -> None:
+        """When the executor raises an arbitrary RuntimeError the
+        handle must still be exited and the file removed."""
+        factory = RecordingProjectionFactory()
+        req = self._request(
+            executor=FakeRunExecutor(
+                fail_with=RuntimeError("unexpected crash"),
+            ),
+            inspector=FakeContainerNameInspector(set()),
+            _create_projection=factory,
+        )
+        result = self._run(req)
+        self.assertEqual(len(factory.handles), 1)
+        h = factory.handles[0]
+        self.assertTrue(h.entered)
+        self.assertTrue(
+            h.exited,
+            "projection must be cleaned up even on unexpected RuntimeError",
+        )
+        self.assertFalse(os.path.exists(h.path))
+
+    def test_dry_run_creates_no_temporary_files(self) -> None:
+        """Dry-run SHALL not create temporary configuration files.
+
+        A bomb projection factory proves the orchestrator never
+        attempts to create a projection — not even a create-then-
+        delete cycle.  Bomb executor and inspector independently
+        prove no Docker process is launched."""
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        # If any bomb exploded the test would have already failed.
+        # Additionally assert no projection path is reported as
+        # an on-disk file.
+        if result.projection_path is not None:
+            self.assertFalse(
+                os.path.exists(result.projection_path),
+                "dry-run must not create projection files on disk",
+            )
+
+    # ── missing boundaries ───────────────────────────────────────
+
+    def test_no_executor_and_not_dry_run_is_error(self) -> None:
+        req = self._request(
+            executor=None,
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertIsNotNone(result.message)
+
+    def test_no_inspector_is_error(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=None,
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertIsNotNone(result.message)
+
+    # ── runtime overrides ───────────────────────────────────────
+
+    def test_valid_override_produces_success(self) -> None:
+        """A recognised runtime override for an existing extension
+        with a version that satisfies its policy must be accepted."""
+        req = self._request(
+            overrides={
+                "runtime.pi-extensions.pi-read.version": "0.3.0",
+            },
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.SUCCESS,
+            f"valid override must succeed, got {result.exit_kind}: {result.message}",
+        )
+
+    def test_override_selects_alternate_artifact(self) -> None:
+        """Overriding pi-read from the default 0.2.0 to 0.3.0 must
+        produce a different projection than the default, proving the
+        override reached artifact selection — not just no-op accepted."""
+        # Default run (no overrides)
+        default_result = self._run(self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        ))
+        self.assertEqual(default_result.exit_kind, ExitKind.SUCCESS)
+
+        # Overridden run
+        overridden_result = self._run(self._request(
+            overrides={
+                "runtime.pi-extensions.pi-read.version": "0.3.0",
+            },
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        ))
+        self.assertEqual(overridden_result.exit_kind, ExitKind.SUCCESS)
+
+        # The two projections must differ — different artifact selected.
+        self.assertIsNotNone(default_result.projection_hash)
+        self.assertIsNotNone(overridden_result.projection_hash)
+        self.assertNotEqual(
+            default_result.projection_hash,
+            overridden_result.projection_hash,
+            "override to alternate artifact must change the projection content",
+        )
+
+    def test_unknown_override_path_is_config_error(self) -> None:
+        """An override path that does not match any known extension
+        must be rejected before projection creation, Docker inspection,
+        or Docker execution."""
+        req = self._request(
+            overrides={
+                "runtime.pi-extensions.nonexistent.version": "1.0.0",
+            },
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.CONFIG,
+            f"unknown override must be CONFIG, got {result.exit_kind}",
+        )
+        # If any bomb exploded the test would have already failed.
+
+    def test_build_scoped_override_rejected_in_run(self) -> None:
+        """A build-scoped override path must not be accepted by
+        the run transaction.  Validation must reject it before any
+        side effect."""
+        req = self._request(
+            overrides={
+                "build.stages.toolchain.python.version": "3.15.0",
+            },
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.CONFIG,
+            f"build override in run must be CONFIG, got {result.exit_kind}",
+        )
+
+    def test_override_version_not_in_catalog_is_config_error(self) -> None:
+        """An override version that has no matching artifact catalog
+        entry must be rejected before any side effect."""
+        req = self._request(
+            overrides={
+                "runtime.pi-extensions.pi-read.version": "99.99.99",
+            },
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.CONFIG,
+            f"missing catalog entry must be CONFIG, got {result.exit_kind}",
+        )
+
+    def test_override_rejection_creates_no_projection(self) -> None:
+        """When an override is rejected, the projection factory must
+        never be called and no file must appear on disk."""
+        req = self._request(
+            overrides={
+                "runtime.pi-extensions.nonexistent.version": "1.0.0",
+            },
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        # If any bomb exploded the test would have already failed.
+        if result.projection_path is not None:
+            self.assertFalse(
+                os.path.exists(result.projection_path),
+                "rejected override must not create a projection file",
+            )
+
+    def test_default_no_overrides_produces_success(self) -> None:
+        """With no overrides supplied, the default versions from
+        the reviewed inventory must be used without error."""
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.SUCCESS,
+            "default (no overrides) must succeed",
+        )
+
+    # ── projected paths are absolute ─────────────────────────────
+
+    def test_projection_host_path_is_absolute(self) -> None:
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertTrue(
+            (result.projection_path or "").startswith("/"),
+            "projection path must be absolute",
+        )
+
+    def test_main_project_1to1_in_result(self) -> None:
+        req = self._request(
+            selection=ProjectSelection(
+                main_project="/work/main",
+                optional_projects=("/work/opt",),
+            ),
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        # Main project mounted 1:1
+        main_spec = _parse_mount_spec(result.run_args, dst="/work/main")
+        self.assertEqual(main_spec["src"], "/work/main")
+        # Optional project mounted 1:1
+        opt_spec = _parse_mount_spec(result.run_args, dst="/work/opt")
+        self.assertEqual(opt_spec["src"], "/work/opt")
+        # Both exported
+        self.assertIn("PROJECT_PATH_1=/work/main", result.run_args)
+        self.assertIn("PROJECT_PATH_2=/work/opt", result.run_args)
 
 
 if __name__ == "__main__":
