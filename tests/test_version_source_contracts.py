@@ -3,9 +3,14 @@ required Compose interpolation, and inventory-backed runtime scripts.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -489,3 +494,294 @@ class TestEntrypointRtkIntegration(unittest.TestCase):
                         "by exit 1 within 3 lines"
                     )
         self.assertTrue(found_telemetry, "rtk telemetry disable invocation not found")
+
+
+class TestEntrypointHarness(unittest.TestCase):
+    """Executable entrypoint tests with fake boundaries.
+
+    Each scenario invokes ``tests/entrypoint_harness.sh`` with
+    control environment variables.  The harness **sources the real**
+    ``docker/entrypoint.sh`` (with two mechanical sed substitutions:
+    projection path and pi-home path) — so the test exercises the
+    genuine script, not a manually maintained copy.  mountpoint,
+    gosu, python3, rtk, git, chown, chmod, and find are PATH-based
+    stubs; exec and command are function shadows.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        harness = REPO_ROOT / "tests" / "entrypoint_harness.sh"
+        if not harness.is_file():
+            raise unittest.SkipTest(f"harness not found: {harness}")
+
+        cls._scenarios: dict[str, list[str]] = {}
+        cls._exit_codes: dict[str, int] = {}
+        work_dir = tempfile.mkdtemp()
+
+        for tag, env, proj, pi_home_dir in cls._scenario_params(work_dir):
+            env["_SCENARIO"] = tag
+            env["_PROJECTION_FILE"] = proj
+            if pi_home_dir is not None:
+                env["_PI_HOME_SANDBOX"] = pi_home_dir
+                # Also classify it as a mount so is_mount_point returns true.
+                mounts = env.get("_MOUNT_RETURN_0", "")
+                env["_MOUNT_RETURN_0"] = f"{mounts} {pi_home_dir}".strip()
+            # Unset any PROJECT_PATH_* from the host.
+            clean_env = {
+                k: v for k, v in os.environ.items()
+                if not k.startswith("PROJECT_PATH_")
+            }
+            clean_env.update(env)
+            result = subprocess.run(
+                ["bash", str(harness)],
+                capture_output=True, text=True, timeout=30,
+                env=clean_env,
+            )
+            cls._exit_codes[tag] = result.returncode
+            cls._scenarios[tag] = cls._parse_one_trace(result.stdout)
+            if result.returncode != 0:
+                cls._scenarios[tag].append(f"harness_rc={result.returncode}")
+            # Clean up per-scenario sandbox.
+            if pi_home_dir is not None:
+                shutil.rmtree(pi_home_dir, ignore_errors=True)
+
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    @staticmethod
+    def _scenario_params(work_dir: str):
+        """Yield (tag, env_dict, projection_path_or_empty, pi_home_sandbox_or_none)."""
+        proj = os.path.join(work_dir, "projection.toml")
+        Path(proj).write_text("")
+
+        def _pi_home_sandbox() -> str:
+            d = tempfile.mkdtemp()
+            (Path(d) / ".keep").touch()
+            return d
+
+        def env(**kw):
+            base = {
+                "_ID_MODE": "root", "_MOUNT_RETURN_0": work_dir,
+                "_INSTALLER_FAIL": "0", "_RTK_INIT_FAIL": "0",
+                "_RTK_TELEMETRY_FAIL": "0",
+                "CHOWN_WORK_ON_START": "1",
+                "PROJECT_PATH_WORK": work_dir,
+            }
+            base.update(kw)
+            return {k: str(v) for k, v in base.items()}
+
+        # pi_home_sandbox=None → pi-home is NOT a mount (legacy scenarios)
+        yield ("COMPLETE",        env(),                                               proj,  None)
+        yield ("INST_FAIL",       env(_INSTALLER_FAIL="1"),                            proj,  None)
+        yield ("RTK_INIT_FAIL",   env(_RTK_INIT_FAIL="1"),                             proj,  None)
+        yield ("NO_PROJ",         env(),                                               "",    None)
+        yield ("NO_CHOWN",        env(CHOWN_WORK_ON_START="0"),                         proj,  None)
+        yield ("NOT_ROOT",        env(_ID_MODE="dev", CHOWN_WORK_ON_START="0"),         "",    None)
+        yield ("RTK_TELEM_FAIL",  env(_RTK_TELEMETRY_FAIL="1"),                         proj,  None)
+        # pi_home_sandbox=<dir> → pi-home IS a mount → ownership repair fires
+        yield ("PI_HOME",         env(),                                               proj,  _pi_home_sandbox())
+        yield ("PI_HOME_NOCHOWN", env(CHOWN_WORK_ON_START="0"),                         proj,  _pi_home_sandbox())
+
+    @staticmethod
+    def _parse_one_trace(stdout: str) -> list[str]:
+        in_trace = False
+        events: list[str] = []
+        for line in stdout.splitlines():
+            s = line.strip()
+            if s == "=== HARNESS TRACE BEGIN ===":
+                in_trace = True
+                continue
+            if s == "=== HARNESS TRACE END ===":
+                break
+            if not in_trace:
+                continue
+            events.append(s)
+        return events
+
+    def _events(self, scenario: str) -> list[str]:
+        return self._scenarios.get(scenario, [])
+
+    def _match_events(self, scenario: str) -> list[str]:
+        """Strip the SCENARIO: prefix from trace lines."""
+        prefix = f"{scenario}: "
+        return [
+            e[len(prefix):] if e.startswith(prefix) else e
+            for e in self._events(scenario)
+        ]
+
+    def _assert_order(self, scenario: str, *expected: str) -> None:
+        events = self._match_events(scenario)
+        idx = 0
+        for ev in expected:
+            try:
+                idx = events.index(ev, idx)
+            except ValueError:
+                self.fail(
+                    f"[{scenario}] expected {ev!r} not found "
+                    f"after index {idx}; events: {events}"
+                )
+            idx += 1
+
+    def _assert_never(self, scenario: str, *bad: str) -> None:
+        events = self._match_events(scenario)
+        for ev in bad:
+            self.assertNotIn(ev, events, f"[{scenario}] {ev!r} must not appear")
+
+    def _assert_prefix_order(self, scenario: str, *expected_prefixes: str) -> None:
+        """Assert that events with the given *prefixes* appear in order."""
+        events = self._match_events(scenario)
+        idx = 0
+        for prefix in expected_prefixes:
+            for j in range(idx, len(events)):
+                if events[j].startswith(prefix):
+                    idx = j + 1
+                    break
+            else:
+                self.fail(
+                    f"[{scenario}] no event with prefix {prefix!r} found "
+                    f"after index {idx}; events: {events}"
+                )
+
+    # ═══════════════════════════════════════════════════════════════
+    # ordering
+    # ═══════════════════════════════════════════════════════════════
+
+    def test_complete_ordering(self) -> None:
+        self._assert_order(
+            "COMPLETE",
+            "id -u",
+            "command -v mountpoint",
+            "gosu dev:dev env PYTHONPATH=/usr/local/lib/pi-cli python3 -m docker.runtime_installer install",
+            "python3 -m docker.runtime_installer install",
+            "gosu dev:dev rtk init -g --agent pi",
+            "rtk init -g --agent pi",
+            "gosu dev:dev rtk telemetry disable",
+            "rtk telemetry disable",
+            "exec gosu dev:dev /bin/true",
+            "exit_code 0",
+        )
+
+    def test_installer_runs_as_dev_via_gosu(self) -> None:
+        events = self._match_events("COMPLETE")
+        installer_lines = [
+            e for e in events
+            if "gosu dev:dev" in e and "python3" in e
+        ]
+        self.assertGreaterEqual(
+            len(installer_lines), 1,
+            f"installer must run via gosu dev:dev; got: {events}",
+        )
+
+    def test_rtk_runs_as_dev_via_gosu(self) -> None:
+        events = self._match_events("COMPLETE")
+        rtk_gosu = [e for e in events if "gosu dev:dev" in e and "rtk" in e]
+        self.assertEqual(
+            2, len(rtk_gosu),
+            f"rtk init + telemetry both via gosu; got {len(rtk_gosu)}",
+        )
+
+    # ═══════════════════════════════════════════════════════════════
+    # pi-home ownership repair (exercises the real is_mount_point path)
+    # ═══════════════════════════════════════════════════════════════
+
+    def test_pi_home_ownership_repair_before_installer(self) -> None:
+        """When /home/dev/.pi is a mount, find+chown and find+chmod
+        must execute before the installer starts."""
+        # The harness substitutes /home/dev/.pi → sandbox path.
+        # We look for find+chown, find+chmod, and chown/chmod lines
+        # that mention the sandbox path, and assert they appear
+        # before python3 (the installer).
+        events = self._match_events("PI_HOME")
+        # Last ownership-repair event must precede installer.
+        repair_prefixes = ("find ", "chown ", "chmod ")
+        installer_token = "python3 -m docker.runtime_installer install"
+
+        # Collect indices.
+        last_repair_idx = -1
+        for i, ev in enumerate(events):
+            if any(ev.startswith(p) for p in repair_prefixes):
+                last_repair_idx = i
+        self.assertGreater(
+            last_repair_idx, -1,
+            f"PI_HOME: expected ownership-repair events (find/chown/chmod); "
+            f"got: {events}",
+        )
+
+        installer_idx = events.index(installer_token)
+        self.assertLess(
+            last_repair_idx, installer_idx,
+            f"PI_HOME: ownership repair (idx {last_repair_idx}) "
+            f"must precede installer (idx {installer_idx}); events: {events}",
+        )
+
+    def test_pi_home_repair_runs_with_chown_work_zero(self) -> None:
+        """Pi-home repair is unconditional when projection is present,
+        even with CHOWN_WORK_ON_START=0."""
+        events = self._match_events("PI_HOME_NOCHOWN")
+        repair_prefixes = ("find ", "chown ", "chmod ")
+        installer_token = "python3 -m docker.runtime_installer install"
+
+        has_repair = any(
+            any(ev.startswith(p) for p in repair_prefixes)
+            for ev in events
+        )
+        self.assertTrue(
+            has_repair,
+            f"PI_HOME_NOCHOWN: pi-home repair must run even with "
+            f"CHOWN_WORK_ON_START=0; events: {events}",
+        )
+        # Also verify installer still runs.
+        self.assertIn(installer_token, events)
+
+    # ═══════════════════════════════════════════════════════════════
+    # failure abort
+    # ═══════════════════════════════════════════════════════════════
+
+    def test_installer_failure_aborts(self) -> None:
+        events = self._match_events("INST_FAIL")
+        self.assertIn("python3 -m docker.runtime_installer install", events)
+        self.assertIn("exit_code 1", events)
+        self._assert_never(
+            "INST_FAIL", "rtk init", "rtk telemetry",
+            "exec gosu dev:dev /bin/true",
+        )
+
+    def test_rtk_init_failure_aborts(self) -> None:
+        events = self._match_events("RTK_INIT_FAIL")
+        self.assertIn("rtk init -g --agent pi", events)
+        self.assertIn("exit_code 1", events)
+        self._assert_never("RTK_INIT_FAIL", "rtk telemetry",
+                           "exec gosu dev:dev /bin/true")
+
+    def test_rtk_telemetry_failure_aborts(self) -> None:
+        events = self._match_events("RTK_TELEM_FAIL")
+        self.assertIn("rtk telemetry disable", events)
+        self.assertIn("exit_code 1", events)
+        self._assert_never("RTK_TELEM_FAIL", "exec gosu dev:dev /bin/true")
+
+    # ═══════════════════════════════════════════════════════════════
+    # skip paths
+    # ═══════════════════════════════════════════════════════════════
+
+    def test_no_projection_skips_installer_and_rtk(self) -> None:
+        events = self._match_events("NO_PROJ")
+        self._assert_never(
+            "NO_PROJ", "python3", "rtk init", "rtk telemetry",
+        )
+        self.assertIn("exec gosu dev:dev /bin/true", events,
+                       "privilege drop must still happen")
+
+    def test_not_root_skips_everything(self) -> None:
+        events = self._match_events("NOT_ROOT")
+        self._assert_never(
+            "NOT_ROOT", "command -v mountpoint", "python3", "rtk",
+            "gosu dev:dev",
+        )
+        self.assertIn("exec /bin/true", events,
+                       "non-root must exec directly")
+
+    def test_chown_work_zero_skips_project_repair(self) -> None:
+        events = self._match_events("NO_CHOWN")
+        self.assertIn("python3 -m docker.runtime_installer install", events,
+                       "installer must still run")
+        self.assertIn("rtk telemetry disable", events)
+        self.assertIn("exec gosu dev:dev /bin/true", events)

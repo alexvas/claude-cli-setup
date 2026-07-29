@@ -1474,7 +1474,7 @@ class TestExactArtifactResolution(unittest.TestCase):
         install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
         self.assertEqual(1, self.ctx.download.call_count)  # type: ignore[attr-defined]
 
-    def test_installer_receives_verified_artifact_path(self) -> None:
+    def test_installer_receives_verified_bytes_not_path(self) -> None:
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
             artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
@@ -1483,9 +1483,10 @@ class TestExactArtifactResolution(unittest.TestCase):
         install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
         recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
         self.assertEqual("p", recorded["package"])
-        # The installer receives an artifact_path (local verified file),
-        # not a URL or registry reference.
-        self.assertIn("artifact_path", recorded)
+        # The installer receives verified bytes, not a mutable path.
+        self.assertIn("artifact_bytes_len", recorded)
+        self.assertNotIn("artifact_path", recorded,
+                          "installer must not receive a mutable file path")
         self.assertNotIn("url", recorded)
         self.assertNotIn("version", recorded)
 
@@ -1911,15 +1912,21 @@ class TestArtifactLifecycle(unittest.TestCase):
         self.assertLess(read_idx, inst_idx,
                         "file.read_bytes must precede install")
 
-    def test_verified_path_passed_to_install(self) -> None:
+    def test_verified_bytes_passed_to_install(self) -> None:
         self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
         install_extensions(
             self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
         )
-        read_path = self.ctx.file._last_read_path           # type: ignore[attr-defined]
-        installed_path = self.ctx.installer._last_call.get("artifact_path")  # type: ignore[attr-defined]
-        self.assertEqual(read_path, installed_path,
-                         "verified path must equal installed path")
+        # Verify the installer received bytes (not a mutable path).
+        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
+        self.assertIn("artifact_bytes_len", recorded)
+        self.assertNotIn("artifact_path", recorded,
+                         "installer must not receive a mutable file path — "
+                         "TOCTOU between read and install is closed")
+        self.assertEqual(
+            len(_dummy_bytes), recorded["artifact_bytes_len"],
+            "installer must receive the exact bytes that were verified",
+        )
 
     # ── removal on success ────────────────────────────────────────
 
@@ -2002,6 +2009,42 @@ class TestArtifactLifecycle(unittest.TestCase):
         )
         self.assertFalse(result.ok)
         self.assertEqual(0, self.ctx.installer.call_count)  # type: ignore[attr-defined]
+
+    # ── TOCTOU gap minified ─────────────────────────────────────────
+
+    def test_install_receives_verified_bytes_not_mutable_path(self) -> None:
+        """The installer receives the exact bytes that were verified,
+        not a filesystem path that could be replaced between
+        read_bytes and install.  This minifies the TOCTOU window
+        identified in Stage 10.5 item 62. TOCTOU would be closed
+        with materialize-runtime-artifacts-on-host change impementation"""
+        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
+        install_extensions(
+            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
+        )
+        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
+        self.assertIn(
+            "artifact_bytes_len", recorded,
+            "installer must receive artifact_bytes, not artifact_path",
+        )
+        self.assertNotIn(
+            "artifact_path", recorded,
+            "installer must NEVER receive a filesystem path — "
+            "the file could have been replaced between read and install",
+        )
+
+    def test_bytes_match_read_content(self) -> None:
+        """The bytes passed to install are exactly the bytes returned
+        by read_bytes — not a re-read from a potentially mutated file."""
+        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
+        install_extensions(
+            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
+        )
+        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
+        self.assertEqual(
+            len(_dummy_bytes), recorded["artifact_bytes_len"],
+            "install bytes must have the exact length of the verified content",
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -3794,10 +3837,10 @@ class _FakePackageInstaller(_CallRecorder, PackageInstaller):
         self.call_count = 0
         self._last_call: dict[str, object] = {}
 
-    def install(self, *, package: str, artifact_path: str) -> None:
+    def install(self, *, package: str, artifact_bytes: bytes) -> None:
         self._call_log.append("install")
         self.call_count += 1
-        self._last_call = {"package": package, "artifact_path": artifact_path}
+        self._last_call = {"package": package, "artifact_bytes_len": len(artifact_bytes)}
         if self._failure:
             raise self._failure
         if self._metadata is not None and package not in self._metadata._installed:
@@ -4061,6 +4104,158 @@ class TestWorkspaceCleanupOnInterruption(unittest.TestCase):
             "file.remove",
             self.ctx.file._call_log,  # type: ignore[attr-defined]
             "downloaded artifact must be removed on SystemExit",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Real-installer boundary — partial-write resilience
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestRealPackageInstallerPartialWrite(unittest.TestCase):
+    """The real installer writes to a temp file via os.write,
+    which may return after writing only part of the buffer.
+    The installer must loop until all bytes are written, and the
+    bytes passed to ``pi install`` must be exactly the original
+    artifact bytes."""
+
+    def setUp(self) -> None:
+        # Always use the real installer (not a test double).
+        self._installer = InstallContext.real_installer()
+
+    def test_partial_writes_do_not_truncate_temp_file(self) -> None:
+        """Simulate os.write returning partial counts (1 byte at a
+        time), then verify that the file passed to ``pi install``
+        contains exactly the original artifact bytes."""
+        import subprocess
+
+        artifact = b"\x00\x01\x02\x03" * 4096  # 16 KiB
+
+        # Capture the path and verify written content from within
+        # the mocked subprocess.run.
+        captured: dict[str, bytes] = {}
+
+        real_run = subprocess.run
+
+        def _fake_run(cmd, **_kw):
+            # cmd is ["pi", "install", <tmp_path>]
+            tmp_path = cmd[2]
+            with open(tmp_path, "rb") as fh:
+                captured["written"] = fh.read()
+            captured["cmd"] = cmd
+            return real_run(
+                ["true"], capture_output=True, text=True,
+            )
+
+        original_write = os.write
+        write_count = {"calls": 0}
+
+        def _partial_write(fd, data):
+            write_count["calls"] += 1
+            # Write at most 1 byte per call to force the loop.
+            chunk = data[:1]
+            return original_write(fd, chunk)
+
+        with mock.patch("os.write", side_effect=_partial_write):
+            with mock.patch(
+                "subprocess.run", side_effect=_fake_run,
+            ):
+                self._installer.install("test-pkg", artifact)
+
+        # Assertions
+        self.assertEqual(
+            captured.get("written"), artifact,
+            "bytes written to temp file must equal original artifact bytes",
+        )
+        self.assertEqual(
+            captured["cmd"][:2], ["pi", "install"],
+            "subprocess must invoke pi install",
+        )
+        self.assertTrue(
+            write_count["calls"] > 1,
+            f"partial write must trigger multiple os.write calls, "
+            f"got {write_count['calls']}",
+        )
+
+    def test_empty_artifact_completes_without_write(self) -> None:
+        """Empty artifact bytes is a valid edge-case — the
+        installer must handle it and pass an empty temp file to
+        ``pi install``."""
+        import subprocess
+
+        captured: dict[str, bytes] = {}
+        real_run = subprocess.run
+
+        def _fake_run(cmd, **_kw):
+            tmp_path = cmd[2]
+            with open(tmp_path, "rb") as fh:
+                captured["written"] = fh.read()
+            return real_run(
+                ["true"], capture_output=True, text=True,
+            )
+
+        with mock.patch("subprocess.run", side_effect=_fake_run):
+            self._installer.install("empty-pkg", b"")
+
+        self.assertEqual(
+            captured.get("written"), b"",
+            "empty artifact must produce empty temp file",
+        )
+
+    def test_subprocess_failure_propagates_install_error(self) -> None:
+        """When pi install exits non-zero, the installer must
+        raise InstallError and clean up the temp file."""
+        artifact = b"payload"
+        tmp_path_seen: list[str] = []
+
+        def _fake_run(cmd, **_kw):
+            tmp_path_seen.append(cmd[2])
+            return mock.MagicMock(
+                returncode=1, stderr="simulated failure",
+            )
+
+        with mock.patch("subprocess.run", side_effect=_fake_run):
+            with self.assertRaises(InstallError) as ctx:
+                self._installer.install("bad-pkg", artifact)
+            self.assertIn("simulated failure", str(ctx.exception))
+
+        # Temp file must be removed after failure.
+        if tmp_path_seen:
+            self.assertFalse(
+                os.path.exists(tmp_path_seen[0]),
+                "temp file must be cleaned up after install failure",
+            )
+
+    def test_os_write_zero_raises_oserror(self) -> None:
+        """os.write returning 0 must raise OSError — a zero-length
+        write would not advance the buffer, causing an infinite loop."""
+        import subprocess
+
+        artifact = b"some bytes"
+        write_calls = 0
+        original_write = os.write
+
+        def _zero_then_ok(fd, data):
+            nonlocal write_calls
+            write_calls += 1
+            if write_calls == 1:
+                return 0  # simulate stalled write
+            return original_write(fd, data)
+
+        def _fake_run(cmd, **_kw):
+            return subprocess.run(
+                ["true"], capture_output=True, text=True,
+            )
+
+        with mock.patch("os.write", side_effect=_zero_then_ok):
+            with mock.patch("subprocess.run", side_effect=_fake_run):
+                with self.assertRaises(OSError) as ctx:
+                    self._installer.install("pkg", artifact)
+                self.assertIn("os.write returned 0", str(ctx.exception))
+
+        self.assertEqual(
+            write_calls, 1,
+            "installer must not call os.write again after zero return",
         )
 
 

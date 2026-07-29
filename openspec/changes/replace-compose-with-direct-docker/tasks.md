@@ -210,13 +210,13 @@
 
 ### INTROSPECT
 
-- [ ] 10.5 Review trust boundaries so package execution cannot precede integrity verification and failures cannot leave a falsely validated installation.
-- [ ] 10.6 Confirm installer code does not read the reviewed inventory, build projection, update providers, or override policy.
+- [x] 10.5 Review trust boundaries so package execution cannot precede integrity verification and failures cannot leave a falsely validated installation.
+- [x] 10.6 Confirm installer code does not read the reviewed inventory, build projection, update providers, or override policy.
 
 ### VALIDATE
 
-- [ ] 10.7 Run installer, entrypoint, ownership, and failure-recovery tests with fake filesystem/network/package boundaries.
-- [ ] 10.8 Run shell/static checks and `git diff --check` without Docker or network access.
+- [x] 10.7 Run installer, entrypoint, ownership, and failure-recovery tests with fake filesystem/network/package boundaries.
+- [x] 10.8 Run shell/static checks and `git diff --check` without Docker or network access.
 
 ## 11. Stage 11 — Direct Project Launcher and Run Command
 

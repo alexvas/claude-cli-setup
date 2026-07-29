@@ -419,16 +419,17 @@ class TempWorkspace(Protocol):
 
 
 class PackageInstaller(Protocol):
-    """Install a Pi extension from an already-verified local artifact.
+    """Install a Pi extension from already-verified artifact bytes.
 
-    *artifact_path* points to a local file whose checksum has been
-    verified by the installer module against the projection.
-    The installer MUST NOT download bytes or query registries.
+    *artifact_bytes* contains the exact bytes whose integrity was
+    verified against the projection.  The installer MUST NOT download
+    bytes, query registries, or re-open a filesystem path that could
+    have been replaced between verification and installation.
 
     Returns ``None`` on success or raises :class:`InstallError`.
     """
 
-    def install(self, *, package: str, artifact_path: str) -> None:
+    def install(self, *, package: str, artifact_bytes: bytes) -> None:
         ...
 
 
@@ -601,22 +602,54 @@ class InstallContext:
         import subprocess
 
         class _RealPackageInstaller:
-            def install(self, package: str, artifact_path: str) -> None:
-                """Install a local npm tarball for *package*.
+            def install(self, package: str, artifact_bytes: bytes) -> None:
+                """Install a Pi extension from verified bytes.
 
-                Uses ``pi install`` which handles npm layout and
-                metadata population under ``$PI_HOME/agent/npm/node_modules``.
+                Writes *artifact_bytes* to a private temp file,
+                invokes ``pi install``, and removes the temp file
+                on all exit paths.  The bytes are never re-read
+                from a mutable filesystem path — closing the TOCTOU
+                gap between verification and installation.
                 """
-                result = subprocess.run(
-                    ["pi", "install", artifact_path],
-                    capture_output=True,
-                    text=True,
+                import os
+                import tempfile
+
+                fd, tmp_path = tempfile.mkstemp(
+                    suffix=".tgz", prefix="pi-install-",
                 )
-                if result.returncode != 0:
-                    raise InstallError(
-                        f"pi install {package!r} failed (exit {result.returncode}): "
-                        f"{result.stderr.strip()}"
+                try:
+                    # Write all bytes — os.write() may return after
+                    # writing only part of the buffer.
+                    data = artifact_bytes
+                    while data:
+                        written = os.write(fd, data)
+                        if written <= 0:
+                            raise OSError(
+                                f"os.write returned {written}"
+                            )
+                        data = data[written:]
+                    os.close(fd)
+                    fd = -1  # guard double-close
+                    result = subprocess.run(
+                        ["pi", "install", tmp_path],
+                        capture_output=True,
+                        text=True,
                     )
+                    if result.returncode != 0:
+                        raise InstallError(
+                            f"pi install {package!r} failed (exit {result.returncode}): "
+                            f"{result.stderr.strip()}"
+                        )
+                finally:
+                    if fd >= 0:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
         return _RealPackageInstaller()
 
@@ -1202,11 +1235,11 @@ def _install_one_after_download(
             actual=binascii.hexlify(actual_digest).decode(),
         )
 
-    # ── 2d. Install from verified artifact ───────────────────────
+    # ── 2d. Install from verified bytes ──────────────────────────
     try:
         ctx.installer.install(
             package=entry.package,
-            artifact_path=verified_path,
+            artifact_bytes=content,
         )
     except InstallError:
         raise
