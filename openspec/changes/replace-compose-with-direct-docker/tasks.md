@@ -222,7 +222,7 @@
 
 ### RED
 
-- [ ] 11.1 Add failing launcher tests for project selection, no-main-project errors, optional projects, `pi-N` allocation, Pi home, 1:1 mounts, working directory, and `PROJECT_PATH_*`.
+- [x] 11.1 Add failing launcher tests for project selection, no-main-project errors, optional projects, `pi-N` allocation, Pi home, 1:1 mounts, working directory, and `PROJECT_PATH_*`.
 - [ ] 11.2 Add failing run-transaction tests for runtime overrides, private projection creation, read-only mount, gateway mapping, TTY modes, dry-run, Docker failure, and projection cleanup.
 - [ ] 11.3 Model Docker inspection and execution behind injected process fakes so all launcher tests remain daemon-independent.
 
@@ -271,7 +271,7 @@
 
 ### GREEN
 
-- [ ] 13.3 Migrate rootless helpers, examples, verification helpers, acceptance harnesses, active OpenSpec artifacts, and maintained Russian, English, and Chinese documentation.
+- [ ] 13.3 Migrate rootless helpers, examples, verification helpers, acceptance harnesses, active OpenSpec artifacts, and maintained Russian, English, and Chinese documentation; update every maintained README to remove the legacy two-additional-project limit and document consecutive `PROJECT_PATH_2..N` numbering.
 - [ ] 13.4 Remove `docker/build_wrapper.py`, user-facing `docker/versions.py`, `launch-pi.py`, Compose files/fragments/classification, obsolete verification adapters, and their superseded tests.
 - [ ] 13.5 Remove `docker/gen-models-json.py`, generator-only tests, stale inf-splitter settings, runtime copies of reviewed/build metadata, and Docker Compose prerequisites.
 

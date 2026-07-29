@@ -8,6 +8,7 @@ The system SHALL launch the canonical Pi runtime image using an explicit direct 
 - **THEN** the launcher SHALL run `docker run` with `--rm`, an allocated `pi-N` name, and interactive terminal behavior
 - **AND** SHALL mount the host Pi home at `/home/dev/.pi`
 - **AND** SHALL mount the main and additional selected projects 1:1
+- **AND** all selected additional projects SHALL be mounted and numbered consecutively
 - **AND** SHALL set the main project as the working directory
 - **AND** SHALL pass `PROJECT_PATH_1` and any extra project paths through container environment variables
 - **AND** SHALL add the resolved `host.docker.internal` mapping
