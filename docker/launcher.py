@@ -196,6 +196,27 @@ class RunExecutor(Protocol):
         ...
 
 
+class ProcessRunner:
+    """Injectable process-execution boundary.
+
+    Subclass and override ``run`` for in-memory fakes that return
+    :class:`ProcessResult` instead of invoking a real subprocess.
+    """
+
+    def run(self, argv: list[str]) -> ProcessResult:
+        """Execute *argv* and return a structured result."""
+        import subprocess
+        proc = subprocess.run(
+            argv, text=True, capture_output=True, check=False,
+        )
+        return ProcessResult(
+            argv=tuple(argv),
+            return_code=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
+
+
 @dataclass(frozen=True)
 class RunRequest:
     """Immutable all inputs for a run transaction.
@@ -305,3 +326,33 @@ def orchestrate_run(request: RunRequest) -> RunResult:
        propagate error.
     """
     raise NotImplementedError("orchestrate_run")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Docker-backed boundaries
+# ═══════════════════════════════════════════════════════════════════
+
+
+class DockerContainerInspector:
+    """Real :class:`ContainerNameInspector` backed by ``docker ps -a``
+    through an injectable :class:`ProcessRunner`."""
+
+    def __init__(self, runner: ProcessRunner) -> None:
+        self._runner = runner
+
+    def list_names(self) -> set[str]:
+        """Run ``docker ps -a --format '{{.Names}}'`` and return the
+        set of container names."""
+        raise NotImplementedError("DockerContainerInspector.list_names")
+
+
+class DockerRunExecutor:
+    """Real :class:`RunExecutor` backed by ``docker run ...``
+    through an injectable :class:`ProcessRunner`."""
+
+    def __init__(self, runner: ProcessRunner) -> None:
+        self._runner = runner
+
+    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+        """Execute the rendered ``docker`` argument vector."""
+        raise NotImplementedError("DockerRunExecutor.run")

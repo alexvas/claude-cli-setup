@@ -224,7 +224,7 @@
 
 - [x] 11.1 Add failing launcher tests for project selection, no-main-project errors, optional projects, `pi-N` allocation, Pi home, 1:1 mounts, working directory, and `PROJECT_PATH_*`.
 - [x] 11.2 Add failing run-transaction tests for runtime overrides, private projection creation, read-only mount, gateway mapping, TTY modes, dry-run, Docker failure, and projection cleanup.
-- [ ] 11.3 Model Docker inspection and execution behind injected process fakes so all launcher tests remain daemon-independent.
+- [x] 11.3 Model Docker inspection and execution behind injected process fakes so all launcher tests remain daemon-independent.
 
 ### GREEN
 

@@ -27,8 +27,11 @@ import unittest
 from docker.launcher import (
     ContainerInspectError,
     ContainerNameInspector,
+    DockerContainerInspector,
+    DockerRunExecutor,
     NoMainProjectError,
     ProcessResult,
+    ProcessRunner,
     ProjectSelection,
     ProjectSelector,
     ProjectionFactory,
@@ -38,6 +41,35 @@ from docker.launcher import (
 )
 from docker.versioning.rendering import RunRenderInputs, render_run_vector
 from docker.versioning.dispatch_types import ExitKind
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Shared test doubles
+# ═══════════════════════════════════════════════════════════════════
+
+
+class FakeProcessRunner(ProcessRunner):
+    """Deterministic :class:`ProcessRunner` that consumes canned
+    :class:`ProcessResult` responses in FIFO order.  Falls back to
+    a non-zero result when no responses remain."""
+
+    def __init__(self, responses: list[ProcessResult] | None = None) -> None:
+        self._responses: list[ProcessResult] = list(responses or [])
+        self.calls: list[list[str]] = []
+
+    def run(self, argv: list[str]) -> ProcessResult:
+        self.calls.append(argv)
+        if self._responses:
+            return self._responses.pop(0)
+        return ProcessResult(
+            argv=tuple(argv),
+            return_code=1,
+            stdout="",
+            stderr=f"no canned response for {argv[0]}",
+        )
+
+    def add(self, result: ProcessResult) -> None:
+        self._responses.append(result)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1481,6 +1513,156 @@ class TestRunTransaction(unittest.TestCase):
         # Both exported
         self.assertIn("PROJECT_PATH_1=/work/main", result.run_args)
         self.assertIn("PROJECT_PATH_2=/work/opt", result.run_args)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 11.3 - Docker-backed boundaries (ProcessRunner injection)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDockerContainerInspector(unittest.TestCase):
+    """Contract for :class:`DockerContainerInspector` — runs
+    ``docker ps -a`` through an injected :class:`ProcessRunner`.
+    All tests are daemon-independent."""
+
+    def test_passes_correct_argv(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "ps", "-a", "--format", "{{.Names}}"),
+                return_code=0,
+                stdout="pi-1\npi-2\n",
+            ),
+        ])
+        inspector = DockerContainerInspector(runner)
+        names = inspector.list_names()
+        self.assertEqual(names, {"pi-1", "pi-2"})
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(
+            runner.calls[0],
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+        )
+
+    def test_parses_docker_ps_output(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(
+                argv=(),
+                return_code=0,
+                stdout="pi-1\npi-3\npi-7\n",
+            ),
+        ])
+        inspector = DockerContainerInspector(runner)
+        self.assertEqual(inspector.list_names(), {"pi-1", "pi-3", "pi-7"})
+
+    def test_empty_output_no_containers(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(argv=(), return_code=0, stdout=""),
+        ])
+        inspector = DockerContainerInspector(runner)
+        self.assertEqual(inspector.list_names(), set())
+
+    def test_whitespace_only_output(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(argv=(), return_code=0, stdout="\n  \n"),
+        ])
+        inspector = DockerContainerInspector(runner)
+        self.assertEqual(inspector.list_names(), set())
+
+    def test_docker_unavailable_raises_inspect_error(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(
+                argv=(),
+                return_code=1,
+                stderr="Cannot connect to the Docker daemon",
+            ),
+        ])
+        inspector = DockerContainerInspector(runner)
+        with self.assertRaises(ContainerInspectError):
+            inspector.list_names()
+
+    def test_process_runner_oserror_wrapped_as_inspect_error(self) -> None:
+        """ContainerNameInspector promises ContainerInspectError when
+        Docker is unavailable.  Raw OSError from the process runner
+        must be caught and wrapped so callers only handle the
+        documented domain error."""
+        class BrokenRunner(ProcessRunner):
+            def run(self, argv: list[str]) -> ProcessResult:
+                raise OSError("docker not found")
+
+        inspector = DockerContainerInspector(BrokenRunner())
+        with self.assertRaises(ContainerInspectError) as ctx:
+            inspector.list_names()
+        self.assertIn("docker not found", str(ctx.exception))
+
+    def test_duplicate_names_in_output(self) -> None:
+        """If docker ps returns duplicates, they collapse to a single set entry."""
+        runner = FakeProcessRunner([
+            ProcessResult(
+                argv=(),
+                return_code=0,
+                stdout="pi-1\npi-1\npi-2\n",
+            ),
+        ])
+        inspector = DockerContainerInspector(runner)
+        self.assertEqual(inspector.list_names(), {"pi-1", "pi-2"})
+
+
+class TestDockerRunExecutor(unittest.TestCase):
+    """Contract for :class:`DockerRunExecutor` — passes the rendered
+    ``docker`` argument vector through an injected
+    :class:`ProcessRunner`.  All tests are daemon-independent."""
+
+    def test_passes_argv_through_to_runner(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "run", "--rm", "alpine"),
+                return_code=0,
+            ),
+        ])
+        executor = DockerRunExecutor(runner)
+        result = executor.run(("docker", "run", "--rm", "alpine"))
+        self.assertEqual(result.return_code, 0)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(
+            runner.calls[0],
+            ["docker", "run", "--rm", "alpine"],
+        )
+
+    def test_returns_process_result_unchanged(self) -> None:
+        canned = ProcessResult(
+            argv=("docker", "run", "img"),
+            return_code=0,
+            stdout="hello",
+            stderr="",
+        )
+        runner = FakeProcessRunner([canned])
+        executor = DockerRunExecutor(runner)
+        result = executor.run(("docker", "run", "img"))
+        self.assertEqual(result.argv, ("docker", "run", "img"))
+        self.assertEqual(result.return_code, 0)
+        self.assertEqual(result.stdout, "hello")
+        self.assertEqual(result.stderr, "")
+
+    def test_nonzero_exit_preserved(self) -> None:
+        runner = FakeProcessRunner([
+            ProcessResult(
+                argv=("docker", "run", "bad"),
+                return_code=127,
+                stderr="image not found",
+            ),
+        ])
+        executor = DockerRunExecutor(runner)
+        result = executor.run(("docker", "run", "bad"))
+        self.assertEqual(result.return_code, 127)
+        self.assertIn("image not found", result.stderr)
+
+    def test_process_runner_oserror_propagates(self) -> None:
+        class BrokenRunner(ProcessRunner):
+            def run(self, argv: list[str]) -> ProcessResult:
+                raise OSError("docker not found")
+
+        executor = DockerRunExecutor(BrokenRunner())
+        with self.assertRaises(OSError):
+            executor.run(("docker", "run", "img"))
 
 
 if __name__ == "__main__":
