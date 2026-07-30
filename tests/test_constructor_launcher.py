@@ -920,7 +920,10 @@ class _RecordingHandle:
 
 class RecordingProjectionFactory:
     """Spy :class:`ProjectionFactory` that records every call and
-    returns :class:`_RecordingHandle` instances for inspection."""
+    returns :class:`_RecordingHandle` instances for inspection.
+
+    The content hash is computed from the serialized projection so
+    override-selection tests can prove artifact switching."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[object, str]] = []
@@ -932,8 +935,27 @@ class RecordingProjectionFactory:
         *,
         parent_dir: str,
     ) -> _RecordingHandle:
+        import dataclasses
+        import hashlib
+        import json
+
+        # Convert the projection to a plain dict for hashing.
+        # dataclasses.asdict chokes on MappingProxyType, so we
+        # rebuild the extensions dict manually.
+        raw_proj: dict[str, object] = {
+            "extensions": {
+                name: dataclasses.asdict(entry)
+                for name, entry in getattr(
+                    projection, "extensions", {}
+                ).items()
+            }
+        }
+        raw = json.dumps(raw_proj, sort_keys=True, default=str)
+        content_hash = hashlib.sha256(
+            raw.encode("utf-8")
+        ).hexdigest()
         path = os.path.join(parent_dir, "proj.toml")
-        h = _RecordingHandle(path, "sha256-000102030405060708090a0b0c0d0e0f")
+        h = _RecordingHandle(path, content_hash)
         self.calls.append((projection, parent_dir))
         self.handles.append(h)
         return h
@@ -991,6 +1013,7 @@ class TestRunTransaction(unittest.TestCase):
             "selection": ProjectSelection(main_project="/work/p1"),
             "pi_home_host": "/home/alice/.pi",
             "projection_parent_dir": self._proj_parent,
+            "_create_projection": RecordingProjectionFactory(),
         }
         kwargs.update(overrides)
         return RunRequest(**kwargs)  # type: ignore[arg-type]
@@ -1146,6 +1169,36 @@ class TestRunTransaction(unittest.TestCase):
         self.assertEqual(result.container_name, "pi-3")
         name_idx = result.run_args.index("--name")
         self.assertEqual(result.run_args[name_idx + 1], "pi-3")
+
+    def test_default_factory_creates_real_projection_and_cleans_up(self) -> None:
+        """When no _create_projection is injected, the default
+        factory must call the real create_runtime_projection and
+        produce a handle whose path is under the repository-owned
+        runtime directory.  The handle must clean up on exit."""
+        req = self._request(
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+            _create_projection=None,
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertIsNotNone(result.projection_path)
+        expected_prefix = os.path.realpath(
+            os.path.join(os.path.dirname(__file__), "..",
+                         ".docker-generated", "runtime"),
+        )
+        self.assertTrue(
+            os.path.realpath(
+                result.projection_path  # type: ignore[arg-type]
+            ).startswith(expected_prefix),
+            f"default factory path {result.projection_path!r} "
+            f"must be under {expected_prefix!r}",
+        )
+        # The handle must have cleaned up on exit.
+        self.assertFalse(
+            os.path.exists(result.projection_path),  # type: ignore[arg-type]
+            "default factory handle must remove projection after exit",
+        )
 
     # ── dry-run ──────────────────────────────────────────────────
 

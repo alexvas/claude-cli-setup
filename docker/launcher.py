@@ -25,6 +25,7 @@ from typing import Protocol, Mapping
 from types import MappingProxyType
 
 from docker.versioning.dispatch_types import ExitKind
+from docker.versioning.rendering import RunRenderInputs
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -136,7 +137,48 @@ def resolve_project_selection(
     3. Documented automatic selection (if retained)
     4. Raise :class:`NoMainProjectError`
     """
-    raise NotImplementedError("resolve_project_selection")
+    resolved_main: str | None = None
+    resolved_optional: tuple[str, ...] = ()
+
+    if main_project is not None:
+        # Explicit main wins; optionals come from CLI
+        resolved_main = main_project
+        resolved_optional = tuple(projects)
+    elif tui and selector is not None:
+        # Unwrapped paragraph
+        sel = selector.select()
+        if sel is None:
+            raise NoMainProjectError(
+                "No main project selected (TUI cancelled)"
+            )
+        resolved_main = sel.main_project
+        resolved_optional = sel.optional_projects
+    else:
+        raise NoMainProjectError(
+            "No main project specified.  Use --main-project / -m "
+            "to select a project directory, or --tui to choose "
+            "interactively."
+        )
+
+    # Normalise and validate
+    resolved_main = os.path.normpath(resolved_main)
+    norm_optional = tuple(os.path.normpath(p) for p in resolved_optional)
+
+    # Duplicate detection
+    seen: set[str] = {resolved_main}
+    deduped: list[str] = []
+    for p in norm_optional:
+        if p in seen:
+            raise ValueError(
+                f"Duplicate project path after normalisation: {p!r}"
+            )
+        seen.add(p)
+        deduped.append(p)
+
+    return ProjectSelection(
+        main_project=resolved_main,
+        optional_projects=tuple(deduped),
+    )
 
 
 def allocate_pi_name(inspector: ContainerNameInspector) -> str:
@@ -147,7 +189,39 @@ def allocate_pi_name(inspector: ContainerNameInspector) -> str:
     best-effort — another process may claim the name before
     ``docker run`` executes.
     """
-    raise NotImplementedError("allocate_pi_name")
+    try:
+        names = inspector.list_names()
+    except Exception:
+        raise
+
+    # Parse pi-N numbers from existing names
+    taken: set[int] = set()
+    for name in names:
+        if not name.startswith("pi-"):
+            continue
+        suffix = name[3:]
+        # Must be a positive integer with no leading zeros
+        # (pi-01 reserves pi-1 because int("01") == 1)
+        if not suffix:
+            continue
+        try:
+            n = int(suffix)
+        except ValueError:
+            continue
+        if n >= 1:
+            taken.add(n)
+
+    if not taken:
+        return "pi-1"
+
+    # Find the lowest gap (or next after max)
+    max_taken = max(taken)
+    for n in range(1, max_taken + 2):
+        if n not in taken:
+            return f"pi-{n}"
+
+    # Should never reach here — fallback safe
+    return f"pi-{max_taken + 1}"
 
 
 def build_run_inputs(
@@ -162,11 +236,23 @@ def build_run_inputs(
     tty: bool = True,
     stdin_open: bool = True,
     chown_on_start: str | None = None,
-):
+) -> RunRenderInputs:
     """Build :class:`~docker.versioning.rendering.RunRenderInputs`
     from a resolved :class:`ProjectSelection` and runtime parameters.
     """
-    raise NotImplementedError("build_run_inputs")
+    return RunRenderInputs(
+        image=image,
+        container_name=container_name,
+        pi_home_host=pi_home_host,
+        projection_host_path=projection_host_path,
+        projection_container_path=projection_container_path,
+        main_project=selection.main_project,
+        optional_projects=selection.optional_projects,
+        gateway=gateway,
+        tty=tty,
+        stdin_open=stdin_open,
+        chown_on_start=chown_on_start,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -325,7 +411,214 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     8. On any failure during steps 4–7: clean up projection,
        propagate error.
     """
-    raise NotImplementedError("orchestrate_run")
+    import shlex
+    from pathlib import Path
+
+    from docker.versioning.effective import (
+        create_runtime_projection,
+        resolve_runtime,
+    )
+    from docker.versioning.errors import (
+        EffectiveConfigError,
+        OverrideValidationError,
+        UnsupportedOverrideError,
+    )
+    from docker.versioning.inventory import load_inventory
+    from docker.versioning.rendering import render_run_vector
+
+    # ── Step 1: load inventory ──────────────────────────────
+    try:
+        inventory = load_inventory(Path(request.inventory_path))
+    except Exception as exc:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message=f"Failed to load inventory: {exc}",
+        )
+
+    # ── Step 2: apply overrides ──────────────────────────────
+    try:
+        effective = resolve_runtime(
+            inventory.runtime,
+            request.overrides,
+        )
+    except (
+        UnsupportedOverrideError,
+        OverrideValidationError,
+        EffectiveConfigError,
+        ValueError,
+    ) as exc:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+
+    # ── Step 3: dry-run ─────────────────────────────────────
+    if request.dry_run:
+        import dataclasses
+        import hashlib
+        import json
+
+        try:
+            # Compute projection hash from the resolved effective
+            # projection for display/identity purposes.
+            proj_raw: dict[str, object] = {
+                "extensions": {
+                    name: dataclasses.asdict(entry)
+                    for name, entry in effective.extensions.items()
+                }
+            }
+            projection_hash = hashlib.sha256(
+                json.dumps(
+                    proj_raw, sort_keys=True, default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            # Render a dummy projection for display purposes only.
+            # No file is ever created.
+            projection_container_path = (
+                "/run/pi-cli/docker-constructor.runtime.toml"
+            )
+            render_inputs = RunRenderInputs(
+                image=request.image,
+                container_name="pi-N",
+                pi_home_host=request.pi_home_host,
+                projection_host_path=(
+                    "/tmp/.docker-generated/runtime/projection.toml"
+                ),
+                projection_container_path=projection_container_path,
+                main_project=request.selection.main_project,
+                optional_projects=request.selection.optional_projects,
+                gateway=request.gateway,
+                tty=request.tty,
+                stdin_open=request.stdin_open,
+                command=request.command,
+                chown_on_start=request.chown_on_start,
+            )
+            run_args = render_run_vector(render_inputs)
+            display = shlex.join(run_args)
+        except Exception as exc:
+            return RunResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"Dry-run render failed: {exc}",
+            )
+        return RunResult(
+            exit_kind=ExitKind.SUCCESS,
+            run_args=run_args,
+            display_string=display,
+            projection_hash=projection_hash,
+        )
+
+    # ── boundary validation ────────────────────────────────
+    if request.executor is None:
+        return RunResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message="No executor configured",
+        )
+    if request.inspector is None:
+        return RunResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message="No container inspector configured",
+        )
+
+    # ── Step 4: create projection ───────────────────────────
+    factory = request._create_projection
+    if factory is None:
+        # The real factory generates its own unique non-existent
+        # path inside the repo's .docker-generated/runtime/.
+        # Do NOT pre-create a file — create_runtime_projection
+        # uses atomic hard-link promotion with no-clobber
+        # semantics.
+        def _real_factory(projection: object, *, parent_dir: str) -> object:
+            return create_runtime_projection(
+                projection,  # type: ignore[arg-type]
+            )
+
+        factory = _real_factory
+
+    try:
+        handle = factory(
+            effective,
+            parent_dir=request.projection_parent_dir,
+        )
+    except Exception as exc:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message=f"Failed to create runtime projection: {exc}",
+        )
+
+    projection_hash: str | None = None
+    try:
+        with handle:
+            # Capture projection identity
+            projection_path = getattr(handle, "path", None)
+            projection_hash = getattr(handle, "content_hash", None)
+            projection_container_path = (
+                "/run/pi-cli/docker-constructor.runtime.toml"
+            )
+
+            # ── Step 5: allocate pi-N ────────────────────────
+            try:
+                container_name = allocate_pi_name(request.inspector)
+            except Exception as exc:
+                return RunResult(
+                    exit_kind=ExitKind.OPERATIONAL,
+                    message=f"Failed to allocate container name: {exc}",
+                )
+
+            # ── Step 6: render vector ────────────────────────
+            render_inputs = RunRenderInputs(
+                image=request.image,
+                container_name=container_name,
+                pi_home_host=request.pi_home_host,
+                projection_host_path=projection_path or "",
+                projection_container_path=projection_container_path,
+                main_project=request.selection.main_project,
+                optional_projects=request.selection.optional_projects,
+                gateway=request.gateway,
+                tty=request.tty,
+                stdin_open=request.stdin_open,
+                command=request.command,
+                chown_on_start=request.chown_on_start,
+            )
+            run_args = render_run_vector(render_inputs)
+
+            # ── Step 7: execute ──────────────────────────────
+            try:
+                result = request.executor.run(run_args)
+            except Exception as exc:
+                return RunResult(
+                    exit_kind=ExitKind.OPERATIONAL,
+                    message=str(exc),
+                    run_args=run_args,
+                    projection_path=projection_path,
+                    projection_hash=projection_hash,
+                    container_name=container_name,
+                )
+
+            if result.return_code == 0:
+                return RunResult(
+                    exit_kind=ExitKind.SUCCESS,
+                    run_args=run_args,
+                    process_result=result,
+                    projection_path=projection_path,
+                    projection_hash=projection_hash,
+                    container_name=container_name,
+                )
+            else:
+                return RunResult(
+                    exit_kind=ExitKind.OPERATIONAL,
+                    message=f"Container exited with code "
+                            f"{result.return_code}",
+                    run_args=run_args,
+                    process_result=result,
+                    projection_path=projection_path,
+                    projection_hash=projection_hash,
+                    container_name=container_name,
+                )
+
+    finally:
+        # Step 8: projection is cleaned up by the context manager.
+        # Handle attributes are captured above before __exit__ runs.
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -337,13 +630,31 @@ class DockerContainerInspector:
     """Real :class:`ContainerNameInspector` backed by ``docker ps -a``
     through an injectable :class:`ProcessRunner`."""
 
+    _ARGV = ["docker", "ps", "-a", "--format", "{{.Names}}"]
+
     def __init__(self, runner: ProcessRunner) -> None:
         self._runner = runner
 
     def list_names(self) -> set[str]:
         """Run ``docker ps -a --format '{{.Names}}'`` and return the
         set of container names."""
-        raise NotImplementedError("DockerContainerInspector.list_names")
+        try:
+            result = self._runner.run(list(self._ARGV))
+        except OSError as exc:
+            raise ContainerInspectError(str(exc)) from exc
+
+        if result.return_code != 0:
+            raise ContainerInspectError(
+                result.stderr.strip() or "docker ps failed"
+            )
+
+        lines = result.stdout.split("\n")
+        names: set[str] = set()
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                names.add(stripped)
+        return names
 
 
 class DockerRunExecutor:
@@ -355,4 +666,4 @@ class DockerRunExecutor:
 
     def run(self, argv: tuple[str, ...]) -> ProcessResult:
         """Execute the rendered ``docker`` argument vector."""
-        raise NotImplementedError("DockerRunExecutor.run")
+        return self._runner.run(list(argv))

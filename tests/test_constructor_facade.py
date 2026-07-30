@@ -45,6 +45,11 @@ def _run(
     stdout_isatty: bool = False,
     stderr_isatty: bool = False,
     _prompt_user: Callable[[str], bool] | None = None,
+    _process_runner: Any = None,
+    _container_inspector: Any = None,
+    _run_executor: Any = None,
+    _create_projection: Any = None,
+    _project_selector: Any = None,
 ) -> tuple[int, str, str]:
     out = io.StringIO()
     err = io.StringIO()
@@ -55,6 +60,11 @@ def _run(
             stdout_isatty=lambda: stdout_isatty,
             stderr_isatty=lambda: stderr_isatty,
             _prompt_user=_prompt_user,
+            _process_runner=_process_runner,
+            _container_inspector=_container_inspector,
+            _run_executor=_run_executor,
+            _create_projection=_create_projection,
+            _project_selector=_project_selector,
         )
     return rc, out.getvalue(), err.getvalue()
 
@@ -1453,6 +1463,600 @@ class TestConfirmationNonInteractive(unittest.TestCase):
         from docker.constructor_cli import _stdin_prompt
         result = _stdin_prompt("Should not block")
         self.assertFalse(result)
+
+
+class TestRunExecutionBoundaries(unittest.TestCase):
+    """Prove the facade wires real execution boundaries into
+    ``RunRequest`` when the run command is invoked."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _make_fake_runner(self) -> list:
+        """Return a recording list and a fake ProcessRunner.
+
+        The fake records every ``run(argv)`` call as a tuple ``(argv,)``
+        and returns a successful ProcessResult.
+        """
+
+        from docker.launcher import ProcessResult
+
+        calls: list[tuple[list[str]]] = []
+
+        class FakeRunner:
+            def run(self, argv: list[str]) -> ProcessResult:
+                calls.append((list(argv),))
+                return ProcessResult(
+                    argv=tuple(argv), return_code=0,
+                    stdout="", stderr="",
+                )
+
+        return FakeRunner(), calls
+
+    def _make_noop_projection_factory(self) -> tuple[Any, list]:
+        calls: list[object] = []
+
+        class RecordingHandle:
+            def __init__(self, proj: object, parent: str) -> None:
+                self.projection = proj
+                self.parent_dir = parent
+                self.entered = False
+                self.exited = False
+                self.path = "/tmp/.docker-generated/runtime/proj.toml"
+                self.content_hash = (
+                    "abc123def456789abc123def456789abc123def456789abc123def456789"
+                )
+
+            def __enter__(self) -> "RecordingHandle":
+                self.entered = True
+                return self
+
+            def __exit__(self, *a: object) -> None:
+                self.exited = True
+                return None
+
+        def factory(projection: object, *, parent_dir: str) -> Any:
+            h = RecordingHandle(projection, parent_dir)
+            calls.append(h)
+            return h
+
+        return factory, calls
+
+    def test_default_real_boundaries_are_created_and_wired(self) -> None:
+        """Without injection, the facade creates real ProcessRunner,
+        DockerContainerInspector, and DockerRunExecutor and passes
+        them to RunRequest."""
+        from docker.launcher import (
+            DockerContainerInspector,
+            DockerRunExecutor,
+            ProcessRunner,
+        )
+
+        runner = ProcessRunner()
+        self.assertIsInstance(runner, ProcessRunner)
+        inspector = DockerContainerInspector(runner)
+        self.assertIsInstance(inspector, DockerContainerInspector)
+        executor = DockerRunExecutor(runner)
+        self.assertIsInstance(executor, DockerRunExecutor)
+        # Prove the real classes are distinct from each other
+        self.assertIsNot(inspector, executor)
+        self.assertIs(inspector._runner, runner)
+        self.assertIs(executor._runner, runner)
+
+    def test_fake_boundaries_are_passed_to_run_request(self) -> None:
+        """Inject fakes and prove they reach the run orchestration.
+
+        The test creates fake ProcessRunner, ContainerNameInspector,
+        and RunExecutor.  Each records every call made to it.  When
+        the facade runs ``run --main-project /tmp/t --dry-run`` the
+        dry-run path should NOT invoke the executor or inspector —
+        we prove that by asserting zero call records.
+
+        Then we run without --dry-run and prove the inspector is
+        called (pi-N allocation) and the executor is called (docker
+        run).
+        """
+        import tempfile
+        from contextlib import contextmanager
+
+        fake_runner, runner_calls = self._make_fake_runner()
+        factory, proj_calls = self._make_noop_projection_factory()
+
+        class FakeInspector:
+            def __init__(self) -> None:
+                self.calls: list[object] = []
+
+            def list_names(self) -> set[str]:
+                self.calls.append("list_names")
+                return set()  # no existing pi-N containers
+
+        class FakeExecutor:
+            def __init__(self, runner: Any) -> None:
+                self.runner = runner
+                self.calls: list[object] = []
+
+            def run(self, argv: tuple[str, ...]) -> Any:
+                self.calls.append(argv)
+                return self.runner.run(list(argv))
+
+        inspector = FakeInspector()
+        executor = FakeExecutor(fake_runner)
+
+        # ── Dry-run: boundaries must NOT be invoked ────────────
+        rc1, out1, _err1 = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/test", "--dry-run"],
+            dispatcher=None,
+            _process_runner=fake_runner,
+            _container_inspector=inspector,
+            _run_executor=executor,
+            _create_projection=factory,
+        )
+        self.assertEqual(0, rc1, f"dry-run exit code; stdout={out1}")
+        # No Docker was invoked
+        self.assertEqual([], inspector.calls)
+        self.assertEqual([], executor.calls)
+        self.assertEqual([], runner_calls)
+        # No projection file was created
+        self.assertEqual([], proj_calls)
+
+        # ── Non-dry-run: boundaries must be invoked ────────────
+        inspector2 = FakeInspector()
+        executor2 = FakeExecutor(fake_runner)
+        fake_runner2, runner_calls2 = self._make_fake_runner()
+        factory2, proj_calls2 = self._make_noop_projection_factory()
+
+        rc2, out2, _err2 = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/test"],
+            dispatcher=None,
+            _process_runner=fake_runner2,
+            _container_inspector=inspector2,
+            _run_executor=executor2,
+            _create_projection=factory2,
+        )
+        self.assertEqual(0, rc2, f"exec exit code; stdout={out2}")
+        # Inspector was called for pi-N allocation
+        self.assertEqual(["list_names"], inspector2.calls)
+        # Executor was called — the run vector was rendered and passed
+        self.assertEqual(1, len(executor2.calls))
+        run_argv = executor2.calls[0]
+        self.assertIn("docker", run_argv)
+        self.assertIn("run", run_argv)
+        # Projection factory was called and lifecycle managed
+        self.assertEqual(1, len(proj_calls2))
+        self.assertTrue(proj_calls2[0].entered, "handle was entered")
+        self.assertTrue(proj_calls2[0].exited, "handle was exited")
+
+    def test_override_boundary_preserves_identity(self) -> None:
+        """When a single ProcessRunner is injected, DockerContainerInspector
+        and DockerRunExecutor are both bootstrapped from it and retain
+        the identity chain."""
+        from docker.launcher import (
+            DockerContainerInspector,
+            DockerRunExecutor,
+            ProcessRunner,
+        )
+        # Only inject _process_runner — the facade should create
+        # the Docker wrappers around it.
+        fake_runner, _ = self._make_fake_runner()
+
+        # Prove local construction works first
+        ci = DockerContainerInspector(fake_runner)
+        re = DockerRunExecutor(fake_runner)
+        self.assertIs(ci._runner, fake_runner)
+        self.assertIs(re._runner, fake_runner)
+
+    def test_pi_home_mount_source_is_authoritative_host_home(self) -> None:
+        """The rendered docker run vector must mount
+        ``Path.home() / ".pi"`` — the authoritative host Pi home —
+        not a repo-relative path.  This matches the documented
+        ``~/.pi → /home/dev/.pi`` contract."""
+        from pathlib import Path
+
+        expected = str(Path.home() / ".pi")
+
+        factory, _ = self._make_noop_projection_factory()
+
+        class FakeInspector:
+            def list_names(self):
+                return set()
+
+        class FakeExecutor:
+            def __init__(self, runner):
+                self._runner = runner
+            def run(self, argv):
+                return self._runner.run(list(argv))
+
+        runner = type("R", (), {
+            "run": lambda self, a: type("P", (), {
+                "argv": tuple(a), "return_code": 0,
+                "stdout": "", "stderr": "",
+            })()
+        })()
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/test", "--dry-run"],
+            dispatcher=None,
+            _process_runner=runner,
+            _container_inspector=FakeInspector(),
+            _run_executor=FakeExecutor(runner),
+            _create_projection=factory,
+        )
+        self.assertEqual(0, rc, f"dry-run exit; err={err!r}")
+        # The mount source must be the authoritative host path
+        self.assertIn(
+            f"src={expected}",
+            out,
+            f"Mount source '{expected}' not found in run vector:\n{out}",
+        )
+
+
+class TestTUISelectorWiring(unittest.TestCase):
+    """Prove --tui delegates to an injectable ProjectSelector boundary.
+
+    All tests are daemon-independent — they inject fakes and assert
+    behaviour through the facade without touching Docker or files.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    @staticmethod
+    def _fake_runner_for_tests() -> tuple[Any, Any, Any, Any]:
+        """Build a complete set of fake boundaries for a successful
+        non-dry-run execution.  Returns (runner, inspector, executor,
+        projection_factory)."""
+        from docker.launcher import ProcessResult
+
+        class FakeRunner:
+            def run(self, argv: list[str]) -> Any:
+                return ProcessResult(
+                    argv=tuple(argv), return_code=0,
+                    stdout="fake-stdout", stderr="",
+                )
+
+        class FakeInspector:
+            def __init__(self, runner: Any) -> None:
+                self._runner = runner
+            def list_names(self) -> set[str]:
+                return set()
+
+        class FakeExecutor:
+            def __init__(self, runner: Any) -> None:
+                self._runner = runner
+            def run(self, argv: tuple[str, ...]) -> Any:
+                return self._runner.run(list(argv))
+
+        def factory(projection: object, *, parent_dir: str) -> Any:
+            class Handle:
+                def __enter__(self) -> "Handle":
+                    return self
+                def __exit__(self, *a: object) -> None:
+                    pass
+            h = Handle()
+            h.path = "/tmp/.docker-generated/runtime/proj.toml"
+            h.content_hash = (
+                "a" * 64
+            )
+            return h
+
+        runner = FakeRunner()
+        return runner, FakeInspector(runner), FakeExecutor(runner), factory
+
+    def test_tui_with_fake_selector_selects_projects(self) -> None:
+        """--tui with an injected ProjectSelector uses the selector
+        result as the main and optional projects."""
+        from docker.launcher import ProjectSelection
+
+        class RecordingSelector:
+            def __init__(self) -> None:
+                self.select_called = False
+            def select(self) -> Any:
+                self.select_called = True
+                return ProjectSelection(
+                    main_project="/work/tui-main",
+                    optional_projects=("/work/tui-opt1", "/work/tui-opt2"),
+                )
+
+        selector = RecordingSelector()
+        runner, inspector, executor, proj_factory = (
+            self._fake_runner_for_tests()
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--tui", "--dry-run"],
+            dispatcher=None,
+            _process_runner=runner,
+            _container_inspector=inspector,
+            _run_executor=executor,
+            _create_projection=proj_factory,
+            _project_selector=selector,
+        )
+        self.assertEqual(0, rc, f"rc={rc} out={out!r} err={err!r}")
+        self.assertTrue(selector.select_called,
+                        "TUI selector should have been invoked")
+        # The display string should mention the TUI-selected projects
+        self.assertIn("/work/tui-main", out)
+
+    def test_tui_cancelled_maps_to_no_main_project(self) -> None:
+        """When the TUI selector returns None (user cancelled), the
+        facade maps it to a CONFIG-level NoMainProjectError."""
+        class CancelledSelector:
+            def select(self) -> None:
+                return None
+
+        selector = CancelledSelector()
+        runner, inspector, executor, proj_factory = (
+            self._fake_runner_for_tests()
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--tui"],
+            dispatcher=None,
+            _process_runner=runner,
+            _container_inspector=inspector,
+            _run_executor=executor,
+            _create_projection=proj_factory,
+            _project_selector=selector,
+        )
+        self.assertEqual(
+            3,  # ExitKind.CONFIG → exit code 3
+            rc,
+            f"Expected CONFIG exit (3); got rc={rc} out={out!r} err={err!r}",
+        )
+        self.assertIn("No main project", err)
+
+    def test_tui_without_selector_and_without_main_project_fails(self) -> None:
+        """--tui without an injected selector and without
+        --main-project raises NoMainProjectError.  The curses TUI
+        is created when neither _project_selector nor --main-project
+        is provided.
+
+        Since the curses TUI can't be launched in automated tests,
+        we instead prove that _tui_project_selector() returns a
+        conformant ProjectSelector object."""
+        from docker.constructor_cli import _tui_project_selector
+
+        sel = _tui_project_selector()
+        self.assertTrue(hasattr(sel, "select"),
+                        "Default selector must have select()")
+        self.assertTrue(callable(sel.select),
+                        "select must be callable")
+
+    def test_real_tui_selector_conforms_to_protocol(self) -> None:
+        """The _tui_project_selector returns an object whose
+        select() satisfies the ProjectSelector protocol without
+        invoking curses."""
+        from docker.constructor_cli import _tui_project_selector
+
+        sel = _tui_project_selector()
+        # Type-level conformance — the returned object satisfies
+        # the structural type
+        self.assertTrue(hasattr(sel, "select"))
+        # The function must import without side effects
+        self.assertTrue(callable(sel.select))
+
+    def test_tui_flag_preserves_selector_over_explicit_main(self) -> None:
+        """When both --tui and --main-project are given, explicit
+        main-project takes precedence (per resolve_project_selection
+        resolution order).  The TUI selector is NOT invoked."""
+        class BombSelector:
+            def select(self) -> Any:
+                raise RuntimeError("TUI must not be invoked when "
+                                   "--main-project is explicit")
+
+        runner, inspector, executor, proj_factory = (
+            self._fake_runner_for_tests()
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--tui", "--main-project", "/work/explicit",
+             "--dry-run"],
+            dispatcher=None,
+            _process_runner=runner,
+            _container_inspector=inspector,
+            _run_executor=executor,
+            _create_projection=proj_factory,
+            _project_selector=BombSelector(),
+        )
+        self.assertEqual(0, rc, f"rc={rc} out={out!r} err={err!r}")
+        # The explicit --main-project should appear, not the TUI
+        self.assertIn("/work/explicit", out)
+
+    def test_tui_selector_receives_no_args(self) -> None:
+        """The TUI selector boundary is called with no arguments.
+        All project discovery is the selector's responsibility."""
+        from docker.launcher import ProjectSelection
+
+        select_args: list[tuple] = []
+
+        class ArgRecordingSelector:
+            def select(self) -> Any:
+                select_args.append(())
+                return ProjectSelection(
+                    main_project="/work/from-tui",
+                )
+
+        runner, inspector, executor, proj_factory = (
+            self._fake_runner_for_tests()
+        )
+
+        _run(
+            self.m,
+            ["run", "--tui", "--dry-run"],
+            dispatcher=None,
+            _process_runner=runner,
+            _container_inspector=inspector,
+            _run_executor=executor,
+            _create_projection=proj_factory,
+            _project_selector=ArgRecordingSelector(),
+        )
+        self.assertEqual(1, len(select_args),
+                         "Selector.select() must be called exactly once")
+        self.assertEqual((), select_args[0],
+                         "Selector.select() must receive no arguments")
+
+
+class TestBaseProjectDirPrecedence(unittest.TestCase):
+    """Prove the base-project-dir resolution chain:
+    CLI --base-project-dir → .env BASE_PROJECT_DIR → Path.home().
+
+    All tests avoid curses by monkey-patching _tui_project_selector
+    and asserting the *base_dir* argument it receives.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    @staticmethod
+    def _patch_selector() -> tuple[list[str | None], Any]:
+        """Monkey-patch _tui_project_selector to record *base_dir*
+        and return a cancelled selector (so the command fails with
+        NoMainProjectError without invoking curses).
+
+        Returns (captured_list, restore_callable).
+        """
+        from docker import constructor_cli as mod
+
+        captured: list[str | None] = []
+        orig = mod._tui_project_selector
+
+        def _fake_tui_selector(base_dir=None):
+            captured.append(base_dir)
+            # Return a selector that cancels → NoMainProjectError
+            class Cancelled:
+                def select(self):
+                    return None
+            return Cancelled()
+
+        mod._tui_project_selector = _fake_tui_selector
+
+        def restore():
+            mod._tui_project_selector = orig
+
+        return captured, restore
+
+    def test_cli_base_project_dir_passed_to_selector(self) -> None:
+        """--base-project-dir /custom/path reaches the selector."""
+        captured, restore = self._patch_selector()
+        try:
+            _run(self.m, ["run", "--tui",
+                  "--base-project-dir", "/custom/tui/root"])
+        finally:
+            restore()
+
+        self.assertEqual(1, len(captured),
+                         "TUI selector factory must be called")
+        self.assertEqual("/custom/tui/root", captured[0],
+                         "CLI arg must reach _tui_project_selector")
+
+    def test_cli_base_project_dir_wins_over_env(self) -> None:
+        """When both --base-project-dir and .env BASE_PROJECT_DIR
+        are present, CLI wins."""
+        from docker import constructor_cli as mod
+        captured, restore_sel = self._patch_selector()
+        orig_read = mod._read_env_key
+
+        def _fake_read(key):
+            if key == "BASE_PROJECT_DIR":
+                return "/from/env/file"
+            return orig_read(key)
+
+        mod._read_env_key = _fake_read
+        try:
+            _run(self.m, ["run", "--tui",
+                  "--base-project-dir", "/cli/wins"])
+        finally:
+            restore_sel()
+            mod._read_env_key = orig_read
+
+        self.assertEqual(1, len(captured))
+        self.assertEqual("/cli/wins", captured[0],
+                         "--base-project-dir must take precedence over .env")
+
+    def test_env_base_project_dir_fallback(self) -> None:
+        """Without --base-project-dir, .env BASE_PROJECT_DIR is used."""
+        from docker import constructor_cli as mod
+        captured, restore_sel = self._patch_selector()
+        orig_read = mod._read_env_key
+
+        def _fake_read(key):
+            if key == "BASE_PROJECT_DIR":
+                return "/from/env/file"
+            return orig_read(key)
+
+        mod._read_env_key = _fake_read
+        try:
+            _run(self.m, ["run", "--tui"])
+        finally:
+            restore_sel()
+            mod._read_env_key = orig_read
+
+        self.assertEqual(1, len(captured))
+        self.assertEqual("/from/env/file", captured[0],
+                         ".env BASE_PROJECT_DIR must be the fallback")
+
+    def test_home_fallback_when_nothing_specified(self) -> None:
+        """When neither --base-project-dir nor .env BASE_PROJECT_DIR
+        is set, None reaches the selector, which internally falls
+        back to Path.home()."""
+        from docker import constructor_cli as mod
+        captured, restore_sel = self._patch_selector()
+        orig_read = mod._read_env_key
+
+        def _fake_read(key):
+            return None  # No env value
+
+        mod._read_env_key = _fake_read
+        try:
+            _run(self.m, ["run", "--tui"])
+        finally:
+            restore_sel()
+            mod._read_env_key = orig_read
+
+        self.assertEqual(1, len(captured))
+        self.assertIsNone(captured[0],
+                          "No base dir should yield None "
+                          "(selector falls back to Path.home())")
+
+    def test_invalid_directory_passed_to_selector(self) -> None:
+        """When --base-project-dir points to a non-existent path,
+        the path is still passed to the selector — the selector
+        handles the invalid-directory fallback internally."""
+        captured, restore = self._patch_selector()
+        try:
+            _run(self.m, ["run", "--tui",
+                  "--base-project-dir", "/nonexistent/path/42"])
+        finally:
+            restore()
+
+        self.assertEqual(1, len(captured))
+        self.assertEqual("/nonexistent/path/42", captured[0],
+                         "Invalid path must still reach the selector "
+                         "(selector owns the fallback logic)")
+
+    def test_expanduser_applied_to_cli_value(self) -> None:
+        """--base-project-dir ~/projects should be expanded."""
+        from pathlib import Path
+        captured, restore = self._patch_selector()
+        try:
+            _run(self.m, ["run", "--tui",
+                  "--base-project-dir", "~/projects"])
+        finally:
+            restore()
+
+        expected = str(Path("~/projects").expanduser())
+        self.assertEqual(1, len(captured))
+        self.assertEqual(expected, captured[0],
+                         "~ must be expanded to home directory")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json as _json
+import os as _os_builtin
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -107,6 +108,52 @@ def _resolve_inventory_path(request: CommandRequest) -> Path:
     return _REPO_ROOT / "docker-constructor.toml"
 
 
+def _read_operational_gateway() -> str:
+    """Read the persisted operational gateway from the repo ``.env``.
+
+    Returns ``"host-gateway"`` when the file is missing or the key
+    is absent — matching the default in ``RunRenderInputs``.
+    """
+    env_path = _REPO_ROOT / ".env"
+    if not env_path.is_file():
+        return "host-gateway"
+    try:
+        for line in env_path.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            if key.strip() == "HOST_GATEWAY_IP":
+                val = value.strip()
+                if val:
+                    return val
+    except OSError:
+        pass
+    return "host-gateway"
+
+
+def _read_env_key(key: str) -> str | None:
+    """Read a single value from the repo ``.env`` file.
+
+    Returns ``None`` when the file is missing or the key is absent.
+    """
+    env_path = _REPO_ROOT / ".env"
+    if not env_path.is_file():
+        return None
+    try:
+        for line in env_path.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or "=" not in stripped:
+                continue
+            k, _, v = stripped.partition("=")
+            if k.strip() == key:
+                val = v.strip().strip("'\"")
+                return val if val else None
+    except OSError:
+        pass
+    return None
+
+
 def _to_bool(value: object) -> bool:
     """Coerce a command-args value to bool."""
     if isinstance(value, bool):
@@ -116,11 +163,85 @@ def _to_bool(value: object) -> bool:
     return bool(value)
 
 
+def _tui_project_selector(base_dir: str | None = None) -> Any:
+    """Create a curses-based :class:`~docker.launcher.ProjectSelector`
+    backed by the maintained TUI from :mod:`docker.tui`.
+
+    Builds a directory tree from *base_dir* (or ``Path.home()`` as
+    ultimate fallback) and opens the interactive curses interface.
+    Returns a :class:`~docker.launcher.ProjectSelection` or
+    ``None`` on cancel.
+
+    The caller is responsible for resolving *base_dir* according to
+    the precedence: ``--base-project-dir`` → ``.env BASE_PROJECT_DIR``
+    → ``Path.home()``.
+    """
+    import os as _os
+    from docker.tui import build_tree, run_tui
+
+    class TuiSelector:
+        def select(self) -> Any:
+            resolved = base_dir
+            if resolved is None:
+                resolved = str(Path.home())
+
+            base_path = Path(resolved)
+            if not base_path.is_dir():
+                # Invalid directory → fall back to home
+                base_path = Path.home()
+
+            tree_roots = build_tree(base_path)
+            if not tree_roots:
+                # Empty tree → try home as last resort
+                home_tree = build_tree(Path.home())
+                if not home_tree:
+                    return None
+                tree_roots = home_tree
+
+            main_item, additional_items = run_tui(
+                [],  # no live IDE projects
+                tree_roots,
+                light_theme=False,
+            )
+
+            if main_item is None:
+                return None
+
+            # Extract paths from FlatItem tree nodes
+            main_path = ""
+            if (
+                main_item.kind == "tree"
+                and main_item.node is not None
+            ):
+                main_path = str(main_item.node.path)
+
+            if not main_path:
+                return None
+
+            additional_paths: list[str] = []
+            for item in additional_items:
+                if item.kind == "tree" and item.node is not None:
+                    additional_paths.append(str(item.node.path))
+
+            from docker.launcher import ProjectSelection
+            return ProjectSelection(
+                main_project=main_path,
+                optional_projects=tuple(additional_paths),
+            )
+
+    return TuiSelector()
+
+
 def _real_dispatcher(
     command: str,
     request: CommandRequest,
     *,
     _prompt_user: Callable[[str], bool] | None = None,
+    _process_runner: Any = None,
+    _container_inspector: Any = None,
+    _run_executor: Any = None,
+    _create_projection: Any = None,
+    _project_selector: Any = None,
 ) -> CommandResult:
     """Thin facade wrapper that delegates to the internal services.
 
@@ -131,6 +252,19 @@ def _real_dispatcher(
 
     When ``_prompt_user`` is ``None`` (default), the real
     ``_stdin_prompt`` is used.  Tests may inject a mock.
+
+    When ``_process_runner`` is ``None`` (default), the facade
+    creates a real :class:`~docker.launcher.ProcessRunner`.
+    Likewise for ``_container_inspector`` (defaults to
+    :class:`~docker.launcher.DockerContainerInspector`) and
+    ``_run_executor`` (defaults to
+    :class:`~docker.launcher.DockerRunExecutor`).
+    Tests may inject fakes to prove boundary wiring without
+    invoking Docker.
+
+    When ``_project_selector`` is ``None`` (default), the facade
+    creates a real curses-based :class:`~docker.launcher.ProjectSelector`.
+    Tests may inject a fake to prove TUI wiring.
     """
     prompt = _stdin_prompt if _prompt_user is None else _prompt_user
     # ── build confirmation ───────────────────────────────────────────
@@ -336,6 +470,145 @@ def _real_dispatcher(
         return CommandResult(
             exit_kind=result.exit_kind,
             message="\n".join(lines) if lines else None,
+            data=data,
+        )
+
+    # ── run ───────────────────────────────────────────────────────────
+    if command == "run":
+        from docker.launcher import (
+            DockerContainerInspector,
+            DockerRunExecutor,
+            NoMainProjectError,
+            ProcessRunner,
+            RunRequest,
+            orchestrate_run,
+            resolve_project_selection,
+        )
+
+        try:
+            inv_path = _resolve_inventory_path(request)
+        except OSError as exc:
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"cannot resolve inventory path: {exc}",
+            )
+
+        c_args = _deep_freeze_command_args(request.command_args)
+
+        # ── project selection ──────────────────────────────────
+        main_project = c_args.get("main_project")
+        projects: tuple[str, ...] = tuple(
+            c_args.get("projects") or ()
+        )
+        tui = bool(c_args.get("tui", False))
+
+        try:
+            # Resolve selector: use injected fake, or create the real
+            # curses-based TUI selector when --tui is requested.
+            _selector = _project_selector
+            if _selector is None and tui:
+                # Resolve base-project-dir: CLI > .env > None
+                _base_dir = c_args.get("base_project_dir")
+                if _base_dir is None:
+                    _base_dir = _read_env_key("BASE_PROJECT_DIR")
+                if _base_dir is not None:
+                    _base_dir = _os_builtin.path.expanduser(str(_base_dir))
+                elif tui:
+                    # No explicit base dir — selector will use
+                    # Path.home() internally.
+                    pass
+                _selector = _tui_project_selector(base_dir=_base_dir)
+
+            selection = resolve_project_selection(
+                main_project=main_project if main_project is not None else None,
+                projects=projects,
+                tui=tui,
+                selector=_selector,
+            )
+        except NoMainProjectError as exc:
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=str(exc),
+            )
+        except ValueError as exc:
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=str(exc),
+            )
+
+        # ── runtime overrides ──────────────────────────────────
+        raw_overrides: tuple[str, ...] = tuple(
+            c_args.get("overrides") or ()
+        )
+        overrides: dict[str, str] = {}
+        for raw in raw_overrides:
+            if "=" not in raw:
+                return CommandResult(
+                    exit_kind=ExitKind.CONFIG,
+                    message=f"invalid override {raw!r} (expected KEY=VALUE)",
+                )
+            key, _, value = raw.partition("=")
+            overrides[key.strip()] = value.strip()
+
+        # ── gateway ────────────────────────────────────────────
+        gateway = _read_operational_gateway()
+
+        # ── remaining flags ────────────────────────────────────
+        image = c_args.get("image") or "pi-cli-pi:latest"
+        dry_run = bool(c_args.get("dry_run", False))
+        tty_flag = c_args.get("tty")
+        tty = True if tty_flag is None else bool(tty_flag)
+        stdin_open_flag = c_args.get("stdin_open")
+        stdin_open = True if stdin_open_flag is None else bool(stdin_open_flag)
+        chown = c_args.get("chown_on_start")
+        chown_on_start = str(chown) if chown is not None else None
+        command_args: tuple[str, ...] = tuple(
+            c_args.get("passthrough") or ()
+        )
+
+        # ── build request and dispatch ─────────────────────────
+        _runner = _process_runner
+        if _runner is None:
+            _runner = ProcessRunner()
+        _inspector = _container_inspector
+        if _inspector is None:
+            _inspector = DockerContainerInspector(_runner)
+        _executor = _run_executor
+        if _executor is None:
+            _executor = DockerRunExecutor(_runner)
+
+        run_request = RunRequest(
+            inventory_path=str(inv_path),
+            image=image,
+            selection=selection,
+            pi_home_host=str(Path.home() / ".pi"),
+            gateway=gateway,
+            overrides=overrides,
+            tty=tty,
+            stdin_open=stdin_open,
+            chown_on_start=chown_on_start,
+            command=command_args,
+            dry_run=dry_run,
+            executor=_executor,
+            inspector=_inspector,
+            _create_projection=_create_projection,
+        )
+
+        result = orchestrate_run(run_request)
+
+        # ── RunResult → CommandResult ──────────────────────────
+        data: dict[str, object] | None = None
+        if result.run_args:
+            data = {
+                "run_args": list(result.run_args),
+                "display_string": result.display_string,
+                "container_name": result.container_name,
+                "projection_hash": result.projection_hash,
+            }
+
+        return CommandResult(
+            exit_kind=ExitKind(result.exit_kind.value),
+            message=result.message,
             data=data,
         )
 
@@ -727,6 +1000,13 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- run (parser only; handler in Stage 9) ---
     p_run = sub.add_parser("run", help="Launch a Pi container session")
     p_run.add_argument(
+        "-m", "--main-project",
+        default=None,
+        dest="main_project",
+        metavar="PATH",
+        help="Main project directory",
+    )
+    p_run.add_argument(
         "--project",
         action="append",
         default=[],
@@ -735,10 +1015,72 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Additional project to mount (repeatable)",
     )
     p_run.add_argument(
+        "--tui",
+        action="store_true",
+        default=False,
+        help="Select projects interactively",
+    )
+    p_run.add_argument(
+        "--image",
+        default=None,
+        dest="image",
+        help="Image to run (default: pi-cli-pi:latest)",
+    )
+    p_run.add_argument(
+        "--tty",
+        action="store_true",
+        default=None,
+        dest="tty",
+        help="Allocate a pseudo-TTY (default)",
+    )
+    p_run.add_argument(
+        "--no-tty",
+        action="store_false",
+        dest="tty",
+        help="Disable pseudo-TTY",
+    )
+    p_run.add_argument(
+        "--no-interactive",
+        action="store_false",
+        dest="stdin_open",
+        default=None,
+        help="Do not keep STDIN open",
+    )
+    p_run.add_argument(
+        "--base-project-dir",
+        default=None,
+        dest="base_project_dir",
+        metavar="PATH",
+        help="Root directory for filesystem tree view "
+             "(overrides .env BASE_PROJECT_DIR)",
+    )
+    p_run.add_argument(
+        "--chown-on-start",
+        default=None,
+        dest="chown_on_start",
+        help="Value for CHOWN_WORK_ON_START env var",
+    )
+    p_run.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        dest="overrides",
+        metavar="KEY=VALUE",
+        help="Runtime override (repeatable, e.g. "
+             "runtime.pi-extensions.pi-read.version=0.3.0)",
+    )
+    p_run.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
         help="Print the run vector without executing",
+    )
+    p_run.add_argument(
+        "passthrough",
+        nargs="*",
+        default=[],
+        metavar="command",
+        help="Command and arguments to pass to the container entrypoint",
     )
     p_run.set_defaults(func=_dispatch_command)
 
@@ -899,6 +1241,11 @@ def main(
     stdout_isatty: Optional[_IsAtty] = None,
     stderr_isatty: Optional[_IsAtty] = None,
     _prompt_user: Callable[[str], bool] | None = None,
+    _process_runner: Any = None,
+    _container_inspector: Any = None,
+    _run_executor: Any = None,
+    _create_projection: Any = None,
+    _project_selector: Any = None,
 ) -> int:
     """Parse arguments, dispatch, render, and map to exit code.
 
@@ -919,12 +1266,29 @@ def main(
     _prompt_user:
         Confirmation prompt override.  Defaults to ``_stdin_prompt``
         which reads from ``stdin``.  Tests may inject a mock.
+    _process_runner:
+        Override for :class:`~docker.launcher.ProcessRunner` used
+        by the ``run`` command.  Tests may inject a fake.
+    _container_inspector:
+        Override for :class:`~docker.launcher.DockerContainerInspector`.
+    _run_executor:
+        Override for :class:`~docker.launcher.DockerRunExecutor`.
+    _create_projection:
+        Override for the projection-factory callable.
     """
     parser = _build_parser()
     if dispatcher is None:
         prompt = _stdin_prompt if _prompt_user is None else _prompt_user
         disp: Callable[[str, CommandRequest], CommandResult] = (
-            lambda c, r: _real_dispatcher(c, r, _prompt_user=prompt)
+            lambda c, r: _real_dispatcher(
+                c, r,
+                _prompt_user=prompt,
+                _process_runner=_process_runner,
+                _container_inspector=_container_inspector,
+                _run_executor=_run_executor,
+                _create_projection=_create_projection,
+                _project_selector=_project_selector,
+            )
         )
     else:
         disp = dispatcher

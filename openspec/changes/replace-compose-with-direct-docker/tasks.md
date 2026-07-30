@@ -228,17 +228,17 @@
 
 ### GREEN
 
-- [ ] 11.4 Move project selection behind an internal launcher API and replace generated Compose fragments and `COMPOSE_FILE` assembly with the pure run renderer.
-- [ ] 11.5 Wire facade `run` to runtime resolution, private projection lifecycle, direct execution, and cleanup while preserving image and entrypoint behavior.
+- [x] 11.4 Move project selection behind an internal launcher API and replace generated Compose fragments and `COMPOSE_FILE` assembly with the pure run renderer.
+- [x] 11.5 Wire facade `run` to runtime resolution, private projection lifecycle, direct execution, and cleanup while preserving image and entrypoint behavior.
 
 ### INTROSPECT
 
-- [ ] 11.6 Verify paths remain individual arguments rather than shell/YAML strings and dry-run creates no lingering configuration files.
-- [ ] 11.7 Review concurrency, signal/exception cleanup, optional-project boundaries, and absence of reviewed/build configuration in rendered mounts.
+- [x] 11.6 Verify paths remain individual arguments rather than shell/YAML strings and dry-run creates no lingering configuration files.
+- [x] 11.7 Review concurrency, signal/exception cleanup, optional-project boundaries, and absence of reviewed/build configuration in rendered mounts.
 
 ### VALIDATE
 
-- [ ] 11.8 Run launcher, TUI, runtime lifecycle, and dry-run tests with fakes and no Docker.
+- [x] 11.8 Run launcher, TUI, runtime lifecycle, and dry-run tests with fakes and no Docker.
 
 ## 12. Stage 12 — Internal Verification and Evidence Collection APIs
 

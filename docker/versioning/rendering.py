@@ -289,13 +289,6 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
         if not p.strip():
             raise ValueError(f"optional_projects[{i}] is empty")
 
-    # At most 2 optional projects.
-    if len(inputs.optional_projects) > 2:
-        raise ValueError(
-            f"at most 2 optional projects supported, got "
-            f"{len(inputs.optional_projects)}"
-        )
-
     # Duplicate project paths (main vs optional, or among optionals).
     all_projects = [inputs.main_project] + list(inputs.optional_projects)
     seen: set[str] = set()

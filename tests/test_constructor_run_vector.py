@@ -485,17 +485,27 @@ class TestProjectValidation(unittest.TestCase):
                 optional_projects=("/home/dev/work/opt1", "/home/dev/work/opt1"),
             )
 
-    def test_more_than_two_optional_projects_rejected(self):
-        """The supported contract is main + up to 2 optional projects."""
-        with self.assertRaises(ValueError):
-            _render(
-                main_project="/home/dev/work/main",
-                optional_projects=(
-                    "/home/dev/work/opt1",
-                    "/home/dev/work/opt2",
-                    "/home/dev/work/opt3",
-                ),
-            )
+    def test_more_than_two_optional_projects_accepted(self) -> None:
+        """Direct Docker execution has no limit on optional projects
+        (the old 2-project limit was a Compose fragment artefact)."""
+        args = _render(
+            main_project="/home/dev/work/main",
+            optional_projects=(
+                "/home/dev/work/opt1",
+                "/home/dev/work/opt2",
+                "/home/dev/work/opt3",
+            ),
+        )
+        # All three optionals must appear as 1:1 mounts
+        args_str = " ".join(args)
+        self.assertIn("dst=/home/dev/work/opt1", args_str)
+        self.assertIn("dst=/home/dev/work/opt2", args_str)
+        self.assertIn("dst=/home/dev/work/opt3", args_str)
+        # All three exported as PROJECT_PATH_2,3,4
+        self.assertIn("PROJECT_PATH_1=/home/dev/work/main", args)
+        self.assertIn("PROJECT_PATH_2=/home/dev/work/opt1", args)
+        self.assertIn("PROJECT_PATH_3=/home/dev/work/opt2", args)
+        self.assertIn("PROJECT_PATH_4=/home/dev/work/opt3", args)
 
     def test_relative_main_project_rejected(self):
         with self.assertRaises(ValueError):
