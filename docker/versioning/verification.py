@@ -253,6 +253,60 @@ def _applicable_contracts(
     return tuple(result)
 
 
+# ── Normalization ────────────────────────────────────────────────────
+
+import re as _re
+
+_VERSION_TOKEN = _re.compile(r"\d+\.\d+\.\d+")
+
+
+def _strip_v(s: str) -> str:
+    """Strip a leading ``v`` or ``V`` and trailing whitespace."""
+    s = s.strip()
+    if s.startswith("v") or s.startswith("V"):
+        s = s[1:]
+    return s
+
+
+def _extract_x_y_z(s: str) -> str:
+    """Return the first ``X.Y.Z`` token found in *s*."""
+    m = _VERSION_TOKEN.search(s.strip())
+    return m.group(0) if m else s.strip()
+
+
+def _extract_v_stripped_x_y_z(s: str) -> str:
+    """Strip leading ``v``/``V``, then extract the first ``X.Y.Z`` token."""
+    return _extract_x_y_z(_strip_v(s))
+
+
+def _normalize(key: str, value: str) -> str:
+    """Apply the per-contract normalization to observed or expected output."""
+    if key in ("node.version",):
+        return _strip_v(value)
+    elif key in ("rust.version", "rust.cargo", "uv.version",
+                 "python.version", "rtk.version", "fd.version"):
+        return _extract_x_y_z(value)
+    elif key in ("ty.version", "pi.version", "openspec.version",
+                 "rust.rustfmt", "rust.clippy"):
+        return _extract_v_stripped_x_y_z(value)
+    elif key == "oh-my-zsh.revision":
+        return value.strip()
+    return value.strip()
+
+
+# ── Toml loader ──────────────────────────────────────────────────────
+
+
+def _load_build_projection(path: Path) -> dict:
+    """Load and return the effective build projection dict from *path*.
+
+    Raises ``OSError`` when the file is missing or unreadable.
+    """
+    import tomllib
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
+
+
 # ── Observation models ───────────────────────────────────────────────
 
 
@@ -308,4 +362,57 @@ def verify_build(request: VerifyBuildRequest) -> BuildVerificationResult:
     The effective build projection is read from the host only — it is
     NEVER mounted or passed into the container.
     """
-    raise NotImplementedError("verify_build — 12.1 RED")
+    errors: list[str] = []
+    observations: list[BuildObservation] = []
+
+    # 1. Load the host-side projection.
+    try:
+        projection = _load_build_projection(request.effective_projection_path)
+    except (OSError, ValueError) as exc:
+        return BuildVerificationResult(
+            image=request.image,
+            observations=(),
+            all_ok=False,
+            errors=(f"cannot read effective build projection: {exc}",),
+        )
+
+    # 2. Determine applicable contracts (rust components conditional).
+    contracts = _applicable_contracts(projection)
+
+    # 3. Run each observation.
+    for contract in contracts:
+        cmd = ("docker", "run", "--rm", request.image, *contract.command_suffix)
+        expected = _extract_expected_value(contract.key, projection)
+        try:
+            result = request.runner.run(cmd)
+        except Exception as exc:
+            errors.append(f"{contract.key}: command error: {exc}")
+            observations.append(BuildObservation(
+                key=contract.key,
+                command=cmd,
+                expected_value=expected,
+                observed_value=None,
+                ok=False,
+            ))
+            continue
+
+        observed_raw = result.stdout if result.return_code == 0 else result.stderr
+        normalized_obs = _normalize(contract.key, observed_raw)
+        normalized_exp = _normalize(contract.key, expected)
+        ok = normalized_obs == normalized_exp
+        observations.append(BuildObservation(
+            key=contract.key,
+            command=cmd,
+            expected_value=expected,
+            observed_value=observed_raw,
+            ok=ok,
+        ))
+
+    # 4. Assemble result.
+    all_ok = all(o.ok for o in observations) and len(errors) == 0
+    return BuildVerificationResult(
+        image=request.image,
+        observations=tuple(observations),
+        all_ok=all_ok,
+        errors=tuple(errors),
+    )

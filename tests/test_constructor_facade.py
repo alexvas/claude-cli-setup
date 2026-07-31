@@ -2059,5 +2059,657 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
                          "~ must be expanded to home directory")
 
 
+# ════════════════════════════════════════════════════════════════════
+# Verify facade wiring (Stage 12)
+# ════════════════════════════════════════════════════════════════════
+
+
+class TestVerifyBuildWiring(unittest.TestCase):
+    """Prove the facade wires ``verify --scope build`` through to
+    ``verify_build()`` and formats the results."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        # Create a temporary build projection that verify_build can parse.
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._proj_dir = Path(self._tmpdir.name) / ".docker-generated"
+        self._proj_dir.mkdir(parents=True)
+        proj_path = self._proj_dir / "docker-constructor.build.effective.toml"
+        proj_path.write_text(
+            '[python]\nversion = "3.12.0"\n'
+            '[node]\nimage = "node:20.11.0-bookworm-slim"\n'
+            '[rust]\nversion = "1.77.0"\n'
+            'components = ["cargo", "rustfmt", "clippy"]\n'
+            '[uv]\nversion = "0.5.0"\n'
+            '[ty]\nversion = "v0.9.0"\n'
+            '[rtk]\nversion = "0.31.0"\n'
+            '[fd]\nversion = "9.0.0"\n'
+            '[pi]\nversion = "v1.4.236"\n'
+            '[openspec]\nversion = "v0.15.0"\n'
+            '[oh-my-zsh]\nrevision = "abc1234"\n'
+        )
+        # Inventory pointing to the repo root
+        self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
+        self._inv_path.write_text(
+            '[meta]\nversion = 1\n'
+            '[environments.pi-local]\n'
+            'provider = "docker"\n'
+            'name = "pi-cli-pi"\n'
+            'tag = "latest"\n'
+        )
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _make_recording_runner(
+        self, return_code: int = 0, stdout: str = "", stderr: str = ""
+    ) -> Any:
+        from docker.launcher import ProcessResult
+
+        calls: list[tuple[str, ...]] = []
+
+        class _Rec:
+            def run(self, argv):
+                calls.append(tuple(argv))
+                return ProcessResult(
+                    argv=tuple(argv), return_code=return_code,
+                    stdout=stdout, stderr=stderr,
+                )
+
+        return _Rec(), calls
+
+    def test_build_scope_calls_verify_build_docker_run_no_rm_flags(self) -> None:
+        """``verify --scope build`` runs ``docker run --rm <image> <tool>
+        --version`` for each contract tool."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "build", "--image", "test-img:1"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        assert calls, "verify_build must invoke the runner"
+        # Every call must use 'docker run --rm test-img:1'
+        for argv in calls:
+            self.assertIn("docker", argv)
+            self.assertIn("run", argv)
+            self.assertIn("--rm", argv)
+            self.assertIn("test-img:1", argv)
+
+    def test_build_scope_success_output_format(self) -> None:
+        """``verify --scope build`` prints observations to stdout."""
+        # Return an empty string — observations will all mismatch (EMPTY),
+        # but the command itself runs successfully.
+        runner, _ = self._make_recording_runner(
+            return_code=0,
+            stdout="",
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "build", "--image", "ok-img:v1"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # OPERATIONAL exit because all observations mismatch
+        self.assertEqual(4, rc)
+        self.assertIn("Build verification", err)
+
+    def test_build_scope_failure_output_format(self) -> None:
+        """``verify --scope build`` prints ✗ for mismatches."""
+        runner, _ = self._make_recording_runner(
+            return_code=0,
+            stdout="99.99.99",  # won't match any expected
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "build", "--image", "bad-img:v2"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)  # OPERATIONAL
+        self.assertIn("FAIL", err)
+        self.assertIn("✗", err)
+
+    def test_build_json_output(self) -> None:
+        """``verify --scope build --output json`` returns structured data."""
+        runner, _ = self._make_recording_runner(
+            return_code=0,
+            stdout="1.77.0",
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "--output", "json",
+             "verify", "--scope", "build", "--image", "json-img:v3"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # JSON always writes to stdout even on failure
+        data = json.loads(out)
+        self.assertIn("data", data)
+        b = data["data"]["verification"]["build"]
+        self.assertIsInstance(b["all_ok"], bool)
+        self.assertIsInstance(b["observations"], list)
+
+
+class TestVerifyRuntimeWiring(unittest.TestCase):
+    """Prove the facade wires ``verify --scope runtime`` through to
+    ``verify_runtime()`` or returns a clear error when required
+    arguments are missing."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._proj_dir = Path(self._tmpdir.name) / ".docker-generated"
+        self._proj_dir.mkdir(parents=True)
+        # Build projection for --scope all tests
+        bp = self._proj_dir / "docker-constructor.build.effective.toml"
+        bp.write_text(
+            '[python]\nversion = "3.12.0"\n'
+            '[node]\nimage = "node:20.11.0-bookworm-slim"\n'
+            '[rust]\nversion = "1.77.0"\n'
+            'components = ["cargo", "rustfmt", "clippy"]\n'
+            '[uv]\nversion = "0.5.0"\n'
+            '[ty]\nversion = "v0.9.0"\n'
+            '[rtk]\nversion = "0.31.0"\n'
+            '[fd]\nversion = "9.0.0"\n'
+            '[pi]\nversion = "v1.4.236"\n'
+            '[openspec]\nversion = "v0.15.0"\n'
+            '[oh-my-zsh]\nrevision = "abc1234"\n'
+        )
+        # Runtime projection in .docker-generated/runtime/ (launcher-produced)
+        self._runtime_dir = self._proj_dir / "runtime"
+        self._runtime_dir.mkdir(parents=True)
+        rp = self._runtime_dir / "a1b2c3d4.toml"
+        rp.write_text(
+            '[extensions]\n'
+            '[project_paths]\n'
+            'paths = []\n'
+            '[pi_home]\n'
+            'path = "/home/dev/.pi"\n'
+            '[gateway]\n'
+            'address = "192.168.65.1"\n'
+            '[integrity]\n'
+            'sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="\n'
+        )
+        self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
+        self._inv_path.write_text(
+            '[meta]\nversion = 1\n'
+            '[environments.pi-local]\n'
+            'provider = "docker"\n'
+            'name = "pi-cli-pi"\n'
+            'tag = "latest"\n'
+        )
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _make_recording_runner(
+        self, return_code: int = 0, stdout: str = "", stderr: str = ""
+    ) -> Any:
+        from docker.launcher import ProcessResult
+
+        calls: list[tuple[str, ...]] = []
+
+        class _Rec:
+            def run(self, argv):
+                calls.append(tuple(argv))
+                return ProcessResult(
+                    argv=tuple(argv), return_code=return_code,
+                    stdout=stdout, stderr=stderr,
+                )
+
+        return _Rec(), calls
+
+    def test_runtime_without_container_no_running_containers(self) -> None:
+        """``verify --scope runtime`` without --container auto-detects
+        via ``docker ps -q --filter ancestor=<image>``.  When no
+        containers are found the result is an error."""
+        runner, calls = self._make_recording_runner(
+            return_code=0, stdout=""
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime", "--image", "no-such-img:v0"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)  # OPERATIONAL
+        self.assertIn("no running container found", err)
+        # Must have attempted docker ps
+        self.assertTrue(
+            any("ps" in c and any("ancestor" in a for a in c) for c in calls),
+            "auto-detection must run docker ps",
+        )
+
+    def test_runtime_without_container_auto_detection_succeeds(self) -> None:
+        """``verify --scope runtime`` auto-detects the container when
+        ``docker ps`` returns a single container ID."""
+        runner, calls = self._make_recording_runner(
+            return_code=0, stdout="abc123def456\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime", "--image", "good-img:v1"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # Must use the detected container in docker exec calls
+        docker_exec_calls = [
+            c for c in calls
+            if c[0] == "docker" and c[1] == "exec"
+        ]
+        self.assertTrue(docker_exec_calls, "must run docker exec checks")
+        for c in docker_exec_calls:
+            self.assertIn("abc123def456", c)
+
+    def test_runtime_auto_detection_handles_docker_ps_failure(self) -> None:
+        """When ``docker ps`` exits non-zero, the error is reported."""
+        runner, calls = self._make_recording_runner(
+            return_code=1, stderr="docker: cannot connect\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime", "--image", "bad-img:v2"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertIn("docker ps failed", err)
+
+    def test_runtime_auto_detection_oserror(self) -> None:
+        """When ``docker ps`` raises OSError, the error is reported."""
+        calls_list: list[tuple[str, ...]] = []
+
+        class _OSErrorRunner:
+            def run(self, argv):
+                calls_list.append(tuple(argv))
+                raise OSError("no docker daemon")
+
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime", "--image", "nosock-img:v3"],
+            _process_runner=_OSErrorRunner(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertIn("no docker daemon", err)
+
+    def test_explicit_runtime_projection_path(self) -> None:
+        """``--runtime-projection`` overrides auto-discovery."""
+        # Create a separate projection file
+        custom_rp = self._runtime_dir / "custom-proj.toml"
+        custom_rp.write_text(
+            '[extensions]\n'
+            '[integrity]\n'
+            'sha256 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="\n'
+        )
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-custom",
+             "--runtime-projection", str(custom_rp)],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # Must reference pi-custom in docker exec, not the auto-detected one
+        exec_calls = [c for c in calls if c[0] == "docker" and c[1] == "exec"]
+        for c in exec_calls:
+            self.assertIn("pi-custom", c)
+
+    def test_explicit_project_paths_passed_to_verify_runtime(self) -> None:
+        """``--project`` (repeatable) forwards container-side paths
+        to ``verify_runtime`` so the project presence, ownership, and
+        env-var checks use representative data."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-multi",
+             "--project", "/home/dev/p1",
+             "--project", "/home/dev/p2"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # PROJECT_PATH_1 and PROJECT_PATH_2 must appear in docker exec
+        exec_calls = [c for c in calls if c[0] == "docker" and c[1] == "exec"]
+        all_argv = " ".join(" ".join(c) for c in exec_calls)
+        self.assertIn("/home/dev/p1", all_argv,
+                      "PROJECT_PATH_1 must be checked")
+        self.assertIn("/home/dev/p2", all_argv,
+                      "PROJECT_PATH_2 must be checked")
+
+    def test_project_paths_auto_discovered_from_container(self) -> None:
+        """When ``--project`` is omitted, project paths are read from
+        ``docker exec <container> sh -c 'env | grep PROJECT_PATH_'``
+        (the launcher's own contract)."""
+        _paths = "/home/dev/alpha\n/home/dev/beta\n"
+        runner, calls = self._make_recording_runner(
+            stdout="PROJECT_PATH_1=/home/dev/alpha\n"
+                    "PROJECT_PATH_2=/home/dev/beta\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-discover"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        exec_calls = [c for c in calls if c[0] == "docker" and c[1] == "exec"]
+        all_argv = " ".join(" ".join(c) for c in exec_calls)
+        # Both auto-discovered paths must be checked
+        self.assertIn("/home/dev/alpha", all_argv,
+                      "PROJECT_PATH_1 must be auto-discovered and checked")
+        self.assertIn("/home/dev/beta", all_argv,
+                      "PROJECT_PATH_2 must be auto-discovered and checked")
+
+    def test_auto_discovery_empty_projects_is_error(self) -> None:
+        """When the container has no PROJECT_PATH_* vars, auto-discovery
+        returns an error rather than guessing."""
+        runner, calls = self._make_recording_runner(
+            stdout=""  # empty env output
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-empty"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertIn("no project paths available", err)
+
+    def test_auto_discovery_preserves_numeric_order_not_path_sort(self) -> None:
+        """PROJECT_PATH_N values are sorted by numeric suffix, not by
+        the path string.  ``PROJECT_PATH_2=/zzz`` must appear after
+        ``PROJECT_PATH_1=/aaa`` even though "/aaa" > "/zzz"."""
+        runner, calls = self._make_recording_runner(
+            stdout="PROJECT_PATH_2=/home/dev/zzz\n"
+                    "PROJECT_PATH_1=/home/dev/aaa\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-order"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        exec_calls = [c for c in calls if c[0] == "docker" and c[1] == "exec"]
+        all_argv = " ".join(" ".join(c) for c in exec_calls)
+        # Find positions of each path in the argv blob
+        pos_aaa = all_argv.find("/home/dev/aaa")
+        pos_zzz = all_argv.find("/home/dev/zzz")
+        self.assertNotEqual(-1, pos_aaa)
+        self.assertNotEqual(-1, pos_zzz)
+        # Numeric order: 1 before 2 → aaa must appear before zzz
+        self.assertLess(pos_aaa, pos_zzz,
+                        "PROJECT_PATH_1 must appear before PROJECT_PATH_2")
+
+    def test_auto_discovery_gaps_in_indices_rejected(self) -> None:
+        """Gaps in PROJECT_PATH_N (e.g., 1, 3 but no 2) are rejected."""
+        runner, calls = self._make_recording_runner(
+            stdout="PROJECT_PATH_1=/a\nPROJECT_PATH_3=/c\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-gap"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertIn("no project paths available", err)
+
+    def test_auto_discovery_non_one_start_rejected(self) -> None:
+        """PROJECT_PATH_N must start at 1; e.g., 2,3 is not 1..2."""
+        runner, calls = self._make_recording_runner(
+            stdout="PROJECT_PATH_2=/a\nPROJECT_PATH_3=/b\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-offby"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertIn("no project paths available", err)
+
+    def test_missing_runtime_projection_is_error(self) -> None:
+        """When no ``--runtime-projection`` is given and
+        ``.docker-generated/runtime/`` is empty, an error is
+        reported."""
+        # Remove the existing projection
+        for f in self._runtime_dir.iterdir():
+            f.unlink()
+        runner, calls = self._make_recording_runner(
+            return_code=0, stdout="abc123\n"
+        )
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-noproj"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertIn("no runtime projection found", err)
+
+    def test_runtime_with_container_uses_docker_exec(self) -> None:
+        """``verify --scope runtime --container pi-1`` calls
+        ``verify_runtime`` with ``docker exec pi-1 ...`` commands."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "runtime",
+             "--container", "pi-1"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # docker exec commands must reference pi-1
+        docker_exec_calls = [
+            c for c in calls
+            if c[0] == "docker" and c[1] == "exec"
+        ]
+        for c in docker_exec_calls:
+            self.assertIn("pi-1", c)
+
+    def test_runtime_all_scope_with_container(self) -> None:
+        """``verify --scope all --container pi-1`` runs both build
+        and runtime checks."""
+        runner, calls = self._make_recording_runner()
+        _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "all",
+             "--container", "pi-1", "--image", "img:v99"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # Must have both 'docker run --rm' and 'docker exec pi-1'
+        has_run = any("run" in c and "--rm" in c for c in calls)
+        has_exec = any("exec" in c and "pi-1" in c for c in calls)
+        self.assertTrue(has_run, "must include build checks via docker run")
+        self.assertTrue(has_exec, "must include runtime checks via docker exec")
+
+
+class TestVerifyEvidenceWiring(unittest.TestCase):
+    """Prove ``verify --collect-evidence`` calls ``collect_evidence()``
+    and returns bundle metadata."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def setUp(self) -> None:
+        import tempfile
+        from pathlib import Path
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._proj_dir = Path(self._tmpdir.name) / ".docker-generated"
+        self._proj_dir.mkdir(parents=True)
+        proj_path = self._proj_dir / "docker-constructor.build.effective.toml"
+        proj_path.write_text(
+            '[python]\nversion = "3.12.0"\n'
+            '[node]\nimage = "node:20.11.0-bookworm-slim"\n'
+            '[rust]\nversion = "1.77.0"\n'
+            'components = ["cargo", "rustfmt", "clippy"]\n'
+            '[uv]\nversion = "0.5.0"\n'
+            '[ty]\nversion = "v0.9.0"\n'
+            '[rtk]\nversion = "0.31.0"\n'
+            '[fd]\nversion = "9.0.0"\n'
+            '[pi]\nversion = "v1.4.236"\n'
+            '[openspec]\nversion = "v0.15.0"\n'
+            '[oh-my-zsh]\nrevision = "abc1234"\n'
+        )
+        rp = self._proj_dir / "runtime"
+        rp.mkdir(parents=True)
+        rt_proj = rp / "evidence-proj.toml"
+        rt_proj.write_text(
+            '[extensions]\n'
+            '[integrity]\n'
+            'sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="\n'
+        )
+        self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
+        self._inv_path.write_text(
+            '[meta]\nversion = 1\n'
+            '[environments.pi-local]\n'
+            'provider = "docker"\n'
+            'name = "pi-cli-pi"\n'
+            'tag = "latest"\n'
+        )
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _make_recording_runner(
+        self, return_code: int = 0, stdout: str = "", stderr: str = ""
+    ) -> Any:
+        from docker.launcher import ProcessResult
+
+        calls: list[tuple[str, ...]] = []
+
+        class _Rec:
+            def run(self, argv):
+                calls.append(tuple(argv))
+                return ProcessResult(
+                    argv=tuple(argv), return_code=return_code,
+                    stdout=stdout, stderr=stderr,
+                )
+
+        return _Rec(), calls
+
+    def test_collect_evidence_with_build_scope(self) -> None:
+        """``verify --scope build --collect-evidence`` runs
+        ``collect_evidence`` alongside build checks."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "verify", "--scope", "build", "--collect-evidence",
+             "--image", "ev-img:v1"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        # Verify build calls + docker inspect (auto) + maybe host-metadata
+        self.assertTrue(
+            any("docker" in c and "inspect" in c and "ev-img:v1" in c
+                for c in calls),
+            "must auto-run docker inspect for image metadata",
+        )
+
+    def test_collect_evidence_output_dir_reported(self) -> None:
+        """When ``--collect-evidence`` runs, the results include the
+        bundle output directory and index path."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "--output", "json",
+             "verify", "--scope", "build", "--collect-evidence",
+             "--image", "ev-img:v2"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        data = json.loads(out)
+        v = data["data"]["verification"]
+        self.assertIn("collect_evidence", v)
+        ce = v["collect_evidence"]
+        self.assertTrue(ce["all_ok"])
+        self.assertIn("output_dir", ce)
+        self.assertIn("index_path", ce)
+
+    def test_collect_evidence_with_runtime_scope(self) -> None:
+        """``verify --scope runtime --collect-evidence --container X``
+        includes runtime-specific commands in the bundle."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "--output", "json",
+             "verify", "--scope", "runtime", "--collect-evidence",
+             "--container", "pi-2"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        data = json.loads(out)
+        v = data["data"]["verification"]
+        self.assertIn("collect_evidence", v)
+        ce = v["collect_evidence"]
+        self.assertFalse(ce["dry_run"])
+        # Must contain output_dir and index_path
+        self.assertIn("output_dir", ce)
+        self.assertIn("index_path", ce)
+
+    def test_dry_run_collect_evidence(self) -> None:
+        """``--collect-evidence --dry-run`` records metadata without
+        executing evidence commands.  Uses runtime scope to avoid
+        build-level ``docker run`` calls."""
+        runner, calls = self._make_recording_runner()
+        rc, out, err = _run(
+            self.m,
+            ["--inventory", str(self._inv_path),
+             "--output", "json",
+             "verify", "--scope", "runtime", "--collect-evidence",
+             "--dry-run", "--container", "pi-dry"],
+            _process_runner=runner,
+            _prompt_user=lambda _: True,
+        )
+        data = json.loads(out)
+        ce = data["data"]["verification"]["collect_evidence"]
+        self.assertTrue(ce["dry_run"])
+        # All runner calls come from verify_runtime (not collect_evidence).
+        # In dry-run mode collect_evidence adds zero calls.  Only docker inspect
+        # is indicative of evidence collection (auto-inspect when commands empty).
+        evidence_calls = [c for c in calls if "inspect" in c]
+        self.assertEqual(0, len(evidence_calls),
+                         "collect_evidence must not invoke runner in dry-run")
+
+
 if __name__ == "__main__":
     unittest.main()

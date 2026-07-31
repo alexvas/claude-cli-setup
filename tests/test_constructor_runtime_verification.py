@@ -496,11 +496,14 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        ext = next(c for c in result.checks
-                   if c.key == "extensions.results")
-        self.assertTrue(ext.ok)
+        per_extension = [c for c in result.checks
+                         if c.key == "extensions.results"]
+        self.assertTrue(len(per_extension) >= 1)
+        self.assertTrue(all(e.ok for e in per_extension))
         # The detail should mention both installed packages.
-        self.assertIn("pi-read", ext.detail.lower() + str(ext.detail))
+        detail = " ".join(e.detail for e in per_extension)
+        self.assertIn("pi-read", detail.lower())
+        self.assertIn("pi-codex", detail.lower())
 
     def test_missing_extension_detected(self) -> None:
         handle = _fresh_runtime_handle()
@@ -519,9 +522,12 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        ext = next(c for c in result.checks
-                   if c.key == "extensions.results")
-        self.assertFalse(ext.ok)
+        per_extension = [c for c in result.checks
+                         if c.key == "extensions.results"]
+        # Find the pi-read check (missing handler → fail).
+        pi_read = next(c for c in per_extension
+                       if "pi-read" in c.detail.lower())
+        self.assertFalse(pi_read.ok)
 
     def test_version_mismatch_detected(self) -> None:
         handle = _fresh_runtime_handle()
@@ -540,9 +546,12 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        ext = next(c for c in result.checks
-                   if c.key == "extensions.results")
-        self.assertFalse(ext.ok)
+        per_extension = [c for c in result.checks
+                         if c.key == "extensions.results"]
+        # Find the pi-codex-usage check (wrong version → fail).
+        codex = next(c for c in per_extension
+                     if "pi-codex" in c.detail.lower())
+        self.assertFalse(codex.ok)
 
     def test_extensions_parsed_from_projection_not_hardcoded(self) -> None:
         """The extensions.results check reads its expectations from
@@ -607,11 +616,12 @@ class TestRuntimeProjects(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        proj = next(c for c in result.checks
-                    if c.key == "projects.present")
-        self.assertTrue(proj.ok)
-        self.assertIn("/tmp/p1", proj.detail)
-        self.assertIn("/tmp/p2", proj.detail)
+        project_checks = [c for c in result.checks
+                          if c.key == "projects.present"]
+        self.assertTrue(all(c.ok for c in project_checks))
+        detail = " ".join(c.detail for c in project_checks)
+        self.assertIn("/tmp/p1", detail)
+        self.assertIn("/tmp/p2", detail)
 
     def test_wrong_env_value_detected(self) -> None:
         """PROJECT_PATH_1 is set but to a different path → fail."""
@@ -633,9 +643,9 @@ class TestRuntimeProjects(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        proj = next(c for c in result.checks
-                    if c.key == "projects.present")
-        self.assertFalse(proj.ok)
+        project_checks = [c for c in result.checks
+                          if c.key == "projects.present"]
+        self.assertFalse(all(c.ok for c in project_checks))
 
     def test_missing_env_variable_detected(self) -> None:
         """PROJECT_PATH_2 is unset when it should exist → fail."""
@@ -656,9 +666,9 @@ class TestRuntimeProjects(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        proj = next(c for c in result.checks
-                    if c.key == "projects.present")
-        self.assertFalse(proj.ok)
+        project_checks = [c for c in result.checks
+                          if c.key == "projects.present"]
+        self.assertFalse(all(c.ok for c in project_checks))
 
     def test_unexpected_next_entry_detected(self) -> None:
         """PROJECT_PATH_3 is set but only 2 projects declared → fail."""
@@ -680,9 +690,9 @@ class TestRuntimeProjects(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        proj = next(c for c in result.checks
-                    if c.key == "projects.present")
-        self.assertFalse(proj.ok)
+        project_checks = [c for c in result.checks
+                          if c.key == "projects.present"]
+        self.assertFalse(all(c.ok for c in project_checks))
 
     def test_directory_missing_but_env_set(self) -> None:
         """PROJECT_PATH_1 is set correctly but the directory does not
@@ -785,9 +795,12 @@ class TestRuntimeOwnership(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             ))
-        own = next(c for c in result.checks
-                   if c.key == "ownership.dev")
-        self.assertFalse(own.ok)
+        per_owner = [c for c in result.checks
+                     if c.key == "ownership.dev"]
+        self.assertFalse(all(c.ok for c in per_owner))
+        # Specifically, the project path check should have failed.
+        proj_own = next(c for c in per_owner if "/tmp/p1" in c.detail)
+        self.assertFalse(proj_own.ok)
 
 
 class TestRuntimePiHome(unittest.TestCase):
@@ -948,6 +961,7 @@ class TestRuntimeVerificationStub(unittest.TestCase):
     """Explicit gate test — verify_runtime is NOT implemented yet."""
 
     def test_verify_runtime_is_not_implemented(self) -> None:
+        """Gate test — verify_runtime is now live (no longer a stub)."""
         handle = _fresh_runtime_handle()
         runner = _FakeRunner(container=_CONTAINER)
         with handle:
@@ -959,8 +973,8 @@ class TestRuntimeVerificationStub(unittest.TestCase):
                 expected_gateway="192.168.65.254",
                 runner=runner,
             )
-            with self.assertRaises(NotImplementedError):
-                verify_runtime(req)
+            result = verify_runtime(req)
+            self.assertIsInstance(result, RuntimeVerificationResult)
 
 
 # ═══════════════════════════════════════════════════════════════════════

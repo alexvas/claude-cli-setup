@@ -108,6 +108,72 @@ def _resolve_inventory_path(request: CommandRequest) -> Path:
     return _REPO_ROOT / "docker-constructor.toml"
 
 
+def _resolve_runtime_projection(
+    explicit: object, repo_root: Path,
+) -> Path | None:
+    """Resolve the runtime projection path for verification.
+
+    *explicit* is the value of ``--runtime-projection`` (a string
+    or ``None``).  When provided, it is used directly.  When absent,
+    the most recent ``*.toml`` from ``.docker-generated/runtime/``
+    is used.  Returns ``None`` when no projection can be found.
+    """
+    if explicit:
+        return Path(str(explicit))
+    runtime_dir = repo_root / ".docker-generated" / "runtime"
+    if not runtime_dir.is_dir():
+        return None
+    tomls = sorted(
+        runtime_dir.glob("*.toml"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return tomls[0] if tomls else None
+
+
+def _discover_project_paths_from_container(
+    container: str, runner: object,
+) -> tuple[Path, ...] | None:
+    """Read ``PROJECT_PATH_1..N`` env vars from *container*.
+
+    Returns the container-side paths in numeric suffix order or
+    ``None`` when the query fails, no projects are set, or the
+    indices are not 1..N consecutive.
+    """
+    try:
+        result = runner.run((
+            "docker", "exec", container, "sh", "-c",
+            "env | sort | grep '^PROJECT_PATH_'",
+        ))
+    except OSError:
+        return None
+    if result.return_code != 0 or not result.stdout.strip():
+        return None
+    # Parse (index, path) preserving duplicates
+    parsed: list[tuple[int, str]] = []
+    for line in result.stdout.strip().split("\n"):
+        if "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        value = value.strip()
+        if not value:
+            continue
+        # Extract numeric suffix: PROJECT_PATH_<N>
+        suffix = name[len("PROJECT_PATH_"):]
+        if not suffix.isdigit():
+            continue  # skip malformed keys like PROJECT_PATH_X
+        parsed.append((int(suffix), value))
+    if not parsed:
+        return None
+    # Sort by numeric index so order is preserved
+    parsed.sort(key=lambda item: item[0])
+    # Validate consecutive 1..N (no gaps, no PROJECT_PATH_10 → skip)
+    indices = [idx for idx, _ in parsed]
+    if indices != list(range(1, len(indices) + 1)):
+        return None
+    return tuple(Path(p) for _, p in parsed)
+
+
 def _read_operational_gateway() -> str:
     """Read the persisted operational gateway from the repo ``.env``.
 
@@ -610,6 +676,270 @@ def _real_dispatcher(
             exit_kind=ExitKind(result.exit_kind.value),
             message=result.message,
             data=data,
+        )
+
+    # ── verify ─────────────────────────────────────────────────────────
+    if command == "verify":
+        from docker.versioning.verification import (
+            VerifyBuildRequest,
+            verify_build,
+        )
+        from docker.versioning.runtime_verification import (
+            VerifyRuntimeRequest,
+            verify_runtime,
+        )
+        import json as _json
+
+        try:
+            inv_path = _resolve_inventory_path(request)
+        except OSError as exc:
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"cannot resolve inventory path: {exc}",
+            )
+
+        c_args = _deep_freeze_command_args(request.command_args)
+        scope = str(c_args.get("scope", "all"))
+        json_out = bool(c_args.get("json", False)) or request.output == "json"
+        collect_evidence_flag = bool(c_args.get("collect_evidence", False))
+
+        # Resolve image tag
+        image = c_args.get("image") or "pi-cli-pi:latest"
+
+        # Build projection
+        from pathlib import Path as _Path
+        _repo_root = _Path(inv_path).resolve().parent
+        build_proj_path = _repo_root / ".docker-generated" / "docker-constructor.build.effective.toml"
+
+        results: dict[str, object] = {}
+        all_ok = True
+
+        if scope in ("build", "all"):
+            from docker.launcher import ProcessRunner
+            runner = _process_runner or ProcessRunner()
+            b_result = verify_build(VerifyBuildRequest(
+                image=image,
+                effective_projection_path=build_proj_path,
+                runner=runner,
+            ))
+            results["build"] = {
+                "all_ok": b_result.all_ok,
+                "observations": [
+                    {"key": o.key, "ok": o.ok,
+                     "expected": o.expected_value,
+                     "observed": o.observed_value}
+                    for o in b_result.observations
+                ],
+                "errors": list(b_result.errors),
+            }
+            if not b_result.all_ok:
+                all_ok = False
+
+        if scope in ("runtime", "all"):
+            # Resolve the operating container.
+            container = c_args.get("container")
+            if not container:
+                # Auto-detect: docker ps -q --filter ancestor=<image>
+                _runner = _process_runner
+                if _runner is None:
+                    _runner = ProcessRunner()
+                try:
+                    ps_result = _runner.run(
+                        ("docker", "ps", "-q",
+                         "--filter", f"ancestor={image}")
+                    )
+                except OSError as exc:
+                    results["runtime"] = {
+                        "all_ok": False,
+                        "checks": [],
+                        "errors": [f"docker ps failed: {exc}"],
+                    }
+                    all_ok = False
+                    container = None
+                else:
+                    if ps_result.return_code != 0:
+                        results["runtime"] = {
+                            "all_ok": False,
+                            "checks": [],
+                            "errors": [
+                                f"docker ps failed (exit {ps_result.return_code}): "
+                                f"{ps_result.stderr.strip()}"
+                            ],
+                        }
+                        all_ok = False
+                        container = None
+                    else:
+                        ids = [
+                            lid for lid in ps_result.stdout.strip().split("\n")
+                            if lid
+                        ]
+                        if not ids:
+                            results["runtime"] = {
+                                "all_ok": False,
+                                "checks": [],
+                                "errors": [
+                                    f"no running container found for image "
+                                    f"{image!r}; start a container first or "
+                                    f"pass --container explicitly"
+                                ],
+                            }
+                            all_ok = False
+                            container = None
+                        else:
+                            container = ids[0]
+            if container:
+                # ── resolve runtime projection ────────────────────
+                runtime_proj_path = _resolve_runtime_projection(
+                    c_args.get("runtime_projection"), _repo_root
+                )
+                if runtime_proj_path is None:
+                    results["runtime"] = {
+                        "all_ok": False,
+                        "checks": [],
+                        "errors": [
+                            "no runtime projection found; "
+                            "pass --runtime-projection or ensure "
+                            ".docker-generated/runtime/ contains a .toml file"
+                        ],
+                    }
+                    all_ok = False
+                    container = None
+
+            if container:
+                # ── resolve runner (shared by discovery + verify) ─
+                _runner = _process_runner
+                if _runner is None:
+                    _runner = ProcessRunner()
+
+                # ── resolve project paths ────────────────────────
+                raw_projects = c_args.get("projects")
+                if raw_projects:
+                    _proj_paths: tuple[Path, ...] = tuple(
+                        Path(p) for p in raw_projects
+                    )
+                else:
+                    _proj_paths = _discover_project_paths_from_container(
+                        container, _runner,
+                    ) or ()
+                if not _proj_paths:
+                    results["runtime"] = {
+                        "all_ok": False,
+                        "checks": [],
+                        "errors": [
+                            "no project paths available for runtime "
+                            "verification; pass --project or ensure "
+                            "the container has PROJECT_PATH_1..N set"
+                        ],
+                    }
+                    all_ok = False
+                    container = None
+
+            if container:
+                _container_pi_home: Path = Path("/home/dev/.pi")
+                _gateway: str = _read_operational_gateway()
+
+                # _runner is already resolved above
+
+                r_result = verify_runtime(VerifyRuntimeRequest(
+                    container=container,
+                    runtime_projection_path=runtime_proj_path,
+                    project_paths=_proj_paths,
+                    container_pi_home=_container_pi_home,
+                    expected_gateway=_gateway,
+                    runner=_runner,
+                ))
+                results["runtime"] = {
+                    "all_ok": r_result.all_ok,
+                    "checks": [
+                        {"key": c.key, "ok": c.ok,
+                         "detail": c.detail}
+                        for c in r_result.checks
+                    ],
+                    "errors": list(r_result.errors),
+                }
+                if not r_result.all_ok:
+                    all_ok = False
+
+        if collect_evidence_flag:
+            from docker.versioning.evidence import (
+                collect_evidence as _collect,
+                _SystemClock as _SysClk,
+            )
+            from datetime import datetime, timezone
+
+            _image_name = image
+
+            # Output directory — create a timestamped directory.
+            _ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            evidence_dir = (
+                _Path(c_args.get("output_dir"))
+                if c_args.get("output_dir")
+                else _repo_root / ".docker-generated" / "evidence" / _ts
+            )
+
+            # Representative commands for the evidence bundle.
+            # When commands= is empty, collect_evidence auto-runs
+            # ``docker inspect`` to capture image metadata.
+            _ev_commands: list[tuple[str, ...]] = []
+            if c_args.get("container") and scope in ("runtime", "all"):
+                _cont = c_args["container"]
+                _ev_commands.append(("docker", "exec", _cont, "sha256sum",
+                                     "/run/pi-cli/docker-constructor.runtime.toml"))
+                _ev_commands.append(("docker", "exec", _cont, "cat",
+                                     "/proc/mounts"))
+
+            _runner2 = _process_runner
+            if _runner2 is None:
+                _runner2 = ProcessRunner()
+
+            _clk = _SysClk()
+
+            bundle = _collect(
+                output_dir=evidence_dir,
+                runner=_runner2,
+                clock=_clk,
+                image=_image_name,
+                commands=_ev_commands,
+                dry_run=bool(c_args.get("dry_run", False)),
+            )
+            results["collect_evidence"] = {
+                "all_ok": True,
+                "output_dir": str(bundle.output_dir),
+                "index_path": str(bundle.index_path),
+                "command_count": len(bundle.commands),
+                "note_count": len(bundle.notes),
+                "dry_run": bundle.dry_run,
+            }
+
+        if json_out:
+            return CommandResult(
+                exit_kind=ExitKind.SUCCESS if all_ok else ExitKind.OPERATIONAL,
+                message=None,
+                data={"verification": results},
+            )
+
+        # Text output
+        lines: list[str] = []
+        if "build" in results:
+            b = results["build"]
+            lines.append(f"Build verification: {'PASS' if b['all_ok'] else 'FAIL'}")
+            for obs in b["observations"]:  # type: ignore[union-attr]
+                ok = "✓" if obs["ok"] else "✗"
+                lines.append(f"  {ok} {obs['key']}: {obs['observed']}")
+            for err in b.get("errors", []):
+                lines.append(f"  ERROR: {err}")
+        if "runtime" in results:
+            r = results["runtime"]
+            lines.append(f"Runtime verification: {'PASS' if r['all_ok'] else 'FAIL'}")
+            for chk in r.get("checks", []):
+                ok = "✓" if chk["ok"] else "✗"
+                lines.append(f"  {ok} {chk['key']}: {chk.get('detail', '')}")
+            for err in r.get("errors", []):
+                lines.append(f"  ERROR: {err}")
+
+        return CommandResult(
+            exit_kind=ExitKind.SUCCESS if all_ok else ExitKind.OPERATIONAL,
+            message="\n".join(lines) if lines else "verification complete",
         )
 
     # ── read-only commands ────────────────────────────────────────────
@@ -1116,7 +1446,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_doc.set_defaults(func=_dispatch_command)
 
-    # --- verify (parser only; handler in Stage 9) ---
+    # --- verify ---
     p_ver = sub.add_parser(
         "verify", help="Verify image and runtime integrity",
     )
@@ -1131,6 +1461,51 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Output verification results as JSON",
+    )
+    p_ver.add_argument(
+        "--collect-evidence",
+        action="store_true",
+        default=False,
+        dest="collect_evidence",
+        help="Collect evidence bundle with bounded output capture",
+    )
+    p_ver.add_argument(
+        "--image",
+        default=None,
+        help="Image to verify (default: pi-cli-pi:latest)",
+    )
+    p_ver.add_argument(
+        "--container",
+        default=None,
+        help="Running container name/ID for runtime checks (default: auto-detect from docker ps -q --filter ancestor=<image>)",
+    )
+    p_ver.add_argument(
+        "--runtime-projection",
+        default=None,
+        dest="runtime_projection",
+        help="Path to host-side runtime projection TOML for runtime checks "
+             "(default: most recent .docker-generated/runtime/*.toml)",
+    )
+    p_ver.add_argument(
+        "--project",
+        action="append",
+        default=None,
+        dest="projects",
+        help="Project path inside the container (repeatable). "
+             "Default: auto-discovered from container PROJECT_PATH_1..N "
+             "env vars.",
+    )
+    p_ver.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for evidence bundle output (default: .docker-generated/evidence/<iso-stamp>)",
+    )
+    p_ver.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        dest="dry_run",
+        help="Record command metadata without executing",
     )
     p_ver.set_defaults(func=_dispatch_command)
 

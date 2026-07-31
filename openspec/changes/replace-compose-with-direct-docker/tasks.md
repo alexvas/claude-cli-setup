@@ -250,17 +250,17 @@
 
 ### GREEN
 
-- [ ] 12.4 Consolidate verification rules behind structured internal APIs and wire facade `verify` to check selection and presentation only.
-- [ ] 12.5 Implement `verify --collect-evidence` over injected process/filesystem boundaries, including canonical build and representative runtime observations.
+- [x] 12.4 Consolidate verification rules behind structured internal APIs and wire facade `verify` to check selection and presentation only.
+- [x] 12.5 Implement `verify --collect-evidence` over injected process/filesystem boundaries, including canonical build and representative runtime observations.
 
 ### INTROSPECT
 
-- [ ] 12.6 Ensure verification executables are no longer competing public entry points and the collector does not duplicate facade or launcher domain logic.
-- [ ] 12.7 Review bundle determinism, size bounds, secret/environment redaction, host metadata, and diagnostic completeness.
+- [x] 12.6 Ensure verification executables are no longer competing public entry points and the collector does not duplicate facade or launcher domain logic.
+- [x] 12.7 Review bundle determinism, size bounds, secret/environment redaction, host metadata, and diagnostic completeness.
 
 ### VALIDATE
 
-- [ ] 12.8 Run verification and collector tests against fake subprocesses and inspect generated fixtures without Docker.
+- [x] 12.8 Run verification and collector tests against fake subprocesses and inspect generated fixtures without Docker.
 
 ## 13. Stage 13 — Repository Migration and Obsolete Surface Removal
 

@@ -142,4 +142,218 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
     The effective runtime projection is read from the host only — it is
     NEVER mounted or passed into the container as part of verification.
     """
-    raise NotImplementedError("verify_runtime — 12.2 RED")
+    import hashlib
+    import tomllib
+
+    errors: list[str] = []
+    checks: list[RuntimeCheck] = []
+    runner = request.runner
+    container = request.container
+    pi_home = str(request.container_pi_home)
+    pp = request.project_paths
+
+    # ── Load projection + compute host hash ──────────────────────────
+    try:
+        proj_path = Path(request.runtime_projection_path)
+        proj_bytes = proj_path.read_bytes()
+        host_hash = hashlib.sha256(proj_bytes).hexdigest()
+        proj_data = tomllib.loads(proj_bytes.decode())
+    except (OSError, ValueError) as exc:
+        return RuntimeVerificationResult(
+            container=container,
+            checks=(),
+            all_ok=False,
+            errors=(f"cannot read runtime projection: {exc}",),
+        )
+
+    def _exec(cmd: tuple[str, ...]) -> ProcessResult:
+        """Run ``docker exec <container> ...``."""
+        return runner.run(("docker", "exec", container, *cmd))
+
+    def _add(key: str, ok: bool, detail: str) -> None:
+        checks.append(RuntimeCheck(key=key, ok=ok, detail=detail))
+
+    # ── projection.identity ──────────────────────────────────────────
+    r = _exec(("sha256sum", "/run/pi-cli/docker-constructor.runtime.toml"))
+    if r.return_code != 0:
+        _add("projection.identity", False,
+             f"sha256sum failed (exit {r.return_code}): {r.stderr.strip()}")
+    else:
+        parts = r.stdout.strip().split()
+        container_hash = parts[0] if parts else ""
+        if container_hash == host_hash:
+            _add("projection.identity", True,
+                 f"projection hash {host_hash} matches host")
+        else:
+            _add("projection.identity", False,
+                 f"hash mismatch: container={container_hash[:12]}…"
+                 f" host={host_hash[:12]}…")
+
+    # ── projection.readonly ──────────────────────────────────────────
+    r = _exec(("grep", "docker-constructor.runtime.toml", "/proc/mounts"))
+    if r.return_code != 0:
+        _add("projection.readonly", False,
+             "runtime projection not found in /proc/mounts")
+    else:
+        mount_line = r.stdout.strip()
+        # Mount options are comma-separated in the 4th field.
+        # Check if ``ro`` is present as a mount option.
+        if mount_line:
+            tokens = mount_line.split()
+            if len(tokens) >= 4:
+                opts = tokens[3].split(",")  # e.g. ro,nosuid,nodev,relatime
+                if "ro" in opts:
+                    rw = _exec(("test", "-w",
+                                "/run/pi-cli/docker-constructor.runtime.toml"))
+                    if rw.return_code != 0:
+                        _add("projection.readonly", True,
+                             "runtime projection is read-only"
+                             " (ro mount + not writable)")
+                    else:
+                        _add("projection.readonly", False,
+                             "mount claims ro but file is writable")
+                else:
+                    _add("projection.readonly", False,
+                         f"runtime projection mount is not ro"
+                         f" (options: {','.join(opts)})")
+            else:
+                _add("projection.readonly", False,
+                     f"unexpected /proc/mounts format: {mount_line[:120]}")
+        else:
+            _add("projection.readonly", False,
+                 "empty /proc/mounts line for projection")
+
+    # ── extensions.results ───────────────────────────────────────────
+    extensions = proj_data.get("extensions", {})
+    for _key in sorted(extensions):
+        ext = extensions[_key]
+        pkg_name = ext["package"]
+        expected_ver = ext["version"]
+        pkg_json_path = f"/home/dev/.pi/agent/npm/node_modules/{pkg_name}/package.json"
+        r = _exec(("cat", pkg_json_path))
+        if r.return_code != 0:
+            _add("extensions.results", False,
+                 f"{pkg_name}: package.json not found")
+        else:
+            try:
+                import json as _json
+                pkg = _json.loads(r.stdout)
+                actual_ver = pkg.get("version", "")
+            except Exception:
+                actual_ver = ""
+            if actual_ver == expected_ver:
+                _add("extensions.results", True,
+                     f"{pkg_name} v{expected_ver} installed")
+            else:
+                _add("extensions.results", False,
+                     f"{pkg_name}: expected v{expected_ver}, got v{actual_ver}")
+
+    # ── projects.present ─────────────────────────────────────────────
+    for i, p in enumerate(pp, start=1):
+        sp = str(p)
+        # Directory accessible
+        r = _exec(("test", "-d", sp))
+        if r.return_code != 0:
+            _add("projects.present", False,
+                 f"PROJECT_PATH_{i} ({sp}) is not an accessible directory")
+        else:
+            # Env var exact value
+            r_env = _exec(("printenv", f"PROJECT_PATH_{i}"))
+            actual = r_env.stdout.strip() if r_env.return_code == 0 else ""
+            if actual == sp:
+                _add("projects.present", True,
+                     f"PROJECT_PATH_{i}={sp} (dir present)")
+            else:
+                _add("projects.present", False,
+                     f"PROJECT_PATH_{i}: expected {sp!r}, got {actual!r}")
+    # Guard: no unexpected next entry
+    guard_key = f"PROJECT_PATH_{len(pp) + 1}"
+    r_guard = _exec(("printenv", guard_key))
+    if r_guard.return_code == 0:
+        _add("projects.present", False,
+             f"unexpected {guard_key}={r_guard.stdout.strip()!r}")
+
+    # ── working.directory ────────────────────────────────────────────
+    if pp:
+        r = _exec(("pwd",))
+        wd = r.stdout.strip() if r.return_code == 0 else ""
+        expected_wd = str(pp[0])
+        if wd == expected_wd:
+            _add("working.directory", True,
+                 f"working directory is PROJECT_PATH_1 ({wd})")
+        else:
+            _add("working.directory", False,
+                 f"working directory: expected {expected_wd!r}, got {wd!r}")
+    else:
+        _add("working.directory", True, "no project paths — nothing to verify")
+
+    # ── ownership.dev ────────────────────────────────────────────────
+    # Pi home
+    r = _exec(("stat", "-c", "%U:%G", pi_home))
+    owner = r.stdout.strip() if r.return_code == 0 else ""
+    if owner == "dev:dev":
+        _add("ownership.dev", True, f"{pi_home} owned by dev:dev")
+    else:
+        _add("ownership.dev", False,
+             f"{pi_home} owned by {owner!r}, expected dev:dev")
+    # Project paths
+    for i, p in enumerate(pp, start=1):
+        sp = str(p)
+        r = _exec(("stat", "-c", "%U:%G", sp))
+        p_owner = r.stdout.strip() if r.return_code == 0 else ""
+        if p_owner == "dev:dev":
+            _add("ownership.dev", True,
+                 f"PROJECT_PATH_{i} ({sp}) owned by dev:dev")
+        else:
+            _add("ownership.dev", False,
+                 f"PROJECT_PATH_{i} ({sp}) owned by {p_owner!r}, expected dev:dev")
+
+    # ── pi-home.setup ─────────────────────────────────────────────────
+    r = _exec(("test", "-d", pi_home))
+    if r.return_code != 0:
+        _add("pi-home.setup", False, f"{pi_home} does not exist")
+    else:
+        rw = _exec(("test", "-w", pi_home))
+        if rw.return_code == 0:
+            _add("pi-home.setup", True, f"{pi_home} exists and is writable")
+        else:
+            _add("pi-home.setup", False,
+                 f"{pi_home} exists but is not writable")
+
+    # ── gateway.mapping ──────────────────────────────────────────────
+    r = _exec(("getent", "hosts", "host.docker.internal"))
+    if r.return_code != 0:
+        _add("gateway.mapping", False,
+             f"host.docker.internal resolution failed")
+    else:
+        resolved = r.stdout.strip().split()[0] if r.stdout.strip() else ""
+        if resolved == request.expected_gateway:
+            _add("gateway.mapping", True,
+                 f"host.docker.internal → {resolved}")
+        else:
+            _add("gateway.mapping", False,
+                 f"host.docker.internal → {resolved!r}, expected"
+                 f" {request.expected_gateway!r}")
+
+    # ── forbidden.paths ──────────────────────────────────────────────
+    forbidden = (
+        "/run/pi-cli/docker-constructor.toml",
+        "/run/pi-cli/docker-constructor.build.effective.toml",
+    )
+    for fp in forbidden:
+        r = _exec(("test", "-f", fp))
+        if r.return_code == 0:
+            _add("forbidden.paths", False,
+                 f"forbidden path present: {fp}")
+        else:
+            _add("forbidden.paths", True,
+                 f"forbidden path absent: {fp}")
+
+    # ── Assemble ─────────────────────────────────────────────────────
+    all_ok = all(c.ok for c in checks) and len(errors) == 0
+    return RuntimeVerificationResult(
+        container=container,
+        checks=tuple(checks),
+        all_ok=all_ok,
+        errors=tuple(errors),
+    )

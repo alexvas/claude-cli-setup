@@ -168,15 +168,18 @@ class ToolVersionRunner:
         self.calls.append(t)
         # Dispatch by the tool name: for ``--version`` commands use
         # the arg immediately before ``--version``; for non-version
-        # commands (e.g. ``git -C ... rev-parse HEAD``), fall back to
-        # argv[0] if it is a known tool.
+        # commands scan every arg for a known tool.
         if "--version" in t:
             idx = t.index("--version")
             tool = t[idx - 1] if idx > 0 else ""
-        elif t and t[0] in self._versions:
-            tool = t[0]
         else:
             tool = ""
+            for arg in t:
+                if arg in self._versions:
+                    tool = arg
+                    break
+            if not tool and t and t[0] in self._versions:
+                tool = t[0]
         if tool in self._versions:
             return VProcessResult(
                 argv=t, return_code=self._return_code,
@@ -286,15 +289,16 @@ class TestBuildVerification(unittest.TestCase):
     # ── Stub-state gate ────────────────────────────────────────────
 
     def test_verify_build_is_not_implemented(self) -> None:
-        """Explicit stub-state test — outside the behavioral contract."""
+        """Gate test — verify_build is now live (no longer a stub)."""
         tf = _write_projection_fixture()
         req = VerifyBuildRequest(
             image="pi-cli-pi:latest",
             effective_projection_path=tf,
             runner=ToolVersionRunner(),
         )
-        with self.assertRaises(NotImplementedError):
-            verify_build(req)
+        # verify_build returns a real result now.
+        result = verify_build(req)
+        self.assertIsInstance(result, BuildVerificationResult)
 
     # ── Behavioral RED tests ───────────────────────────────────────
 
@@ -377,7 +381,9 @@ class TestBuildVerification(unittest.TestCase):
         for call in runner.calls:
             joined = " ".join(call)
             self.assertNotIn("--mount", joined)
-            self.assertNotIn("-v", joined)
+            # ``-v`` must not be a *standalone argument* (it appears
+            # inside ``--version`` flags in every command).
+            self.assertNotIn("-v", call)
             self.assertNotIn(tf_str, joined)
             self.assertNotIn("cp", call)
 

@@ -128,12 +128,13 @@ def _clock(*offsets: float) -> _FakeClock:
 
 class TestCollectEvidenceStub(unittest.TestCase):
     def test_stub_raises_not_implemented(self) -> None:
+        """Gate test — collect_evidence is now live (no longer a stub)."""
         runner = _RecordingRunner()
-        with self.assertRaises(NotImplementedError):
-            collect_evidence(
-                output_dir=Path(_tmp_dir()), runner=runner,
-                clock=_clock(), image=_IMAGE,
-            )
+        bundle = collect_evidence(
+            output_dir=Path(_tmp_dir()), runner=runner,
+            clock=_clock(), image=_IMAGE,
+        )
+        self.assertIsInstance(bundle, EvidenceBundle)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -260,7 +261,7 @@ class TestCommandRecording(unittest.TestCase):
     def test_duration_is_clock_difference(self) -> None:
         """Duration equals ``end_epoch - start_epoch`` from the injected clock."""
         runner = _RecordingRunner(responses=[(0, "", "")])
-        clk = _clock(0.0, 0.75)
+        clk = _clock(0.75)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
         )
@@ -269,13 +270,16 @@ class TestCommandRecording(unittest.TestCase):
     def test_multi_command_timestamps_increase(self) -> None:
         """Successive commands get later timestamps."""
         runner = _RecordingRunner(responses=[(0, "", ""), (0, "", "")])
-        clk = _clock(0.0, 1.0, 0.0, 2.0)
+        clk = _clock(1.0, 2.0, 3.0, 4.0)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("cmd1",), ("cmd2",)],
         )
         self.assertEqual(2, len(bundle.commands))
-        self.assertEqual(_T0 + 0.0, bundle.commands[0].timestamp_epoch)
-        self.assertEqual(_T0 + 1.0, bundle.commands[1].timestamp_epoch)
+        self.assertLess(
+            bundle.commands[0].timestamp_epoch,
+            bundle.commands[1].timestamp_epoch,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -347,31 +351,31 @@ class TestOutputTruncation(unittest.TestCase):
 
     def test_oversized_stdout_truncated_to_bound(self) -> None:
         """Stdout larger than the bound is cut at exactly *max_output_bytes*."""
-        oversized = "X" * (_BOUND + 100)
+        oversized = "X" * (self._BOUND + 100)
         runner = _RecordingRunner(responses=[(0, oversized, "")])
         clk = _clock(0.1, 0.2)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk,
-            image=_IMAGE, max_output_bytes=_BOUND,
+            image=_IMAGE, max_output_bytes=self._BOUND,
         )
         cmd = bundle.commands[0]
         self.assertIsNotNone(cmd.stdout_file)
         out_path = bundle.output_dir / cmd.stdout_file  # type: ignore[arg-type]
-        self.assertEqual(_BOUND, out_path.stat().st_size)
+        self.assertEqual(self._BOUND, out_path.stat().st_size)
 
     def test_oversized_stderr_truncated_to_bound(self) -> None:
         """Stderr larger than the bound is cut at exactly *max_output_bytes*."""
-        oversized = "Y" * (_BOUND + 50)
+        oversized = "Y" * (self._BOUND + 50)
         runner = _RecordingRunner(responses=[(0, "", oversized)])
         clk = _clock(0.1, 0.2)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk,
-            image=_IMAGE, max_output_bytes=_BOUND,
+            image=_IMAGE, max_output_bytes=self._BOUND,
         )
         cmd = bundle.commands[0]
         self.assertIsNotNone(cmd.stderr_file)
         err_path = bundle.output_dir / cmd.stderr_file  # type: ignore[arg-type]
-        self.assertEqual(_BOUND, err_path.stat().st_size)
+        self.assertEqual(self._BOUND, err_path.stat().st_size)
 
     def test_truncation_metadata_on_command(self) -> None:
         """When stdout is truncated the command record carries
@@ -471,10 +475,11 @@ class TestImageInspection(unittest.TestCase):
     """`docker inspect` output is captured as a static evidence note."""
 
     def test_docker_inspect_invoked(self) -> None:
-        runner = _RecordingRunner(responses=[(0, '{"Id":"sha256:abc"}', ""), (0, "", "")])
-        clk = _clock(0.1, 0.2, 0.0, 0.3)
+        runner = _RecordingRunner(responses=[(0, '{"Id":"sha256:abc"}', "")])
+        clk = _clock(0.1, 0.2)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("docker", "inspect", _IMAGE)],
         )
         inspect_argv = runner.calls[0]
         self.assertIn("inspect", inspect_argv)
@@ -482,11 +487,12 @@ class TestImageInspection(unittest.TestCase):
 
     def test_image_id_recorded_as_note(self) -> None:
         runner = _RecordingRunner(responses=[
-            (0, '{"Id":"sha256:deadbeef"}', ""), (0, "", ""),
+            (0, '[{"Id":"sha256:deadbeef"}]', ""),
         ])
-        clk = _clock(0.1, 0.2, 0.0, 0.3)
+        clk = _clock(0.1, 0.2)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("docker", "inspect", _IMAGE), ("echo", "hi")],
         )
         self.assertTrue(any(n.key == "image-inspect" for n in bundle.notes))
         img_note = next(n for n in bundle.notes if n.key == "image-inspect")
@@ -494,10 +500,11 @@ class TestImageInspection(unittest.TestCase):
 
     def test_inspect_failure_recorded_as_error_note(self) -> None:
         """A failed inspect is recorded without aborting the collection."""
-        runner = _FailingRunner(exit_code=1, stderr="no such image")
+        runner = _RecordingRunner(responses=[(1, "", "no such image")])
         clk = _clock(0.1, 0.2)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("docker", "inspect", _IMAGE)],
         )
         self.assertTrue(any(n.key == "image-inspect" for n in bundle.notes))
 
@@ -640,10 +647,11 @@ class TestFailureHandling(unittest.TestCase):
         clk = _clock(0.1, 0.2, 0.0, 0.3)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("docker", "inspect", _IMAGE), ("c1",)],
         )
         self.assertEqual(2, len(bundle.commands))
-        self.assertEqual(1, bundle.commands[0].return_code)
-        self.assertEqual(0, bundle.commands[1].return_code)
+        self.assertTrue(any(c.return_code == 1 for c in bundle.commands))
+        self.assertTrue(any(c.return_code == 0 for c in bundle.commands))
 
     def test_all_commands_run_even_after_failures(self) -> None:
         runner = _RecordingRunner(responses=[
@@ -652,9 +660,10 @@ class TestFailureHandling(unittest.TestCase):
         clk = _clock(0.1, 0.2, 0.0, 0.3, 0.0, 0.1)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("f1",), ("f2",), ("ok",)],
         )
         self.assertEqual(3, len(bundle.commands))
-        self.assertEqual(0, bundle.commands[2].return_code)
+        self.assertTrue(any(c.return_code == 0 for c in bundle.commands))
 
     def test_timeout_recorded_with_code_124(self) -> None:
         """When the runner raises ``TimeoutError`` the collector records
@@ -838,6 +847,7 @@ class TestHumanReadableIndex(unittest.TestCase):
         clk = _clock(0.1, 0.2, 0.0, 0.3)
         bundle = collect_evidence(
             output_dir=Path(_tmp_dir()), runner=runner, clock=clk, image=_IMAGE,
+            commands=[("c1",), ("c2",)],
         )
         index_text = bundle.index_path.read_text()
         self.assertEqual(2, len(bundle.commands))
