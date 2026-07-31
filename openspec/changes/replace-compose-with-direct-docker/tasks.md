@@ -246,7 +246,7 @@
 
 - [x] 12.1 Add failing verification tests comparing container observations with host-side effective build expectations without providing build metadata to the container.
 - [x] 12.2 Add failing runtime verification tests for projection identity, read-only mount, extension results, projects, working directory, ownership, Pi home, gateway mapping, and forbidden configuration paths.
-- [ ] 12.3 Add daemon-independent collector tests for commands, exit codes, timestamps, bounded output, image inspection, checksums, redaction, failures, and a human-readable index.
+- [x] 12.3 Add daemon-independent collector tests for commands, exit codes, timestamps, bounded output, image inspection, checksums, redaction, failures, and a human-readable index.
 
 ### GREEN
 
