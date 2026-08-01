@@ -267,7 +267,7 @@
 ### RED
 
 - [x] 13.1 Add failing semantic-source and documentation tests rejecting supported references to old CLIs, wrappers, Compose, generated fragments, obsolete inf-splitter settings, separate phase source inventories, and forbidden runtime configuration paths.
-- [ ] 13.2 Add failing command-contract tests requiring the facade in repository-owned callers and direct API imports—not CLI subprocesses—in internal tests.
+- [x] 13.2 Add failing command-contract tests requiring the facade in repository-owned callers and direct API imports—not CLI subprocesses—in internal tests.
 
 ### GREEN
 
