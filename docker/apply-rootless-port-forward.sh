@@ -19,4 +19,4 @@ sleep 3
 docker info 2>/dev/null | grep -i rootless || true
 
 echo "Verifying host reachability from container (ephemeral probe server):"
-exec python3 "${ROOT_DIR}/docker/build_wrapper.py" diagnose
+exec python3 "${ROOT_DIR}/docker/docker-constructor.py" doctor

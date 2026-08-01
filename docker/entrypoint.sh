@@ -1,6 +1,6 @@
 #!/bin/bash
 # Fix PROJECT_PATH_* host-directory mounts, then drop to user dev (container starts as root).
-# Compose/launch-pi.py define PROJECT_PATH_* as host bind mounts; mountpoint guards image paths.
+# docker-constructor.py defines PROJECT_PATH_* as host bind mounts; mountpoint guards image paths.
 set -euo pipefail
 
 CHOWN_WORK_ON_START="${CHOWN_WORK_ON_START:-1}"
@@ -39,7 +39,7 @@ fix_ownership_and_permissions() {
 }
 
 # Check whether a path is a container mount point.
-# PROJECT_PATH_* variables are bind mounts by Compose contract;
+# PROJECT_PATH_* variables are bind mounts by design;
 # mountpoint(1) confirms the path is not an ordinary image-layer directory.
 # Returns 0 for mount points, non-zero otherwise.
 is_mount_point() {

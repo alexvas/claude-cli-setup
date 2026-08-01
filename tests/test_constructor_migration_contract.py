@@ -23,10 +23,7 @@ _SH_SCAN_ROOTS: list[str] = [
 ]
 
 # Shell scripts excluded entirely
-_SH_EXCLUDED_FILES = frozenset({
-    # This file delegates to build_wrapper (being removed in 13.4)
-    "docker/apply-rootless-port-forward.sh",
-})
+_SH_EXCLUDED_FILES: frozenset[str] = frozenset()
 
 # ════════════════════════════════════════════════════════════════════
 # Documentation scan (beyond root READMEs)
@@ -42,10 +39,7 @@ _DOC_SCAN_ROOTS: list[str] = [
 _OPENSPEC_SPECS_DIR: str = "openspec/specs/"
 _OPENSPEC_CHANGES_DIR: str = "openspec/changes/"
 
-_DOC_FILE_EXCLUDED = frozenset({
-    # Historical acceptance evidence
-    "docker/verify_stage_6/",
-})
+_DOC_FILE_EXCLUDED: frozenset[str] = frozenset()
 
 # ════════════════════════════════════════════════════════════════════
 # Configuration file scan (only maintained TOML)
@@ -69,13 +63,6 @@ _PY_SCAN_ROOTS = [
 
 # Files are excluded **in their entirety**
 _PY_EXCLUDED = {
-    # Still being removed in later 13.x tasks
-    "docker/build_wrapper.py",
-    "docker/gen-models-json.py",
-    "docker/versioning/cli.py",
-    "launch-pi.py",
-    # Historical acceptance evidence
-    "docker/verify_stage_6/",
 }
 
 # Files with line-level allowlists (contextual mentions)
@@ -86,6 +73,9 @@ _PY_LINE_ALLOWLIST = frozenset({
     "docker/runtime_installer.py",
     # This very test file documents the contract
     "tests/test_constructor_migration_contract.py",
+    # Assert COMPOSE_FILE/env vars NOT present in rendered output
+    "tests/test_constructor_build_vector.py",
+    "tests/test_constructor_run_vector.py",
     # OpenSpec artifacts describing the change
     "openspec/",
     # Runtime verification correctly asserts these paths must NOT exist
@@ -99,8 +89,6 @@ _PY_LINE_ALLOWLIST = frozenset({
 _FORBIDDEN_PATHS_EXCLUDED_FILES = frozenset({
     "docker/versioning/runtime_verification.py",
     "tests/test_constructor_runtime_verification.py",
-    "tests/test_version_source_contracts.py",
-    "tests/test_versioned_image_acceptance.py",
 })
 
 
@@ -1078,14 +1066,7 @@ class TestShellScriptsInvokeFacadeNotOldCLIs(unittest.TestCase):
 import ast as _ast  # noqa: E402
 
 # Test files excluded from the subprocess-contract scan.
-_TEST_SUBPROCESS_EXCLUDED: frozenset[str] = frozenset({
-    # Tests being removed in 13.4-13.5
-    "tests/test_version_orchestration.py",
-    "tests/test_build_wrapper_versions.py",
-    "tests/test_versioned_image_acceptance.py",
-    "tests/test_versions_cli.py",
-    "tests/test_stage6_host_scripts.py",
-})
+_TEST_SUBPROCESS_EXCLUDED: frozenset[str] = frozenset()
 
 
 def _contains_any_cli_name(s: str) -> str | None:
@@ -1622,5 +1603,72 @@ class TestInternalTestsImportNotSubprocess(unittest.TestCase):
             self.fail(
                 "Internal tests must import Python APIs, not invoke "
                 "CLIs via subprocess:\n"
+                + "\n".join(violations)
+            )
+
+
+# ════════════════════════════════════════════════════════════════════
+# Dockerfile runtime-isolation contract
+# ════════════════════════════════════════════════════════════════════
+
+# Dockerfile patterns that bake non-runtime artifacts into the image.
+_DOCKERFILE_BANNED_COPY = [
+    (
+        "docker-constructor.toml baked into image",
+        re.compile(r"COPY.*docker-constructor\.toml.*\/usr\/"),
+    ),
+    (
+        "docker/versions.py baked into image",
+        re.compile(r"COPY\s+docker\/versions\.py\s+\/usr\/"),
+    ),
+]
+
+# Shell runtime patterns that reference removed runtime paths.
+_SHELL_RUNTIME_BANNED = [
+    (
+        "/usr/local/share/pi-cli/docker-constructor.toml",
+        re.compile(r"/usr/local/share/pi-cli/docker-constructor\.toml"),
+    ),
+]
+
+
+class TestDockerfileNoBakedInventory(unittest.TestCase):
+    """Dockerfile MUST NOT COPY the reviewed inventory or the old
+    ``docker/versions.py`` CLI into the runtime image."""
+
+    def test_dockerfile_no_baked_inventory(self) -> None:
+        dockerfile = REPO / "Dockerfile"
+        if not dockerfile.is_file():
+            return
+        violations: list[str] = []
+        for lineno, line in _lines(dockerfile):
+            for label, pat in _DOCKERFILE_BANNED_COPY:
+                if pat.search(line):
+                    violations.append(
+                        f"Dockerfile:{lineno}: {label} — {line.strip()}"
+                    )
+        if violations:
+            self.fail(
+                "Dockerfile bakes removed artifacts into the runtime image:\n"
+                + "\n".join(violations)
+            )
+
+
+class TestShellRuntimeNoStaleInventoryPaths(unittest.TestCase):
+    """Shell scripts MUST NOT reference the removed baked-in inventory
+    path ``/usr/local/share/pi-cli/docker-constructor.toml``."""
+
+    def test_shell_no_stale_inventory_paths(self) -> None:
+        violations: list[str] = []
+        for rel, path in sorted(_sh_files().items()):
+            for lineno, line in _lines(path):
+                for label, pat in _SHELL_RUNTIME_BANNED:
+                    if pat.search(line):
+                        violations.append(
+                            f"{rel}:{lineno}: {label} — {line.strip()}"
+                        )
+        if violations:
+            self.fail(
+                "Shell scripts reference removed baked-in inventory path:\n"
                 + "\n".join(violations)
             )

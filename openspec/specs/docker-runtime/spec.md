@@ -100,14 +100,14 @@ The system SHALL create and use a `dev` user whose UID and GID can be aligned wi
 The system SHALL run the container against host project directories without remapping their paths.
 
 #### Scenario: Launching the base compose service
-- **WHEN** `docker compose run` starts service `pi`
+- **WHEN** `docker run` starts service `pi`
 - **THEN** `PROJECT_PATH_1` is required
 - **AND** the service working directory is set to `PROJECT_PATH_1`
 - **AND** the same absolute host path is bind-mounted into the same absolute path inside the container
 
 #### Scenario: Adding optional extra projects
-- **WHEN** compose fragments `docker/compose.proj2.yml` and `docker/compose.proj3.yml` are included
-- **THEN** `PROJECT_PATH_2` and `PROJECT_PATH_3` are mounted 1:1 in the container
+- **WHEN** additional projects are selected through `--project` flags
+- **THEN** `PROJECT_PATH_2` and `PROJECT_PATH_3` are mounted 1:1 through direct Docker bind-mount arguments with consecutive numbering
 
 ### Requirement: Repair mount ownership on startup
 The system SHALL be able to fix ownership and access permissions of mounted project worktrees before dropping privileges. The runtime SHALL explicitly install `util-linux` to provide `mountpoint`. The supported Compose and launcher interfaces SHALL define `PROJECT_PATH_*` as host-directory bind mounts. `CHOWN_WORK_ON_START` repair SHALL consider only configured `PROJECT_PATH_*` paths, SHALL require each target to be a container mount point (`mountpoint -q`), and SHALL NOT scan or modify ordinary image-layer directories, fixed runtime home paths, or non-project mounts.
@@ -183,16 +183,16 @@ The system SHALL make bundled π assets available in the runtime home directory.
 - **AND** SHALL not install extensions into the image-provided `/home/dev/.pi`
 
 ### Requirement: Present a consistent Pi container interface
-The project SHALL identify the developer container, Compose service, wrapper commands, launcher commands, and supported documentation as Pi-oriented interfaces.
+The project SHALL identify the developer container, constructor CLI, and supported documentation as Pi-oriented interfaces.
 
 #### Scenario: Following documented build instructions
 - **WHEN** a user follows a build command from any maintained README translation
-- **THEN** the command SHALL target Compose service `pi`
-- **AND** the service SHALL exist in the evaluated Compose configuration
+- **THEN** the command SHALL target the Pi container
+- **AND** the image SHALL be tagged consistently with the project naming convention
 
 #### Scenario: Following documented run instructions
 - **WHEN** a user follows a run or CLI verification command from any maintained README translation
-- **THEN** it SHALL invoke service `pi` and the `pi` CLI rather than the retired Claude service or CLI
+- **THEN** it SHALL invoke the Pi container and the `pi` CLI rather than the retired Claude service or CLI
 
 ### Requirement: Document the current runtime image
 The Russian, English, and Chinese README files SHALL present the current Docker development environment around the primary user workflows of building the image, launching it with interactive project selection, updating managed components, and performing occasional maintenance. Internal implementation invariants and image-development diagnostics SHALL NOT interrupt those primary workflows.

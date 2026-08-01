@@ -7,30 +7,29 @@ An isolated Docker environment for Pi and development tools. Selected non-Debian
 ## Requirements
 
 - Docker Engine 24+ with BuildKit
-- Docker Compose v2
 - Python 3 on the host
 
 ## 1. Build the environment
 
-Validate the reviewed inventory, then build service `pi`:
+Validate the reviewed inventory, then build the image:
 
 ```bash
-./docker/versions.py validate
-./docker/versions.py compose build pi
+./docker/docker-constructor.py validate
+./docker/docker-constructor.py build
 ```
 
 The build needs no project path or `.env`. For rootless Docker host-gateway diagnostics, use:
 
 ```bash
-python3 docker/build_wrapper.py diagnose
-python3 docker/build_wrapper.py apply -y
-python3 docker/build_wrapper.py build -y
+./docker/docker-constructor.py doctor
+./docker/docker-constructor.py doctor --apply-rootless-override -y
+./docker/docker-constructor.py build -y
 ```
 
-`./docker/versions.py env` prints shell-safe resolved build inputs for low-level integration. A deliberate Python override uses:
+A deliberate Python override uses:
 
 ```bash
-./docker/versions.py compose --override build.stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/docker-constructor.py build --override build.stages.toolchain.python.version=X.Y.Z
 ```
 
 Override constraints accept only `==, >, >=, <, <=` with complete `X.Y.Z` versions. Wildcards, incomplete versions, OR expressions, and prerelease values are rejected unless policy explicitly allows them. The inventory pins reviewed non-Debian inputs, but Debian repositories and BuildKit metadata mean byte-identical OCI output is not guaranteed.
@@ -40,15 +39,15 @@ Override constraints accept only `==, >, >=, <, <=` with complete `X.Y.Z` versio
 Open the interactive project selector:
 
 ```bash
-./launch-pi.py
+./docker/docker-constructor.py run --tui
 ```
 
-The selected main project becomes the container working directory and is bind-mounted at the same absolute path. Up to two additional projects may be selected as optional 1:1 mounts. Host `~/.pi` is mounted at `/home/dev/.pi`. Set optional `BASE_PROJECT_DIR` in `.env` or pass `--base-project-dir` to choose the TUI tree root.
+The selected main project becomes the container working directory and is bind-mounted at the same absolute path. Additional projects are mounted 1:1 with consecutive `PROJECT_PATH_2`, `PROJECT_PATH_3`, … numbering — no fixed limit. Host `~/.pi` is mounted at `/home/dev/.pi`. Set optional `BASE_PROJECT_DIR` in `.env` or pass `--base-project-dir` to choose the TUI tree root.
 
-Low-level runtime commands remain available when `PROJECT_PATH_1` is set:
+Direct launch with explicit projects:
 
 ```bash
-./docker/versions.py compose run --rm pi
+./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
 ```
 
 ## 3. Update environment components
@@ -58,22 +57,22 @@ Low-level runtime commands remain available when `PROJECT_PATH_1` is set:
 1. Inspect only Pi and request a reviewable suggestion:
 
    ```bash
-   ./docker/versions.py check-updates --only build.stages.pi-tools.pi --suggest
+   ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
 2. `--suggest` is **non-mutating**: verify the upstream release and manually apply the accepted value and related metadata to `build.stages.pi-tools.pi` in `docker-constructor.toml`.
 3. Validate and review the exact repository change:
 
    ```bash
-   ./docker/versions.py validate
+   ./docker/docker-constructor.py validate
    git diff -- docker-constructor.toml
    ```
 
 4. Rebuild and verify the runtime image:
 
    ```bash
-   ./docker/versions.py compose build pi
-   ./docker/verify-runtime.sh pi-cli-pi:latest
+   ./docker/docker-constructor.py build
+   ./docker/docker-constructor.py verify
    ```
 
 ### Managed component lifecycle
@@ -103,7 +102,7 @@ Ordinary builds, validation, launch, and extension setup never perform update di
 ### Verify the image
 
 ```bash
-./docker/verify-runtime.sh pi-cli-pi:latest
+./docker/docker-constructor.py verify
 ```
 
 ### Refresh mounted Pi extensions
@@ -111,7 +110,7 @@ Ordinary builds, validation, launch, and extension setup never perform update di
 After changing `runtime.pi-extensions`, launch with the intended Pi home mounted and run the protected, idempotent installer:
 
 ```bash
-./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
+./docker/docker-constructor.py run -- /home/dev/install-pi-extensions.sh
 ```
 
 ### Repair host ownership and permissions

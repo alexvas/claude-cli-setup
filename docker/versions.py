@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Thin wrapper that re-exports the docker.versioning package.
+"""Backward-compatible re-export shim that delegates to docker.versioning.
 
-This module exists for backward compatibility so existing imports like
-``from docker.versions import load_inventory`` continue to work.
-The real implementation lives in docker/versioning/.
+All public types and functions are available through ``docker.versioning``
+directly.  This module exists only so that existing ``from docker.versions
+import ...`` statements in internal tests continue to resolve.
 """
 from __future__ import annotations
 
@@ -119,11 +119,3 @@ else:
         UvPythonSource,
         UvPythonUpdate,
     )
-
-if __package__:
-    from .versioning.cli import main
-else:
-    from versioning.cli import main
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -6,82 +6,81 @@ Define reviewed non-Debian version inventory, reproducible effective build confi
 ## Requirements
 
 ### Requirement: Use a central version inventory
-The project SHALL maintain `docker-constructor.toml` as the reviewed source of default non-Debian tool versions, immutable revisions, artifact URLs, platform digests, and update-provider metadata. Every independently selected version or revision SHALL be represented by a complete typed entry with explicit source and update metadata. Effective Docker build arguments and runtime inventory SHALL be derived from the same validated configuration.
+The project SHALL maintain `docker-constructor.toml` as the single reviewed dependency source with explicit, closed `build` and `runtime` sections. Every independently selected dependency SHALL be represented in exactly one section by a complete typed source entry. The resolver SHALL apply phase-owned overrides and derive separate effective build and runtime projections; only the narrow effective runtime projection may enter a running container.
 
 The target dependency and configuration graph SHALL remain:
 
 ```mermaid
 graph TD
-    INV[(docker-constructor.toml<br/>reviewed source of truth)] --> CLI[docker/versions.py<br/>validate · env · compose · check-updates]
-    CLI --> B[base<br/>Node tag + manifest digest]
-    CLI --> T[toolchain<br/>pinned Rust/rustup + uv + Python + ty]
-    CLI --> R[rtk-prebuilt<br/>release + platform SHA-256]
-    CLI --> F[fd-prebuilt<br/>release + platform SHA-256]
-    CLI --> P[pi-tools<br/>exact Pi]
-    CLI --> O[openspec-tools<br/>exact OpenSpec]
-    INV --> E[install-pi-extensions.sh<br/>pinned npm extensions]
-    INV --> Q[build/runtime version assertions]
-    CLI --> U[check-updates<br/>best effort]
-    U --> SG[--suggest<br/>non-mutating TOML proposal]
-    B --> T
-    B --> R
-    B --> F
-    T --> P
-    B --> O
-    T --> RT[runtime]
-    R --> RT
-    F --> RT
-    P --> RT
-    O --> RT
-    RT --> E
+    INV[(docker-constructor.toml<br/>build + runtime sections)] --> CLI[docker-constructor.py]
+    CLI --> BP[effective build projection<br/>host-only]
+    BP --> BUILD[Docker build arguments]
+    BUILD --> IMG[Docker runtime image]
+    BP --> VERIFY[host-side verification API]
+    VERIFY --> IMG
+    CLI --> RP[effective runtime projection<br/>closed DTO]
+    RP --> RUN[read-only runtime mount]
+    RUN --> INSTALL[runtime extension installer]
+    INV --> UPDATES[scoped update discovery]
 ```
 
-#### Scenario: Validating the inventory locally
-- **WHEN** `python3 docker/versions.py validate` runs
-- **THEN** it SHALL validate required sections, version syntax, digests, platform artifacts, URL/version consistency, source/update metadata, provider-specific field types, source/provider compatibility, and supported Python policy without network access
-- **AND** SHALL report actionable configuration errors
-- **AND** SHALL reject or report unknown and misspelled entry paths rather than resolving them through catch-all access
+#### Scenario: Validating the reviewed inventory locally
+- **WHEN** `docker-constructor.py validate` runs
+- **THEN** it SHALL validate build, runtime, or both source scopes as requested without Docker or network access
+- **AND** it SHALL apply closed typed schemas and semantic rules appropriate to each installation phase
+- **AND** it SHALL reject unknown, misspelled, duplicated-across-scope, and phase-inappropriate entries
 
 #### Scenario: Discovering the authoritative inventory
-- **WHEN** a resolver command runs without an explicit `--inventory` path
-- **THEN** it SHALL load `docker-constructor.toml` from the repository root
-- **AND** SHALL NOT fall back to `versions.toml`
+- **WHEN** a facade command runs without an explicit `--inventory` path
+- **THEN** it SHALL discover `docker-constructor.toml` from the repository root
+- **AND** it SHALL NOT discover separate phase source files
 
 #### Scenario: Using an explicit custom inventory
 - **WHEN** a caller supplies `--inventory <path>`
-- **THEN** the resolver SHALL validate and use that TOML file regardless of its basename
-- **AND** SHALL NOT create a second authoritative root inventory
+- **THEN** the facade SHALL validate and use that TOML file regardless of basename
+- **AND** it SHALL require the same explicit build/runtime section structure
 
 #### Scenario: Describing uv-managed Python
-- **WHEN** the inventory declares the selected CPython runtime
+- **WHEN** the build section declares the selected CPython runtime
 - **THEN** its source and update metadata SHALL use the dedicated `uv-python` type/provider and identify the `cpython` implementation
 - **AND** update discovery SHALL use the authoritative interpreter release data consumed by uv rather than modeling CPython as a PyPI package
 
 #### Scenario: Describing a Python package tool
-- **WHEN** the inventory declares the selected `ty` version
+- **WHEN** the build section declares the selected `ty` version
 - **THEN** it SHALL include a PyPI source containing package identity and a compatible PyPI update provider
-- **AND** the validated in-memory toolchain SHALL retain the complete `ty` entry
+- **AND** the validated in-memory build model SHALL retain the complete `ty` entry
 
 #### Scenario: Describing runtime npm extensions
-- **WHEN** the inventory declares a selected Pi extension
-- **THEN** the entry SHALL include an npm source containing package identity and a compatible npm update provider
-- **AND** package identity SHALL NOT be duplicated in a separate entry-level field
+- **WHEN** the runtime section declares a selected Pi extension
+- **THEN** its reviewed source entry SHALL contain package, selected default version, a reviewed artifact catalog keyed by exact version, update, override, and validation metadata required by host and runtime workflows
+- **AND** every catalog entry SHALL contain the exact artifact identity and integrity for its version key
+- **AND** the selected default version SHALL have a matching catalog entry
+- **AND** its effective runtime DTO SHALL contain only the selected artifact and SHALL omit unselected catalog entries plus host-only update and override metadata
 
 #### Scenario: Building with default selections
 - **WHEN** the canonical build command runs without overrides
-- **THEN** it SHALL pass values derived from `docker-constructor.toml` to the Docker build
-- **AND** SHALL make the same effective values inspectable in the runtime image
+- **THEN** it SHALL pass values derived from the build section to the Docker build
+- **AND** it SHALL keep the reviewed source and effective build projection on the host
 
 #### Scenario: Building with a supported override
-- **WHEN** a supported override such as a stable Python `X.Y.Z >= 3.14.6` is requested
-- **THEN** the resolver SHALL validate it against the entry's `override.constraint` and `allow_prerelease` policy from `docker-constructor.toml`
-- **AND** SHALL apply it to the effective configuration
-- **AND** the runtime inventory SHALL report the effective value rather than the default
+- **WHEN** a supported build override such as a stable Python `X.Y.Z >= 3.14.6` is requested
+- **THEN** the facade SHALL validate it against policy from the reviewed build section
+- **AND** it SHALL apply it only to the host-side effective build projection
+- **AND** it SHALL NOT expose that projection to the runtime container
 
 #### Scenario: Generating effective build configuration
 - **WHEN** effective Docker construction inputs are rendered with default paths
-- **THEN** the generated inventory SHALL be written to `.docker-generated/docker-constructor.toml`
-- **AND** the runtime image SHALL expose it read-only at `/usr/local/share/pi-cli/docker-constructor.toml`
+- **THEN** the build projection SHALL be written atomically to `.docker-generated/docker-constructor.build.effective.toml`
+- **AND** the runtime image SHALL NOT expose that file
+
+#### Scenario: Preparing runtime dependency configuration
+- **WHEN** a runtime container is launched with default selections or supported runtime overrides
+- **THEN** default resolution SHALL select the reviewed artifact catalog entry whose exact version key matches the selected default version
+- **AND** override resolution SHALL validate the requested version against reviewed policy and select only the catalog entry with that exact version key
+- **AND** an override with no matching reviewed catalog entry SHALL be rejected before projection creation without network discovery, URL synthesis, or reuse of another version's integrity
+- **AND** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, selected artifact identity, checksum/integrity, and validation metadata
+- **AND** it SHALL mount that projection read-only at `/run/pi-cli/docker-constructor.runtime.toml`
+- **AND** neither `docker-constructor.toml` nor an effective build projection SHALL be copied or mounted into the container
 
 ### Requirement: Validate overrides with a restricted constraint grammar
 Overrideable entries SHALL keep an exact default `version` separate from an `override` policy. The resolver SHALL implement a dependency-free restricted grammar rather than embedding tool-specific minimum versions in code.
@@ -120,7 +119,7 @@ Overrideable entries SHALL keep an exact default `version` separate from an `ove
 
 #### Scenario: Consuming versions at runtime
 - **WHEN** runtime verification or Pi extension setup needs an expected version
-- **THEN** it SHALL read `/usr/local/share/pi-cli/docker-constructor.toml`
+- **THEN** it SHALL read the mounted effective runtime projection
 - **AND** SHALL NOT use the retired runtime path or a script-local fallback
 
 #### Scenario: Detecting stale supported references
@@ -137,7 +136,7 @@ The central inventory SHALL incorporate the selected `rtk`/`fd` prebuilt artifac
 - **AND** SHALL include pinned Pi extension package versions
 
 ### Requirement: Keep resolver responsibilities modular
-The stable `docker/versions.py` executable SHALL remain a thin entry point and delegate to focused standard-library modules under `docker/versioning/`. The target module dependency flow SHALL remain:
+The constructor facade SHALL delegate to focused standard-library modules under `docker/versioning/`. The target module dependency flow SHALL remain:
 
 ```mermaid
 flowchart TD
@@ -148,15 +147,15 @@ flowchart TD
     EFF --> RENDER[rendering.py]
     EFF --> UPDATES[updates.py]
     PROVIDERS[providers/<br/>base · npm · pypi · github · rust · docker_registry · git · uv_python] --> UPDATES
-    RENDER --> CLI[cli.py]
-    UPDATES --> CLI
-    CLI --> ENTRY[docker/versions.py]
+    RENDER --> FACADE[constructor_cli.py]
+    UPDATES --> FACADE
 ```
 
 The target production file layout SHALL be:
 
 ```text
-docker/versions.py
+docker/docker-constructor.py
+docker/constructor_cli.py
 docker/versioning/
 ├── errors.py
 ├── constraints.py
@@ -165,7 +164,6 @@ docker/versioning/
 ├── effective.py
 ├── rendering.py
 ├── updates.py
-├── cli.py
 └── providers/
     ├── base.py
     ├── npm.py
@@ -184,33 +182,16 @@ Responsibilities SHALL remain separated as follows:
 - `model.py`: frozen typed inventory, source, update, artifact, and update-result values;
 - `inventory.py`: TOML loading, provider-specific schema validation, cross-field validation, and deterministic traversal;
 - `effective.py`: override application and deterministic effective-inventory serialization;
-- `rendering.py`: Docker/Compose environment and generated build-input rendering;
+- `rendering.py`: Docker build/run argument vector rendering;
 - `providers/`: independently testable network adapters behind a shared transport/result protocol;
 - `updates.py`: provider dispatch, stable-policy filtering, applicability classification, and non-mutating suggestions;
-- `cli.py`: argument parsing, output selection, exit-code mapping, and explicit process orchestration.
+- `constructor_cli.py`: argument parsing, output selection, exit-code mapping, and explicit process orchestration.
 
-Dependencies between these modules SHALL remain acyclic. Domain modules SHALL NOT import the CLI, invoke Docker implicitly, or perform provider requests during ordinary inventory operations.
-
-The corresponding unit and subprocess test decomposition SHALL be:
-
-```text
-tests/
-├── test_version_constraints.py
-├── test_version_inventory.py
-├── test_version_effective.py
-├── test_version_rendering.py
-├── test_version_updates.py
-├── test_versions_cli.py
-└── versioning/
-    ├── providers/
-    └── support/
-```
-
-Provider-specific tests SHALL live under `tests/versioning/providers/`. Shared TOML builders, fixtures, and fake HTTP transports SHALL live under `tests/versioning/support/`. Tests SHALL import the module that owns the behavior rather than using the CLI wrapper for domain-level assertions. Semantic-source tests and Docker acceptance tests SHALL remain separate integration suites.
+Dependencies between these modules SHALL remain acyclic. Domain modules SHALL NOT import the CLI facade, invoke Docker implicitly, or perform provider requests during ordinary inventory operations.
 
 #### Scenario: Executing the stable command path
-- **WHEN** a user runs `python3 docker/versions.py <command>`
-- **THEN** the thin entry point SHALL delegate argument handling to the CLI module
+- **WHEN** a user runs `./docker/docker-constructor.py <command>`
+- **THEN** the facade entry point SHALL delegate argument handling to the CLI module
 - **AND** domain modules SHALL NOT parse process arguments or invoke Docker implicitly
 
 #### Scenario: Testing provider behavior
@@ -232,7 +213,7 @@ Provider-specific tests SHALL live under `tests/versioning/providers/`. Shared T
 The version helper SHALL provide an explicit best-effort `check-updates` operation, including the dedicated `uv-python` provider for uv-managed CPython. Normal builds, launches, validation, and runtime setup SHALL NOT invoke update-provider APIs.
 
 #### Scenario: Checking for stable updates
-- **WHEN** `python3 docker/versions.py check-updates` runs
+- **WHEN** `./docker/docker-constructor.py check-updates` runs
 - **THEN** it SHALL query each configured provider for stable candidates
 - **AND** SHALL report current, outdated, skipped, unavailable, or incomplete status per dependency
 - **AND** default execution SHALL not fail solely because an update exists or a provider is unavailable
@@ -259,15 +240,15 @@ The version helper SHALL provide `check-updates --suggest` output containing rev
 - **AND** SHALL NOT present it as an immediately applicable update
 
 ### Requirement: Provide a directly executable version resolver
-The project SHALL expose `docker/versions.py` as a directly executable user-facing command while retaining interpreter-based and package-import compatibility.
+The project SHALL expose `docker/docker-constructor.py` as a directly executable user-facing command while retaining interpreter-based and package-import compatibility.
 
 #### Scenario: Invoking the resolver directly
-- **WHEN** a user runs `./docker/versions.py <command>` on a supported Unix host
+- **WHEN** a user runs `./docker/docker-constructor.py <command>` on a supported Unix host
 - **THEN** the operating system SHALL execute the resolver through its declared Python interpreter
-- **AND** arguments, stdout, stderr, and exit codes SHALL match `python3 docker/versions.py <command>`
+- **AND** arguments, stdout, stderr, and exit codes SHALL match `./docker/docker-constructor.py <command>`
 
 #### Scenario: Inspecting the command file
-- **WHEN** repository file metadata and the first line of `docker/versions.py` are inspected
+- **WHEN** repository file metadata and the first line of `docker/docker-constructor.py` are inspected
 - **THEN** the file SHALL have executable permission in Git
 - **AND** SHALL begin with a portable Python 3 shebang
 
@@ -276,17 +257,17 @@ The project SHALL expose `docker/versions.py` as a directly executable user-faci
 - **THEN** imports SHALL continue to delegate to the same implementation without executing the command entry point
 
 ### Requirement: Separate image builds from runtime project selection
-The canonical image-build operation SHALL resolve versioned build inputs without requiring runtime-only project paths, Compose fragments, or host bind-mount configuration.
+The canonical direct Docker image-build operation SHALL resolve versioned build inputs without requiring runtime-only project paths, generated fragments, or host bind-mount configuration.
 
 #### Scenario: Building without runtime configuration
-- **WHEN** a user launches the canonical build with no `.env`, `PROJECT_PATH_*`, or custom `COMPOSE_FILE`
-- **THEN** the resolver SHALL build service `pi` successfully using the reviewed version inventory
+- **WHEN** a user runs `./docker/docker-constructor.py build` with no dotenv file or `PROJECT_PATH_*`
+- **THEN** the resolver SHALL build the tagged Pi runtime image using the validated build section of `docker-constructor.toml`
 - **AND** SHALL NOT require a real host project directory merely to evaluate the build
 
 #### Scenario: Preserving required version inputs
-- **WHEN** the build-safe Compose configuration is rendered
-- **THEN** all version and artifact arguments SHALL still come from the validated effective inventory
-- **AND** missing version inputs SHALL NOT gain concrete Compose or Dockerfile fallbacks
+- **WHEN** the direct Docker build command is rendered
+- **THEN** all version and artifact arguments SHALL come from the validated effective build projection
+- **AND** missing version inputs SHALL NOT gain concrete Dockerfile or Python fallbacks
 
 ### Requirement: Document the component update workflow concretely
 Every maintained README translation SHALL explain how to inspect, review, apply, validate, and rebuild version-managed development-environment components.

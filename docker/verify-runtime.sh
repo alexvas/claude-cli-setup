@@ -1,31 +1,69 @@
 #!/bin/sh
-# Verify the runtime contract after building an image.
+# Smoke-test a built Pi runtime image for basic contract compliance.
+#
+# This script validates structural invariants (tool presence, user
+# identity, ownership, mount detection) by generating an effective
+# runtime projection and mounting it read-only into a temporary
+# container.
+#
+# For version-level and extension-integrity verification use the
+# constructor facade:
+#
+#     # Build-scope checks (tool versions inside image):
+#     ./docker/docker-constructor.py verify --scope build --image "$IMAGE"
+#
+#     # Runtime-scope checks (extensions, ownership, mounts):
+#     ./docker/docker-constructor.py verify --scope runtime \
+#         --image "$IMAGE"                          \
+#         --container <container-name>               \
+#         --runtime-projection <host-path.toml>
+#
+#     # Both scopes (auto-detects container):
+#     ./docker/docker-constructor.py verify --image "$IMAGE"
+#
 set -eu
 IMAGE="${1:-pi-cli-pi:latest}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
+# ── Generate a minimal effective runtime projection ──────────────
+PROJ_FILE=$(mktemp /tmp/pi-runtime-smoke-proj.XXXXXX.toml)
+trap 'rm -f "$PROJ_FILE"' EXIT
+
+PYTHONPATH="$REPO_DIR" python3 -c '
+import sys, shutil
+from pathlib import Path
+from docker.versioning.inventory import load_inventory
+from docker.versioning.effective import resolve_runtime, create_runtime_projection
+
+inv = load_inventory(Path(sys.argv[2]) / "docker-constructor.toml")
+proj = resolve_runtime(inv.runtime, {})
+with create_runtime_projection(proj) as h:
+    shutil.copy2(h.path, sys.argv[1])
+' "$PROJ_FILE" "$REPO_DIR"
+
+# ── Run smoke checks inside a temporary container ────────────────
+docker run --rm \
+    -e CHOWN_WORK_ON_START=0 \
+    --mount "type=bind,src=$PROJ_FILE,dst=/run/pi-cli/docker-constructor.runtime.toml,readonly" \
+    "$IMAGE" bash -c '
   set -eu
-  INVENTORY="/usr/local/share/pi-cli/docker-constructor.toml"
-  HELPER="/usr/local/lib/pi-cli/docker/versions.py"
 
   test "$(id -un)" = dev
+
+  # Runtime projection — mounted read-only by the constructor launcher.
+  RUNTIME_PROJ="/run/pi-cli/docker-constructor.runtime.toml"
+  test -f "$RUNTIME_PROJ" || { echo "MISSING: $RUNTIME_PROJ" >&2; exit 1; }
+  test -r "$RUNTIME_PROJ" || { echo "ERROR: dev cannot read $RUNTIME_PROJ" >&2; exit 1; }
+  if test -w "$RUNTIME_PROJ"; then echo "ERROR: dev can write $RUNTIME_PROJ (should be ro mount)" >&2; exit 1; fi
+  echo "runtime projection ok"
 
   for command in pi openspec node cargo rustc rustfmt uv ty rtk fd; do
     command -v "$command" >/dev/null || { echo "MISSING: $command" >&2; exit 1; }
     "$command" --version >/dev/null || { echo "FAILED: $command --version" >&2; exit 1; }
   done
 
-  # --- Inventory availability checks ---
-  test -f "$INVENTORY" || { echo "MISSING: $INVENTORY" >&2; exit 1; }
-  inv_owner=$(stat -c "%U:%G" "$INVENTORY")
-  test "$inv_owner" = "root:root" || { echo "OWNERSHIP MISMATCH: $INVENTORY expected root:root, got $inv_owner" >&2; exit 1; }
-  inv_mode=$(stat -c "%a" "$INVENTORY")
-  test "$inv_mode" = "444" || { echo "MODE MISMATCH: $INVENTORY expected 444, got $inv_mode" >&2; exit 1; }
-  test -r "$INVENTORY" || { echo "ERROR: dev cannot read $INVENTORY" >&2; exit 1; }
-  if test -w "$INVENTORY"; then echo "ERROR: dev can write $INVENTORY (should be 0444)" >&2; exit 1; fi
-  echo "inventory ok"
-
-  # --- Python checks ---
+  echo "=== Python checks ==="
   python_path=$(command -v python3)
   test "$python_path" != /usr/local/bin/python3
   python_realpath=$(readlink -f "$python_path")
@@ -33,8 +71,9 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
     */.local/share/uv/python/*/bin/python3*) ;;
     *) echo "python3 is not the uv-managed direct interpreter: $python_realpath" >&2; exit 1 ;;
   esac
-  expected_python="$(python3 "$HELPER" get --inventory "$INVENTORY" build.stages.toolchain.python.version)"
-  python3 -c "import sys; v=sys.version_info; actual=f\"{v.major}.{v.minor}.{v.micro}\"; assert actual == \"$expected_python\", actual"
+  python3 -c "import sys; v=sys.version_info; print(f\"{v.major}.{v.minor}.{v.micro}\")" >/dev/null || {
+    echo "FAILED: python3 version introspection" >&2; exit 1
+  }
   test "$(readlink -f "$(command -v python)")" = "$python_realpath"
   if command -v pip >/dev/null 2>&1; then
     echo "UNEXPECTED: pip command is available" >&2
@@ -63,58 +102,24 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
   echo "rust components ok"
 
   echo "=== version checks ==="
-  # Compare installed versions against inventory using normalized exact match.
-  # Detects v-prefix skew (e.g. inventory has "vX.Y.Z" but binary reports "X.Y.Z")
-  # and false matches from substring acceptance (e.g. "0.1.29" matching "0.1.299").
-  _normalize_version() {
-    # Strip an optional leading v/V, then emit as-is.
-    case "$1" in
-      v*|V*) printf "%s" "${1#?}" ;;
-      *) printf "%s" "$1" ;;
-    esac
-  }
+  # Validate that every installed tool reports a parseable dotted version.
+  # Exact version matches are verified host-side by docker-constructor.py verify.
   _extract_version() {
-    # Extract the first dotted numeric token from a multi-word version line.
-    # Works for: "tool-name X.Y.Z (...)", "tool-name vX.Y.Z", etc.
     output="$1"
     printf "%s" "$output" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1
   }
-  check_version() {
-    tool="$1"
-    path="$2"
-    expected_raw="$(python3 "$HELPER" get --inventory "$INVENTORY" "$path")"
-    expected="$( _normalize_version "$expected_raw" )"
+  for tool in rustc cargo uv ty pi openspec rtk fd; do
     output="$("$tool" --version 2>&1)" || { echo "FAILED: $tool --version" >&2; exit 1; }
     actual="$( _extract_version "$output" )"
     if [ -z "$actual" ]; then
       echo "CANNOT PARSE VERSION from $tool output: $output" >&2
       exit 1
     fi
-    if [ "$actual" != "$expected" ]; then
-      echo "VERSION MISMATCH: $tool expected $expected (normalized from $expected_raw), got $actual" >&2
-      echo "  full output: $output" >&2
-      exit 1
-    fi
-  }
-  check_version rustc build.stages.toolchain.rust.version
-  check_version cargo build.stages.toolchain.rust.version
-  # rustfmt and clippy have their own versioning (e.g. 1.8.0-stable, 0.1.88).
-  # Component presence is verified earlier via "rustup component list".
-  check_version uv build.stages.toolchain.uv.version
-  check_version ty build.stages.toolchain.ty.version
-  # Node image tags encode major+distro (e.g. "NN-trixie-slim"). Validate that
-  # node --version reports the expected major (e.g. v24.X.Y).
-  node_tag="$(python3 "$HELPER" get --inventory "$INVENTORY" build.stages.base.node.tag)"
-  node_major="$(printf "%s" "$node_tag" | grep -oE '^[0-9]+')"
-  node_actual="$(node --version | grep -oE '^v[0-9]+\.')"
-  if [ "$node_actual" != "v${node_major}." ]; then
-    echo "NODE MAJOR MISMATCH: expected v${node_major}.X, got $(node --version)" >&2
-    exit 1
-  fi
-  check_version pi build.stages.pi-tools.pi.version
-  check_version openspec build.stages.openspec-tools.openspec.version
-  check_version rtk build.stages.rtk-prebuilt.rtk.version
-  check_version fd build.stages.fd-prebuilt.fd.version
+    echo "  $tool $actual ok"
+  done
+  # Node image tags encode major+distro (e.g. "NN-trixie-slim"). Verify
+  # that node --version reports a recognizable Node version.
+  node --version | grep -qE "^v[0-9]+\." || { echo "FAILED: node --version" >&2; exit 1; }
   echo "version checks ok"
 
   echo "=== pi extension setup script checks ==="
@@ -162,7 +167,7 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
 
   project=$(mktemp -d)
   trap "rm -rf \"$project\"" EXIT
-  printf "[project]\nname = '\''runtime-smoke'\''\nversion = '\''0.1.0'\''\n" > "$project/pyproject.toml"
+  printf "[project]\nname = \"runtime-smoke\"\nversion = \"0.1.0\"\n" > "$project/pyproject.toml"
   mkdir "$project/src"
   (cd "$project" && python3 -c "import os; assert not os.environ.get(\"VIRTUAL_ENV\")")
   (cd /tmp && python3 -c "import os; assert not os.environ.get(\"VIRTUAL_ENV\")")
@@ -173,4 +178,4 @@ docker run --rm -e CHOWN_WORK_ON_START=0 "$IMAGE" bash -c '
   echo "ALL CHECKS PASSED"
 '
 
-echo "runtime tool and PATH checks passed for ${IMAGE}"
+echo "runtime smoke checks passed for ${IMAGE}"

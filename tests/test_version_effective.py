@@ -17,7 +17,7 @@ from docker.versioning.effective import (
     serialize_effective_inventory,
     to_plain_data,
 )
-from docker.versioning.rendering import effective_environment
+from docker.versioning.rendering import render_build_environment
 from docker.versioning.errors import (
     OverrideValidationError,
     UnknownPathError,
@@ -119,7 +119,7 @@ class TestImmutability(unittest.TestCase):
 
 
 class TestEffectiveImmutability(unittest.TestCase):
-    """EffectiveConfiguration and effective_environment must be truly immutable."""
+    """EffectiveConfiguration and render_build_environment must be truly immutable."""
 
     @classmethod
     def setUpClass(cls):
@@ -138,11 +138,11 @@ class TestEffectiveImmutability(unittest.TestCase):
 
     def test_env_is_mappingproxy(self):
         from types import MappingProxyType
-        env = effective_environment(self.effective)
+        env = render_build_environment(self.effective)
         self.assertIsInstance(env, MappingProxyType)
 
     def test_cannot_mutate_env(self):
-        env = effective_environment(self.effective)
+        env = render_build_environment(self.effective)
         with self.assertRaises((TypeError, AttributeError)):
             env["NEW_VAR"] = "value"  # type: ignore[index]
 
@@ -316,7 +316,7 @@ class TestEnvironmentMapping(unittest.TestCase):
         cls.effective = apply_overrides(cls.inventory, {})
 
     def test_default_python_env(self):
-        env = effective_environment(self.effective)
+        env = render_build_environment(self.effective)
         self.assertEqual(env["PYTHON_VERSION"], "3.14.6")
 
     def test_overridden_python_env(self):
@@ -324,13 +324,13 @@ class TestEnvironmentMapping(unittest.TestCase):
             self.inventory,
             {"build.stages.toolchain.python.version": "3.14.7"},
         )
-        env = effective_environment(eff)
+        env = render_build_environment(eff)
         self.assertEqual(env["PYTHON_VERSION"], "3.14.7")
 
 
     def test_node_base_image_from_source_metadata(self):
         """NODE_BASE_IMAGE is derived from source.registry/repository, not hardcoded."""
-        env = effective_environment(self.effective)
+        env = render_build_environment(self.effective)
         image = env["NODE_BASE_IMAGE"]
         node = self.effective.inventory.stages.base.node
         self.assertIn(node.source.registry.rstrip("/"), image)
@@ -352,7 +352,7 @@ class TestEnvironmentMapping(unittest.TestCase):
         path_default = write_toml(toml_default)
         inv_default = load_inv(path_default)
         eff_default = apply_overrides(inv_default, {})
-        env_default = effective_environment(eff_default)
+        env_default = render_build_environment(eff_default)
 
         # Modified fixture with different registry
         toml_modified = minimal_toml(**{
@@ -366,7 +366,7 @@ class TestEnvironmentMapping(unittest.TestCase):
         try:
             inv_modified = load_inv(path_modified)
             eff_modified = apply_overrides(inv_modified, {})
-            env_modified = effective_environment(eff_modified)
+            env_modified = render_build_environment(eff_modified)
 
             # Default should contain docker.io/library/node
             self.assertIn("docker.io/library/node", env_default["NODE_BASE_IMAGE"])
@@ -382,17 +382,17 @@ class TestEnvironmentMapping(unittest.TestCase):
             path_modified.unlink()
 
     def test_all_values_are_strings(self):
-        env = effective_environment(self.effective)
+        env = render_build_environment(self.effective)
         for name, value in env.items():
             self.assertIsInstance(value, str, f"{name} is not str: {type(value)}")
 
     def test_deterministic_ordering(self):
-        env1 = effective_environment(self.effective)
-        env2 = effective_environment(self.effective)
+        env1 = render_build_environment(self.effective)
+        env2 = render_build_environment(self.effective)
         self.assertEqual(list(env1.keys()), list(env2.keys()))
 
     def test_no_missing_extensions(self):
-        env = effective_environment(self.effective)
+        env = render_build_environment(self.effective)
         self.assertIn("PI_READ_VERSION", env)
         self.assertIn("PI_CODEX_USAGE_VERSION", env)
         self.assertIn("PI_PROXY_VERSION", env)

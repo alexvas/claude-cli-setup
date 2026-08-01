@@ -538,11 +538,10 @@ def render_build_environment(
     effective: EffectiveConfiguration,
     *,
     platform: str = "linux-amd64",
-    inventory_output: str = ".docker-generated/docker-constructor.toml",
 ) -> Mapping[str, str]:
     """Return a deterministic mapping of build-argument names to string values.
 
-    Each key is a Compose ``--build-arg`` name; each value is a plain string
+    Each key is a Docker ``--build-arg`` name; each value is a plain string
     (never a list or mapping).  The mapping is derived from the immutable
     *effective* configuration and never consults the network or filesystem.
     """
@@ -613,26 +612,7 @@ def render_build_environment(
         prefix = name.upper().replace("-", "_").replace("@", "")
         result[f"{prefix}_VERSION"] = ext.version
 
-    # Effective inventory path
-    result["EFFECTIVE_VERSIONS_FILE"] = inventory_output
-
-    return result
-
-
-def effective_environment(
-    effective: EffectiveConfiguration,
-    platform: str = "linux-amd64",
-) -> Mapping[str, str]:
-    """Build a deterministic mapping of environment variable names to values.
-
-    Excludes ``EFFECTIVE_VERSIONS_FILE`` — it is a Compose build-time concern,
-    not a shell environment variable.
-    """
-    env = render_build_environment(effective, platform=platform)
-    return MappingProxyType({
-        k: v for k, v in env.items()
-        if k != "EFFECTIVE_VERSIONS_FILE"
-    })
+    return MappingProxyType(result)
 
 
 def write_effective_inventory(

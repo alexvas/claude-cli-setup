@@ -7,30 +7,29 @@
 ## 要求
 
 - 启用 BuildKit 的 Docker Engine 24+
-- Docker Compose v2
 - 主机上的 Python 3
 
 ## 1. 构建环境
 
-先验证已审核的清单，再构建 `pi` 服务：
+先验证已审核的清单，再构建镜像：
 
 ```bash
-./docker/versions.py validate
-./docker/versions.py compose build pi
+./docker/docker-constructor.py validate
+./docker/docker-constructor.py build
 ```
 
 构建不需要项目路径或 `.env`。rootless Docker 的 host gateway 诊断：
 
 ```bash
-python3 docker/build_wrapper.py diagnose
-python3 docker/build_wrapper.py apply -y
-python3 docker/build_wrapper.py build -y
+./docker/docker-constructor.py doctor
+./docker/docker-constructor.py doctor --apply-rootless-override -y
+./docker/docker-constructor.py build -y
 ```
 
-`./docker/versions.py env` 为底层集成输出 shell-safe 的解析后构建输入。显式 Python 覆盖方式：
+显式 Python 版本覆盖方式：
 
 ```bash
-./docker/versions.py compose --override build.stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/docker-constructor.py build --override build.stages.toolchain.python.version=X.Y.Z
 ```
 
 约束只接受完整 `X.Y.Z` 版本上的 `==, >, >=, <, <=`。通配符、不完整版本、OR 和 prerelease 会被拒绝，除非策略明确允许。清单固定已审核的非 Debian 输入，但 Debian 仓库和 BuildKit 元数据意味着不能保证逐字节相同的 OCI 镜像。
@@ -40,15 +39,15 @@ python3 docker/build_wrapper.py build -y
 打开交互式项目选择器：
 
 ```bash
-./launch-pi.py
+./docker/docker-constructor.py run --tui
 ```
 
-选中的主项目会成为容器工作目录，并按相同绝对路径进行 1:1 bind mount。还可选择最多两个额外的 1:1 mount。主机 `~/.pi` 挂载到 `/home/dev/.pi`。可在 `.env` 设置 `BASE_PROJECT_DIR`，或传入 `--base-project-dir` 来选择 TUI 树根目录。
+选中的主项目会成为容器工作目录，并按相同绝对路径进行 1:1 bind mount。其他项目以 `PROJECT_PATH_2`、`PROJECT_PATH_3`……的形式连续编号进行 1:1 mount，无数量上限。主机 `~/.pi` 挂载到 `/home/dev/.pi`。可在 `.env` 设置 `BASE_PROJECT_DIR`，或传入 `--base-project-dir` 来选择 TUI 树根目录。
 
-设置 `PROJECT_PATH_1` 后也可使用底层运行命令：
+使用显式项目直接启动：
 
 ```bash
-./docker/versions.py compose run --rm pi
+./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
 ```
 
 ## 3. 更新环境组件
@@ -58,22 +57,22 @@ python3 docker/build_wrapper.py build -y
 1. 只检查 Pi 并请求可审核建议：
 
    ```bash
-   ./docker/versions.py check-updates --only build.stages.pi-tools.pi --suggest
+   ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
 2. `--suggest` 是 **non-mutating**：核对上游发布，然后手动把接受的值及相关元数据应用到 `docker-constructor.toml` 的 `build.stages.pi-tools.pi`。
 3. 验证并审查准确变更：
 
    ```bash
-   ./docker/versions.py validate
+   ./docker/docker-constructor.py validate
    git diff -- docker-constructor.toml
    ```
 
 4. 重新构建并验证运行时镜像：
 
    ```bash
-   ./docker/versions.py compose build pi
-   ./docker/verify-runtime.sh pi-cli-pi:latest
+   ./docker/docker-constructor.py build
+   ./docker/docker-constructor.py verify
    ```
 
 ### 组件生命周期
@@ -88,7 +87,7 @@ python3 docker/build_wrapper.py build -y
 | Pi extensions | pi-read、usage、proxy、rtk 注册 | 主机挂载的 `/home/dev/.pi` | `runtime.pi-extensions` npm 元数据 |
 | Debian packages | 系统工具和库 | 镜像系统路径 | APT；不属于 `docker-constructor.toml` 更新发现 |
 
-更新其他托管组件时，找到清单路径，运行 `check-updates --only <path> --suggest`，手动审核并编辑，然后执行验证、diff 审查、重建和运行时验证。对于 `runtime.pi-extensions`，重建只更新镜像的有效清单，不更新挂载状态；请在“维护”中刷新。
+更新其他托管组件时，找到清单路径，运行 `check-updates --only <path> --suggest`，手动审核并编辑，然后执行验证、diff 审查、重建和运行时验证。对于 `runtime.pi-extensions`，重建只更新镜像的有效清单，不更新挂载状态；请在"维护"中刷新。
 
 ### 更新检查控制项
 
@@ -103,7 +102,7 @@ python3 docker/build_wrapper.py build -y
 ### 验证镜像
 
 ```bash
-./docker/verify-runtime.sh pi-cli-pi:latest
+./docker/docker-constructor.py verify
 ```
 
 ### 刷新挂载的 Pi extensions
@@ -111,7 +110,7 @@ python3 docker/build_wrapper.py build -y
 更改 `runtime.pi-extensions` 后，挂载目标 Pi home 并运行受保护且幂等的安装程序：
 
 ```bash
-./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
+./docker/docker-constructor.py run -- /home/dev/install-pi-extensions.sh
 ```
 
 ### 修复主机所有权和权限
@@ -149,5 +148,5 @@ docker builder prune
 
 ## 故障排除
 
-- **挂载项目或 Pi home 出现 EACCES：** 比较主机所有权与运行时 UID/GID。可让 `CHOWN_WORK_ON_START=1` 修复实际 mount points，或禁用它并采用“维护”中的窄范围步骤。
+- **挂载项目或 Pi home 出现 EACCES：** 比较主机所有权与运行时 UID/GID。可让 `CHOWN_WORK_ON_START=1` 修复实际 mount points，或禁用它并采用"维护"中的窄范围步骤。
 - **更新 provider 不可用：** 稍后重试或检查缓存；仅在必须强制 provider 可用时使用 `--strict`。

@@ -9,7 +9,7 @@ Define the current launcher flow that selects project directories and starts a Ï
 The system SHALL read launcher defaults from the repository `.env` file.
 
 #### Scenario: Loading environment settings
-- **WHEN** `launch-pi.py` starts
+- **WHEN** `docker/docker-constructor.py run` starts
 - **THEN** it parses `.env` as simple `KEY=VALUE` pairs
 - **AND** uses `BASE_PROJECT_DIR` from `.env` unless overridden by `--base-project-dir`
 
@@ -74,16 +74,15 @@ The system SHALL generate ephemeral compose files describing the selected mounts
 - **AND** creates a temporary override file that exports `PROJECT_PATH_1..N` in compose environment
 - **AND** registers those temporary files for cleanup on process exit
 
-### Requirement: Run docker compose with generated overrides
-The system SHALL launch the `pi` service using the generated compose file chain.
+### Requirement: Run Docker directly with selected projects
+The system SHALL launch the `pi` service using an explicit direct Docker argument vector.
 
 #### Scenario: Launching the container
 - **WHEN** the user starts a session
-- **THEN** the launcher sets `COMPOSE_FILE` to `docker-compose.yml` plus generated fragments and override file
-- **AND** runs `docker compose --project-directory <repo-root> run --rm --remove-orphans --name pi-N pi`
-- **AND** passes `PROJECT_PATH_1` and any extra project paths through the environment
+- **THEN** the launcher runs `docker run` with `--rm`, an allocated `pi-N` name, and interactive terminal behavior
+- **AND** passes `PROJECT_PATH_1` and any extra project paths through the container environment
 
 #### Scenario: Dry-run mode
 - **WHEN** the launcher is started with `--dry-run`
-- **THEN** it prints the computed environment, generated override content, and docker compose command
-- **AND** does not execute Docker
+- **THEN** it prints a shell-escaped representation of the complete `docker run` argument vector
+- **AND** does not create temporary configuration files or execute Docker

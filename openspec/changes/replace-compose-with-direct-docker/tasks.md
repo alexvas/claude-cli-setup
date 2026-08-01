@@ -271,18 +271,18 @@
 
 ### GREEN
 
-- [ ] 13.3 Migrate rootless helpers, examples, verification helpers, acceptance harnesses, active OpenSpec artifacts, and maintained Russian, English, and Chinese documentation; update every maintained README to remove the legacy two-additional-project limit and document consecutive `PROJECT_PATH_2..N` numbering.
-- [ ] 13.4 Remove `docker/build_wrapper.py`, user-facing `docker/versions.py`, `launch-pi.py`, Compose files/fragments/classification, obsolete verification adapters, and their superseded tests.
-- [ ] 13.5 Remove `docker/gen-models-json.py`, generator-only tests, stale inf-splitter settings, runtime copies of reviewed/build metadata, and Docker Compose prerequisites.
+- [x] 13.3 Migrate rootless helpers, examples, verification helpers, acceptance harnesses, active OpenSpec artifacts, and maintained Russian, English, and Chinese documentation; update every maintained README to remove the legacy two-additional-project limit and document consecutive `PROJECT_PATH_2..N` numbering.
+- [x] 13.4 Remove `docker/build_wrapper.py`, user-facing `docker/versions.py`, `launch-pi.py`, Compose files/fragments/classification, obsolete verification adapters, and their superseded tests.
+- [x] 13.5 Remove `docker/gen-models-json.py`, generator-only tests, stale inf-splitter settings, runtime copies of reviewed/build metadata, and Docker Compose prerequisites.
 
 ### INTROSPECT
 
-- [ ] 13.6 Search supported source and documentation for stale contracts while excluding historical archived OpenSpec artifacts from migration requirements.
-- [ ] 13.7 Review deletions for lost behavior or excess disclosure: image tag, caching, gateway, projects, ownership, extensions, effective expectations, and runtime isolation.
+- [x] 13.6 Search supported source and documentation for stale contracts while excluding historical archived OpenSpec artifacts from migration requirements.
+- [x] 13.7 Review deletions for lost behavior or excess disclosure: image tag, caching, gateway, projects, ownership, extensions, effective expectations, and runtime isolation.
 
 ### VALIDATE
 
-- [ ] 13.8 Run documentation, semantic-source, command-contract, full unit, compile/import, strict OpenSpec, and `git diff --check` validations without Docker.
+- [x] 13.8 Run documentation, semantic-source, command-contract, full unit, compile/import, strict OpenSpec, and `git diff --check` validations without Docker.
 
 ## 14. Stage 14 — Portable Docker-Host Acceptance Evidence
 

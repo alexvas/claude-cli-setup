@@ -7,30 +7,29 @@
 ## Требования
 
 - Docker Engine 24+ с BuildKit
-- Docker Compose v2
 - Python 3 на хосте
 
 ## 1. Сборка окружения
 
-Проверьте конфигурацию версий и соберите сервис `pi`:
+Проверьте конфигурацию версий и соберите образ:
 
 ```bash
-./docker/versions.py validate
-./docker/versions.py compose build pi
+./docker/docker-constructor.py validate
+./docker/docker-constructor.py build
 ```
 
 Для сборки не нужны путь проекта и `.env`. Диагностика host gateway для rootless Docker:
 
 ```bash
-python3 docker/build_wrapper.py diagnose
-python3 docker/build_wrapper.py apply -y
-python3 docker/build_wrapper.py build -y
+./docker/docker-constructor.py doctor
+./docker/docker-constructor.py doctor --apply-rootless-override -y
+./docker/docker-constructor.py build -y
 ```
 
-`./docker/versions.py env` печатает безопасные для shell разрешённые входы сборки. Явное переопределение Python:
+Явное переопределение версии Python:
 
 ```bash
-./docker/versions.py compose --override build.stages.toolchain.python.version=X.Y.Z -- build pi
+./docker/docker-constructor.py build --override build.stages.toolchain.python.version=X.Y.Z
 ```
 
 Ограничения поддерживают только `==, >, >=, <, <=` и полные версии `X.Y.Z`. Шаблоны, неполные версии, OR и prerelease запрещены, если политика явно не разрешает их. Конфигурация версий фиксирует проверенные входы, кроме Debian, но репозитории Debian и метаданные BuildKit не гарантируют побайтово одинаковый OCI-образ.
@@ -40,15 +39,15 @@ python3 docker/build_wrapper.py build -y
 Откройте интерактивный выбор проектов:
 
 ```bash
-./launch-pi.py
+./docker/docker-constructor.py run --tui
 ```
 
-Основной проект становится рабочим каталогом контейнера и монтируется 1:1 по тому же абсолютному пути. Можно выбрать до двух дополнительных 1:1-монтирований. Хостовый `~/.pi` монтируется в `/home/dev/.pi`. Корень дерева TUI можно задать через `BASE_PROJECT_DIR` в `.env` или `--base-project-dir`.
+Основной проект становится рабочим каталогом контейнера и монтируется 1:1 по тому же абсолютному пути. Дополнительные проекты монтируются 1:1 с последовательной нумерацией `PROJECT_PATH_2`, `PROJECT_PATH_3`, … без ограничения количества. Хостовый `~/.pi` монтируется в `/home/dev/.pi`. Корень дерева TUI можно задать через `BASE_PROJECT_DIR` в `.env` или `--base-project-dir`.
 
-Низкоуровневый запуск доступен при заданном `PROJECT_PATH_1`:
+Прямой запуск с явно заданными проектами:
 
 ```bash
-./docker/versions.py compose run --rm pi
+./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
 ```
 
 ## 3. Обновление компонентов окружения
@@ -58,22 +57,22 @@ python3 docker/build_wrapper.py build -y
 1. Проверьте только Pi и запросите предложение:
 
    ```bash
-   ./docker/versions.py check-updates --only build.stages.pi-tools.pi --suggest
+   ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
 2. `--suggest` работает в режиме **non-mutating**: проверьте upstream-релиз и вручную внесите принятое значение и связанные метаданные в `build.stages.pi-tools.pi` файла `docker-constructor.toml`.
 3. Проверьте конфигурацию версий и diff:
 
    ```bash
-   ./docker/versions.py validate
+   ./docker/docker-constructor.py validate
    git diff -- docker-constructor.toml
    ```
 
 4. Пересоберите и проверьте runtime-образ:
 
    ```bash
-   ./docker/versions.py compose build pi
-   ./docker/verify-runtime.sh pi-cli-pi:latest
+   ./docker/docker-constructor.py build
+   ./docker/docker-constructor.py verify
    ```
 
 ### Жизненный цикл компонентов
@@ -95,7 +94,7 @@ python3 docker/build_wrapper.py build -y
 Чтобы проверить все управляемые компоненты, запустите команду без дополнительных опций:
 
 ```bash
-./docker/versions.py check-updates
+./docker/docker-constructor.py check-updates
 ```
 
 Она выводит сводный список компонентов и для каждого указывает, доступно ли обновление.
@@ -111,7 +110,7 @@ python3 docker/build_wrapper.py build -y
 ### Проверка образа
 
 ```bash
-./docker/verify-runtime.sh pi-cli-pi:latest
+./docker/docker-constructor.py verify
 ```
 
 ### Обновление смонтированных Pi extensions
@@ -119,7 +118,7 @@ python3 docker/build_wrapper.py build -y
 После изменения `runtime.pi-extensions` запустите контейнер с нужным Pi home и защищённый идемпотентный установщик:
 
 ```bash
-./docker/versions.py compose run --rm pi /home/dev/install-pi-extensions.sh
+./docker/docker-constructor.py run -- /home/dev/install-pi-extensions.sh
 ```
 
 ### Исправление владельца и прав на хосте
