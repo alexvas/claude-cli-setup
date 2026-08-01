@@ -87,6 +87,19 @@ class RuntimeCheck:
     """``True`` when the check passes."""
     detail: str
     """Human-readable description or failure reason."""
+    command: tuple[str, ...] | None = None
+    """The exact command vector that produced the primary diagnostic
+    output (e.g. ``("sha256sum", "/run/pi-cli/...")``).  When the
+    check involves a single ``_exec()`` call this matches the full
+    ``docker exec`` argv; when the check runs multiple commands it
+    holds the deciding command's argv.  ``None`` for checks that did
+    not execute any command."""
+    exit_code: int | None = None
+    """Exit code of the command in *command*."""
+    raw_stdout: str | None = None
+    """Raw stdout captured from the command in *command*."""
+    raw_stderr: str | None = None
+    """Raw stderr captured from the command in *command*."""
 
 
 @dataclass(frozen=True)
@@ -170,30 +183,37 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         """Run ``docker exec <container> ...``."""
         return runner.run(("docker", "exec", container, *cmd))
 
-    def _add(key: str, ok: bool, detail: str) -> None:
-        checks.append(RuntimeCheck(key=key, ok=ok, detail=detail))
+    def _add(key: str, ok: bool, detail: str,
+             result: ProcessResult | None = None) -> None:
+        checks.append(RuntimeCheck(
+            key=key, ok=ok, detail=detail,
+            command=result.argv if result is not None else None,
+            exit_code=result.return_code if result is not None else None,
+            raw_stdout=result.stdout if result is not None else None,
+            raw_stderr=result.stderr if result is not None else None,
+        ))
 
     # ── projection.identity ──────────────────────────────────────────
     r = _exec(("sha256sum", "/run/pi-cli/docker-constructor.runtime.toml"))
     if r.return_code != 0:
         _add("projection.identity", False,
-             f"sha256sum failed (exit {r.return_code}): {r.stderr.strip()}")
+             f"sha256sum failed (exit {r.return_code}): {r.stderr.strip()}", r)
     else:
         parts = r.stdout.strip().split()
         container_hash = parts[0] if parts else ""
         if container_hash == host_hash:
             _add("projection.identity", True,
-                 f"projection hash {host_hash} matches host")
+                 f"projection hash {host_hash} matches host", r)
         else:
             _add("projection.identity", False,
                  f"hash mismatch: container={container_hash[:12]}…"
-                 f" host={host_hash[:12]}…")
+                 f" host={host_hash[:12]}…", r)
 
     # ── projection.readonly ──────────────────────────────────────────
     r = _exec(("grep", "docker-constructor.runtime.toml", "/proc/mounts"))
     if r.return_code != 0:
         _add("projection.readonly", False,
-             "runtime projection not found in /proc/mounts")
+             "runtime projection not found in /proc/mounts", r)
     else:
         mount_line = r.stdout.strip()
         # Mount options are comma-separated in the 4th field.
@@ -208,20 +228,20 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
                     if rw.return_code != 0:
                         _add("projection.readonly", True,
                              "runtime projection is read-only"
-                             " (ro mount + not writable)")
+                             " (ro mount + not writable)", rw)
                     else:
                         _add("projection.readonly", False,
-                             "mount claims ro but file is writable")
+                             "mount claims ro but file is writable", rw)
                 else:
                     _add("projection.readonly", False,
                          f"runtime projection mount is not ro"
-                         f" (options: {','.join(opts)})")
+                         f" (options: {','.join(opts)})", r)
             else:
                 _add("projection.readonly", False,
-                     f"unexpected /proc/mounts format: {mount_line[:120]}")
+                     f"unexpected /proc/mounts format: {mount_line[:120]}", r)
         else:
             _add("projection.readonly", False,
-                 "empty /proc/mounts line for projection")
+                 "empty /proc/mounts line for projection", r)
 
     # ── extensions.results ───────────────────────────────────────────
     extensions = proj_data.get("extensions", {})
@@ -233,7 +253,7 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         r = _exec(("cat", pkg_json_path))
         if r.return_code != 0:
             _add("extensions.results", False,
-                 f"{pkg_name}: package.json not found")
+                 f"{pkg_name}: package.json not found", r)
         else:
             try:
                 import json as _json
@@ -243,10 +263,10 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
                 actual_ver = ""
             if actual_ver == expected_ver:
                 _add("extensions.results", True,
-                     f"{pkg_name} v{expected_ver} installed")
+                     f"{pkg_name} v{expected_ver} installed", r)
             else:
                 _add("extensions.results", False,
-                     f"{pkg_name}: expected v{expected_ver}, got v{actual_ver}")
+                     f"{pkg_name}: expected v{expected_ver}, got v{actual_ver}", r)
 
     # ── projects.present ─────────────────────────────────────────────
     for i, p in enumerate(pp, start=1):
@@ -255,23 +275,23 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         r = _exec(("test", "-d", sp))
         if r.return_code != 0:
             _add("projects.present", False,
-                 f"PROJECT_PATH_{i} ({sp}) is not an accessible directory")
+                 f"PROJECT_PATH_{i} ({sp}) is not an accessible directory", r)
         else:
             # Env var exact value
             r_env = _exec(("printenv", f"PROJECT_PATH_{i}"))
             actual = r_env.stdout.strip() if r_env.return_code == 0 else ""
             if actual == sp:
                 _add("projects.present", True,
-                     f"PROJECT_PATH_{i}={sp} (dir present)")
+                     f"PROJECT_PATH_{i}={sp} (dir present)", r_env)
             else:
                 _add("projects.present", False,
-                     f"PROJECT_PATH_{i}: expected {sp!r}, got {actual!r}")
+                     f"PROJECT_PATH_{i}: expected {sp!r}, got {actual!r}", r_env)
     # Guard: no unexpected next entry
     guard_key = f"PROJECT_PATH_{len(pp) + 1}"
     r_guard = _exec(("printenv", guard_key))
     if r_guard.return_code == 0:
         _add("projects.present", False,
-             f"unexpected {guard_key}={r_guard.stdout.strip()!r}")
+             f"unexpected {guard_key}={r_guard.stdout.strip()!r}", r_guard)
 
     # ── working.directory ────────────────────────────────────────────
     if pp:
@@ -280,22 +300,23 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         expected_wd = str(pp[0])
         if wd == expected_wd:
             _add("working.directory", True,
-                 f"working directory is PROJECT_PATH_1 ({wd})")
+                 f"working directory is PROJECT_PATH_1 ({wd})", r)
         else:
             _add("working.directory", False,
-                 f"working directory: expected {expected_wd!r}, got {wd!r}")
+                 f"working directory: expected {expected_wd!r}, got {wd!r}", r)
     else:
-        _add("working.directory", True, "no project paths — nothing to verify")
+        _add("working.directory", True,
+             "no project paths — nothing to verify")
 
     # ── ownership.dev ────────────────────────────────────────────────
     # Pi home
     r = _exec(("stat", "-c", "%U:%G", pi_home))
     owner = r.stdout.strip() if r.return_code == 0 else ""
     if owner == "dev:dev":
-        _add("ownership.dev", True, f"{pi_home} owned by dev:dev")
+        _add("ownership.dev", True, f"{pi_home} owned by dev:dev", r)
     else:
         _add("ownership.dev", False,
-             f"{pi_home} owned by {owner!r}, expected dev:dev")
+             f"{pi_home} owned by {owner!r}, expected dev:dev", r)
     # Project paths
     for i, p in enumerate(pp, start=1):
         sp = str(p)
@@ -303,37 +324,38 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         p_owner = r.stdout.strip() if r.return_code == 0 else ""
         if p_owner == "dev:dev":
             _add("ownership.dev", True,
-                 f"PROJECT_PATH_{i} ({sp}) owned by dev:dev")
+                 f"PROJECT_PATH_{i} ({sp}) owned by dev:dev", r)
         else:
             _add("ownership.dev", False,
-                 f"PROJECT_PATH_{i} ({sp}) owned by {p_owner!r}, expected dev:dev")
+                 f"PROJECT_PATH_{i} ({sp}) owned by {p_owner!r}, expected dev:dev", r)
 
     # ── pi-home.setup ─────────────────────────────────────────────────
     r = _exec(("test", "-d", pi_home))
     if r.return_code != 0:
-        _add("pi-home.setup", False, f"{pi_home} does not exist")
+        _add("pi-home.setup", False, f"{pi_home} does not exist", r)
     else:
         rw = _exec(("test", "-w", pi_home))
         if rw.return_code == 0:
-            _add("pi-home.setup", True, f"{pi_home} exists and is writable")
+            _add("pi-home.setup", True,
+                 f"{pi_home} exists and is writable", rw)
         else:
             _add("pi-home.setup", False,
-                 f"{pi_home} exists but is not writable")
+                 f"{pi_home} exists but is not writable", rw)
 
     # ── gateway.mapping ──────────────────────────────────────────────
     r = _exec(("getent", "hosts", "host.docker.internal"))
     if r.return_code != 0:
         _add("gateway.mapping", False,
-             f"host.docker.internal resolution failed")
+             f"host.docker.internal resolution failed", r)
     else:
         resolved = r.stdout.strip().split()[0] if r.stdout.strip() else ""
         if resolved == request.expected_gateway:
             _add("gateway.mapping", True,
-                 f"host.docker.internal → {resolved}")
+                 f"host.docker.internal → {resolved}", r)
         else:
             _add("gateway.mapping", False,
                  f"host.docker.internal → {resolved!r}, expected"
-                 f" {request.expected_gateway!r}")
+                 f" {request.expected_gateway!r}", r)
 
     # ── forbidden.paths ──────────────────────────────────────────────
     forbidden = (
@@ -344,10 +366,10 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         r = _exec(("test", "-f", fp))
         if r.return_code == 0:
             _add("forbidden.paths", False,
-                 f"forbidden path present: {fp}")
+                 f"forbidden path present: {fp}", r)
         else:
             _add("forbidden.paths", True,
-                 f"forbidden path absent: {fp}")
+                 f"forbidden path absent: {fp}", r)
 
     # ── Assemble ─────────────────────────────────────────────────────
     all_ok = all(c.ok for c in checks) and len(errors) == 0

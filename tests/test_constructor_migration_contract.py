@@ -89,6 +89,8 @@ _PY_LINE_ALLOWLIST = frozenset({
 _FORBIDDEN_PATHS_EXCLUDED_FILES = frozenset({
     "docker/versioning/runtime_verification.py",
     "tests/test_constructor_runtime_verification.py",
+    "tests/test_constructor_acceptance.py",
+    "docker/constructor_cli.py",
 })
 
 

@@ -290,8 +290,8 @@
 
 ### RED
 
-- [ ] 14.1 Finalize daemon-independent acceptance fixtures covering failed build/run commands, mismatched image expectations, bad runtime mounts, exposed source/build paths, project errors, and unsuccessful extension checks.
-- [ ] 14.2 Confirm each simulated failure leaves enough structured and raw evidence for diagnosis without rerunning Docker.
+- [x] 14.1 Finalize daemon-independent acceptance fixtures covering failed build/run commands, mismatched image expectations, bad runtime mounts, exposed source/build paths, project errors, and unsuccessful extension checks.
+- [x] 14.2 Confirm each simulated failure leaves enough structured and raw evidence for diagnosis without rerunning Docker.
 
 ### GREEN
 

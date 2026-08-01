@@ -103,8 +103,14 @@ class EvidenceBundle:
 # ── Implementation ───────────────────────────────────────────────────
 
 import hashlib
+import json as _json
 import os
+import subprocess
 import time
+from datetime import datetime, timezone
+
+# Public so callers can reference the default without hard-coding 1 MiB.
+MAX_OUTPUT_BYTES: int = 1_048_576
 
 
 class _SystemClock:
@@ -112,6 +118,185 @@ class _SystemClock:
 
     def now(self) -> float:
         return time.time()
+
+
+def normalize_static_record(
+    *,
+    argv: tuple[str, ...],
+    return_code: int | None,
+    stdout_raw: str = "",
+    stderr_raw: str = "",
+    timestamp_epoch: float,
+    duration_seconds: float = 0.0,
+    output_dir: Path,
+    index: int,
+    max_output_bytes: int = MAX_OUTPUT_BYTES,
+) -> EvidenceCommand:
+    """Apply the evidence collector's redaction, truncation,
+    and checksumming contract to pre-captured verification output.
+
+    This is the single entry-point for normalising captured output so
+    that both :func:`collect_evidence` (live execution) and
+    :func:`write_static_evidence` (pre-recorded) produce
+    byte-identical metadata — same redaction rules, same size bound,
+    same checksum algorithm.
+
+    Returns a fully-formed :class:`EvidenceCommand`; caller appends
+    it to the record list and passes the list to
+    :func:`write_static_evidence`.
+    """
+    # Redact both streams (same rule as collect_evidence).
+    stdout_clean = _redact_content(stdout_raw) if stdout_raw else ""
+    stderr_clean = _redact_content(stderr_raw) if stderr_raw else ""
+
+    # Truncate.
+    stdout_trunc, stdout_truncated, stdout_orig = _truncate(
+        stdout_clean, max_output_bytes,
+    )
+    stderr_trunc, stderr_truncated, stderr_orig = _truncate(
+        stderr_clean, max_output_bytes,
+    )
+
+    # Write bounded output files.
+    stdout_file = _write_output_file(
+        output_dir, f"{index:03d}-stdout", stdout_trunc,
+    ) if stdout_trunc else None
+    stderr_file = _write_output_file(
+        output_dir, f"{index:03d}-stderr", stderr_trunc,
+    ) if stderr_trunc else None
+
+    # Checksums — hash the truncated content even when empty, so
+    # the bundle is byte-identical to live collection.
+    stdout_sha256 = hashlib.sha256(stdout_trunc.encode()).hexdigest()
+    stderr_sha256 = hashlib.sha256(stderr_trunc.encode()).hexdigest()
+
+    return EvidenceCommand(
+        argv=_redact_argv(argv),
+        return_code=return_code,
+        timestamp_epoch=timestamp_epoch,
+        duration_seconds=duration_seconds,
+        stdout_file=stdout_file,
+        stderr_file=stderr_file,
+        stdout_sha256=stdout_sha256,
+        stderr_sha256=stderr_sha256,
+        stdout_truncated=stdout_truncated,
+        stderr_truncated=stderr_truncated,
+        stdout_original_bytes=stdout_orig,
+        stderr_original_bytes=stderr_orig,
+    )
+
+
+def write_static_evidence(
+    *,
+    output_dir: Path,
+    image: str,
+    records: Sequence[EvidenceCommand],
+    notes: Sequence[EvidenceNote] = (),
+    dry_run: bool = False,
+) -> EvidenceBundle:
+    """Write pre-captured *records* into a portable evidence bundle.
+
+    Unlike :func:`collect_evidence`, this function does **not** execute
+    any commands — it writes the already-captured command results
+    (argv, exit codes, stdout/stderr) into the output directory and
+    produces the human-readable index.
+
+    This is the recommended way to preserve verification results
+    without re-execution, which avoids the risk of container-state
+    drift between the original check and the evidence collection.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    evidence_commands: list[EvidenceCommand] = list(records)
+    evidence_notes: list[EvidenceNote] = list(notes)
+
+    # ── Host metadata ─────────────────────────────────────────────
+    hostname = os.uname().nodename
+    evidence_notes.append(EvidenceNote(
+        key="host-metadata",
+        detail=f"collected on {hostname}",
+    ))
+
+    # ── Git SHA ───────────────────────────────────────────────────
+    try:
+        git_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if git_result.returncode == 0:
+            git_sha = git_result.stdout.strip()
+            evidence_notes.append(EvidenceNote(
+                key="git-sha",
+                detail=f"commit {git_sha}",
+            ))
+        else:
+            evidence_notes.append(EvidenceNote(
+                key="git-sha",
+                detail="git rev-parse failed",
+            ))
+    except Exception:
+        evidence_notes.append(EvidenceNote(
+            key="git-sha",
+            detail="git unavailable",
+        ))
+
+    # ── Human-readable index ──────────────────────────────────────
+    ts = datetime.fromtimestamp(
+        evidence_commands[0].timestamp_epoch
+        if evidence_commands else time.time(),
+        tz=timezone.utc,
+    )
+    lines: list[str] = []
+    lines.append(f"Evidence collection for image: {image}")
+    lines.append(f"Generated at: {ts.isoformat()}")
+    lines.append(f"Output directory: {output_dir}")
+    lines.append(f"Dry run: {dry_run}")
+    lines.append("")
+    lines.append("Commands:")
+    for i, cmd in enumerate(evidence_commands):
+        skipped = " (skipped)" if cmd.skipped else ""
+        rc_str = str(cmd.return_code) if cmd.return_code is not None else "-"
+        dur = f"{cmd.duration_seconds:.3f}s"
+        lines.append(
+            f"  [{i:03d}] exit={rc_str} dur={dur}{skipped}"
+            f" argv={' '.join(cmd.argv)}"
+        )
+        if cmd.stdout_file:
+            lines.append(f"        stdout={cmd.stdout_file}"
+                         f" (sha256={cmd.stdout_sha256})")
+        if cmd.stderr_file:
+            lines.append(f"        stderr={cmd.stderr_file}"
+                         f" (sha256={cmd.stderr_sha256})")
+    lines.append("")
+    lines.append("Notes:")
+    for note in evidence_notes:
+        lines.append(f"  [{note.key}] {note.detail}")
+
+    lines.append("")
+    failures = [c for c in evidence_commands
+                if not c.skipped and c.return_code not in (0, None)]
+    if failures:
+        lines.append(f"OVERALL: FAIL ({len(failures)} command(s) failed)")
+    else:
+        lines.append("OVERALL: PASS")
+
+    # Bundle self-checksum (computed over content without this line).
+    index_raw = "\n".join(lines)
+    bundle_hash = hashlib.sha256(index_raw.encode()).hexdigest()
+
+    index_path = output_dir / "index.txt"
+    index_path.write_text(
+        index_raw + f"\nBundle checksum (sha256): {bundle_hash}\n",
+        encoding="utf-8",
+    )
+
+    return EvidenceBundle(
+        commands=tuple(evidence_commands),
+        notes=tuple(evidence_notes),
+        output_dir=output_dir,
+        index_path=index_path,
+        dry_run=dry_run,
+    )
+
 
 _SECRET_PATTERNS: tuple[tuple[bytes, bytes], ...] = (
     (b"-e ", b"-e REDACTED="),
@@ -206,10 +391,6 @@ def collect_evidence(
     The collected bundle can be transported to a daemon-free
     environment for inspection.
     """
-    import subprocess
-    import json as _json
-    from datetime import datetime, timezone
-
     output_dir.mkdir(parents=True, exist_ok=True)
     evidence_commands: list[EvidenceCommand] = []
     evidence_notes: list[EvidenceNote] = []
@@ -259,42 +440,20 @@ def collect_evidence(
         t_stop = clock.now()
         duration = t_stop - t_start
 
-        # Redact stderr
-        stderr_clean = _redact_content(stderr_raw) if stderr_raw else ""
-
-        # Truncate
-        stdout_trunc, stdout_truncated, stdout_orig = _truncate(
-            stdout_raw if stdout_raw else "", max_output_bytes,
-        )
-        stderr_trunc, stderr_truncated, stderr_orig = _truncate(
-            stderr_clean, max_output_bytes,
-        )
-
-        # Write files
+        # Delegate to the single normalisation path.
         idx = len(evidence_commands)
-        stdout_file = _write_output_file(output_dir, f"{idx:03d}-stdout",
-                                          stdout_trunc) if stdout_trunc else None
-        stderr_file = _write_output_file(output_dir, f"{idx:03d}-stderr",
-                                          stderr_trunc) if stderr_trunc else None
-
-        # Checksums — hash the truncated content (may be empty string).
-        stdout_sha256 = hashlib.sha256(stdout_trunc.encode()).hexdigest()
-        stderr_sha256 = hashlib.sha256(stderr_trunc.encode()).hexdigest()
-
-        evidence_commands.append(EvidenceCommand(
-            argv=_redact_argv(cmd),
+        rec = normalize_static_record(
+            argv=cmd,
             return_code=rc,
+            stdout_raw=stdout_raw,
+            stderr_raw=stderr_raw,
             timestamp_epoch=t_start,
             duration_seconds=duration,
-            stdout_file=stdout_file,
-            stderr_file=stderr_file,
-            stdout_sha256=stdout_sha256,
-            stderr_sha256=stderr_sha256,
-            stdout_truncated=stdout_truncated,
-            stderr_truncated=stderr_truncated,
-            stdout_original_bytes=stdout_orig,
-            stderr_original_bytes=stderr_orig,
-        ))
+            output_dir=output_dir,
+            index=idx,
+            max_output_bytes=max_output_bytes,
+        )
+        evidence_commands.append(rec)
 
     # ── Static notes ──────────────────────────────────────────────────
     # Image inspect result (from any command whose argv contains "inspect")
@@ -394,13 +553,15 @@ def collect_evidence(
     else:
         lines.append("OVERALL: PASS")
 
-    # Bundle self-checksum
+    # Bundle self-checksum (computed over content without this line).
     index_raw = "\n".join(lines)
     bundle_hash = hashlib.sha256(index_raw.encode()).hexdigest()
-    lines.append(f"Bundle checksum (sha256): {bundle_hash}")
 
     index_path = output_dir / "index.txt"
-    index_path.write_text(index_raw, encoding="utf-8")
+    index_path.write_text(
+        index_raw + f"\nBundle checksum (sha256): {bundle_hash}\n",
+        encoding="utf-8",
+    )
 
     return EvidenceBundle(
         commands=tuple(evidence_commands),

@@ -671,6 +671,10 @@ def _real_dispatcher(
                 "container_name": result.container_name,
                 "projection_hash": result.projection_hash,
             }
+            # Preserve raw execution outcome for diagnosis.
+            if result.process_result is not None:
+                data["exit_code"] = result.process_result.return_code
+                data["stderr"] = result.process_result.stderr
 
         return CommandResult(
             exit_kind=ExitKind(result.exit_kind.value),
@@ -711,6 +715,10 @@ def _real_dispatcher(
         _repo_root = _Path(inv_path).resolve().parent
         build_proj_path = _repo_root / ".docker-generated" / "docker-constructor.build.effective.toml"
 
+        # Runtime project paths — populated during runtime verification
+        # and referenced by evidence collection.
+        _proj_paths: tuple[Path, ...] = ()
+
         results: dict[str, object] = {}
         all_ok = True
 
@@ -727,7 +735,8 @@ def _real_dispatcher(
                 "observations": [
                     {"key": o.key, "ok": o.ok,
                      "expected": o.expected_value,
-                     "observed": o.observed_value}
+                     "observed": o.observed_value,
+                     "command": list(o.command)}
                     for o in b_result.observations
                 ],
                 "errors": list(b_result.errors),
@@ -852,7 +861,11 @@ def _real_dispatcher(
                     "all_ok": r_result.all_ok,
                     "checks": [
                         {"key": c.key, "ok": c.ok,
-                         "detail": c.detail}
+                         "detail": c.detail,
+                         "command": list(c.command) if c.command else None,
+                         "exit_code": c.exit_code,
+                         "raw_stdout": c.raw_stdout,
+                         "raw_stderr": c.raw_stderr}
                         for c in r_result.checks
                     ],
                     "errors": list(r_result.errors),
@@ -863,7 +876,11 @@ def _real_dispatcher(
         if collect_evidence_flag:
             from docker.versioning.evidence import (
                 collect_evidence as _collect,
+                write_static_evidence as _write_static,
+                normalize_static_record as _norm_rec,
                 _SystemClock as _SysClk,
+                MAX_OUTPUT_BYTES as _MAX_BYTES,
+                EvidenceCommand as _EvidenceCommand,
             )
             from datetime import datetime, timezone
 
@@ -877,29 +894,67 @@ def _real_dispatcher(
                 else _repo_root / ".docker-generated" / "evidence" / _ts
             )
 
-            # Representative commands for the evidence bundle.
-            # When commands= is empty, collect_evidence auto-runs
-            # ``docker inspect`` to capture image metadata.
-            _ev_commands: list[tuple[str, ...]] = []
-            if c_args.get("container") and scope in ("runtime", "all"):
-                _cont = c_args["container"]
-                _ev_commands.append(("docker", "exec", _cont, "sha256sum",
-                                     "/run/pi-cli/docker-constructor.runtime.toml"))
-                _ev_commands.append(("docker", "exec", _cont, "cat",
-                                     "/proc/mounts"))
-
             _runner2 = _process_runner
             if _runner2 is None:
                 _runner2 = ProcessRunner()
 
             _clk = _SysClk()
 
-            bundle = _collect(
+            # ── docker inspect (runs once, image metadata) ───────
+            inspect_bundle = _collect(
                 output_dir=evidence_dir,
                 runner=_runner2,
                 clock=_clk,
                 image=_image_name,
-                commands=_ev_commands,
+                commands=(),
+                dry_run=bool(c_args.get("dry_run", False)),
+            )
+
+            # ── evidence records from captured results ──────────
+            captured_records: list[_EvidenceCommand] = list(
+                inspect_bundle.commands
+            )  # docker inspect goes first
+
+            _now = _clk.now()
+            _idx = len(captured_records)
+
+            # Build: include failed observation commands.
+            if "build" in results:
+                for obs in results["build"]["observations"]:
+                    if not obs["ok"] and obs.get("command"):
+                        captured_records.append(_norm_rec(
+                            argv=tuple(obs["command"]),
+                            return_code=0,
+                            stdout_raw=obs.get("observed") or "",
+                            timestamp_epoch=_now,
+                            output_dir=evidence_dir,
+                            index=_idx,
+                        ))
+                        _idx += 1
+
+            # Runtime: include captured diagnostic command results.
+            if "runtime" in results:
+                for chk in results["runtime"].get("checks", []):
+                    if chk.get("command") and (
+                        chk.get("raw_stdout") or chk.get("raw_stderr")
+                        or chk.get("exit_code") is not None
+                    ):
+                        captured_records.append(_norm_rec(
+                            argv=tuple(chk["command"]),
+                            return_code=chk.get("exit_code"),
+                            stdout_raw=chk.get("raw_stdout") or "",
+                            stderr_raw=chk.get("raw_stderr") or "",
+                            timestamp_epoch=_now,
+                            output_dir=evidence_dir,
+                            index=_idx,
+                        ))
+                        _idx += 1
+
+            # ── assemble the bundle ─────────────────────────────
+            bundle = _write_static(
+                output_dir=evidence_dir,
+                image=_image_name,
+                records=captured_records,
                 dry_run=bool(c_args.get("dry_run", False)),
             )
             results["collect_evidence"] = {
