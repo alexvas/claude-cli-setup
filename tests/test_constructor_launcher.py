@@ -1801,6 +1801,311 @@ class TestDockerRunExecutor(unittest.TestCase):
         with self.assertRaises(OSError):
             executor.run(("docker", "run", "img"))
 
+    # ── execution mode ────────────────────────────────────────
+
+    def test_interactive_mode_disables_capture_and_inherits_stdin(self) -> None:
+        """In interactive mode the executor must instruct the
+        runner to skip ``capture_output`` and inherit stdin so
+        Docker can attach to the host terminal."""
+        mode_seen: list[dict[str, object]] = []
+
+        class _SpyRunner(ProcessRunner):
+            def run(self, argv: list[str], *,
+                    capture_output: bool = True) -> ProcessResult:
+                mode_seen.append({"capture_output": capture_output})
+                return ProcessResult(argv=tuple(argv), return_code=0)
+
+        executor = DockerRunExecutor(_SpyRunner())
+        # RED: DockerRunExecutor.run() does not accept `interactive` yet.
+        # The intended API passes interactive=True → capture_output=False.
+        executor.run(("docker", "run", "--tty", "img"),
+                     interactive=True)  # type: ignore[call-arg]
+        self.assertTrue(
+            len(mode_seen) >= 1,
+            "executor must invoke the runner",
+        )
+        self.assertFalse(
+            mode_seen[0]["capture_output"],
+            "interactive mode must disable capture_output "
+            "so Docker inherits the host terminal",
+        )
+
+    def test_captured_mode_preserves_capture_output(self) -> None:
+        """When running without ``--tty``/``--interactive``,
+        ``capture_output`` must remain ``True`` so the facade can
+        surface diagnostics from captured stdout/stderr."""
+        mode_seen: list[dict[str, object]] = []
+
+        class _SpyRunner(ProcessRunner):
+            def run(self, argv: list[str], *,
+                    capture_output: bool = True) -> ProcessResult:
+                mode_seen.append({"capture_output": capture_output})
+                return ProcessResult(argv=tuple(argv), return_code=0)
+
+        executor = DockerRunExecutor(_SpyRunner())
+        # RED: DockerRunExecutor.run() does not accept `interactive` yet.
+        # The intended API passes interactive=False → capture_output=True.
+        executor.run(("docker", "run", "img"),
+                     interactive=False)  # type: ignore[call-arg]
+        self.assertTrue(
+            len(mode_seen) >= 1,
+            "executor must invoke the runner",
+        )
+        self.assertTrue(
+            mode_seen[0]["capture_output"],
+            "captured mode must enable capture_output "
+            "so diagnostics are available",
+        )
+
+
+class TestProcessRunnerExecutionModes(unittest.TestCase):
+    """Contract for :class:`ProcessRunner` execution modes.
+
+    ``ProcessRunner.run()`` must support both interactive (terminal-
+    attached) and captured (diagnostics-preserving) execution."""
+
+    def test_interactive_mode_skips_capture_output(self) -> None:
+        """When ``capture_output=False``, ``subprocess.run`` must
+        **not** be called with ``capture_output=True`` — the host
+        terminal must be inherited."""
+        import subprocess as _subprocess_module
+
+        original_run = _subprocess_module.run
+        captured_kwargs: list[dict[str, object]] = []
+
+        def _fake_subprocess_run(argv: list[str], **kw: object) -> object:
+            captured_kwargs.append(kw)
+            from subprocess import CompletedProcess
+            return CompletedProcess(argv, 0, stdout="", stderr="")
+
+        _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
+        try:
+            runner = ProcessRunner()
+            # RED: ProcessRunner.run() does not accept `capture_output` yet.
+            # The intended API disables capture for interactive execution.
+            runner.run(["docker", "run", "--tty", "img"],
+                       capture_output=False)  # type: ignore[call-arg]
+            self.assertTrue(
+                len(captured_kwargs) >= 1,
+                "subprocess.run must be called exactly once",
+            )
+            self.assertFalse(
+                captured_kwargs[0].get("capture_output"),
+                "interactive mode must not capture output — "
+                "subprocess.run must receive capture_output=False",
+            )
+        finally:
+            _subprocess_module.run = original_run  # type: ignore[assignment]
+
+    def test_interactive_mode_inherits_std_streams(self) -> None:
+        """Beyond ``capture_output=False``, interactive execution
+        must pass ``stdin=None, stdout=None, stderr=None`` to
+        ``subprocess.run`` so the container inherits the host
+        terminal rather than receiving /dev/null or pipes."""
+        import subprocess as _subprocess_module
+
+        original_run = _subprocess_module.run
+        captured_kwargs: list[dict[str, object]] = []
+
+        def _fake_subprocess_run(argv: list[str], **kw: object) -> object:
+            captured_kwargs.append(kw)
+            from subprocess import CompletedProcess
+            return CompletedProcess(argv, 0, stdout=None, stderr=None)
+
+        _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
+        try:
+            runner = ProcessRunner()
+            # RED: ProcessRunner.run() does not accept capture_output yet.
+            runner.run(["docker", "run", "--tty", "img"],
+                       capture_output=False)  # type: ignore[call-arg]
+            self.assertTrue(
+                len(captured_kwargs) >= 1,
+                "subprocess.run must be called exactly once",
+            )
+            kw = captured_kwargs[0]
+            self.assertIsNone(
+                kw.get("stdin"),
+                "interactive mode must inherit stdin (stdin=None)",
+            )
+            self.assertIsNone(
+                kw.get("stdout"),
+                "interactive mode must inherit stdout (stdout=None)",
+            )
+            self.assertIsNone(
+                kw.get("stderr"),
+                "interactive mode must inherit stderr (stderr=None)",
+            )
+            self.assertFalse(
+                kw.get("capture_output"),
+                "interactive mode must disable capture_output",
+            )
+        finally:
+            _subprocess_module.run = original_run  # type: ignore[assignment]
+
+    def test_captured_mode_defaults_to_capture_enabled(self) -> None:
+        """Without an explicit mode flag, ``capture_output`` must
+        remain ``True`` so existing diagnostics continue to work."""
+        import subprocess as _subprocess_module
+
+        original_run = _subprocess_module.run
+        captured_kwargs: list[dict[str, object]] = []
+
+        def _fake_subprocess_run(argv: list[str], **kw: object) -> object:
+            captured_kwargs.append(kw)
+            from subprocess import CompletedProcess
+            return CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+        _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
+        try:
+            runner = ProcessRunner()
+            # Current behaviour: always captures. This must stay true
+            # when no mode flag is passed.
+            result = runner.run(["docker", "run", "img"])
+            self.assertEqual(result.stdout, "ok")
+            self.assertTrue(
+                captured_kwargs and captured_kwargs[0].get("capture_output"),
+                "default mode must capture output for diagnostics",
+            )
+        finally:
+            _subprocess_module.run = original_run  # type: ignore[assignment]
+
+
+class TestOrchestrateRunExecutionModes(TestRunTransaction):
+    """When ``orchestrate_run`` receives a mode-aware executor,
+    it must dispatch interactive vs captured mode based on the
+    ``tty`` / ``stdin_open`` flags in :class:`RunRequest`."""
+
+    def setUp(self) -> None:
+        super().setUp()
+
+    def test_tty_true_invokes_executor_in_interactive_mode(self) -> None:
+        """When ``RunRequest.tty=True``, the executor must be
+        invoked with ``interactive=True`` so Docker inherits the
+        host terminal."""
+        modes_seen: list[dict[str, object]] = []
+
+        class _SpyExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> ProcessResult:
+                modes_seen.append({"interactive": interactive})
+                return ProcessResult(argv=argv, return_code=0)
+
+        req = self._request(
+            tty=True,
+            stdin_open=True,
+            executor=_SpyExecutor(),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertTrue(
+            len(modes_seen) >= 1,
+            "executor was never invoked",
+        )
+        # RED: orchestrator never passes interactive=True.
+        # The default False silently masks the missing signal.
+        self.assertTrue(
+            modes_seen[0]["interactive"],
+            "orchestrate_run must pass interactive=True to the "
+            "executor when tty=True",
+        )
+
+    def test_no_tty_invokes_executor_in_captured_mode(self) -> None:
+        """When ``RunRequest.tty=False``, the executor must be
+        invoked with ``interactive=False`` so stdout/stderr are
+        captured for diagnostics."""
+        modes_seen: list[dict[str, object]] = []
+
+        class _SpyExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = True) -> ProcessResult:
+                modes_seen.append({"interactive": interactive})
+                return ProcessResult(argv=argv, return_code=0)
+
+        req = self._request(
+            tty=False,
+            stdin_open=False,
+            executor=_SpyExecutor(),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertTrue(
+            len(modes_seen) >= 1,
+            "executor was never invoked",
+        )
+        # RED: orchestrator never passes interactive=False.
+        # The default True silently produces the wrong mode.
+        self.assertFalse(
+            modes_seen[0]["interactive"],
+            "orchestrate_run must pass interactive=False to the "
+            "executor when tty=False",
+        )
+
+    def test_stdin_open_without_tty_is_still_interactive(self) -> None:
+        """Streaming is the policy when **either** ``tty`` or
+        ``stdin_open`` is enabled — not only when both are.
+        ``(tty=False, stdin_open=True)`` must still dispatch
+        ``interactive=True`` so stdin can reach the container."""
+        modes_seen: list[dict[str, object]] = []
+
+        class _SpyExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> ProcessResult:
+                modes_seen.append({"interactive": interactive})
+                return ProcessResult(argv=argv, return_code=0)
+
+        req = self._request(
+            tty=False,
+            stdin_open=True,
+            executor=_SpyExecutor(),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertTrue(
+            len(modes_seen) >= 1,
+            "executor was never invoked",
+        )
+        # RED: orchestrator never passes interactive=True.
+        self.assertTrue(
+            modes_seen[0]["interactive"],
+            "orchestrate_run must pass interactive=True when "
+            "stdin_open=True (even with tty=False)",
+        )
+
+    def test_tty_without_stdin_open_is_still_interactive(self) -> None:
+        """Streaming is the policy when **either** ``tty`` or
+        ``stdin_open`` is enabled.  ``(tty=True, stdin_open=False)``
+        must dispatch ``interactive=True`` so container output is
+        visible immediately."""
+        modes_seen: list[dict[str, object]] = []
+
+        class _SpyExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> ProcessResult:
+                modes_seen.append({"interactive": interactive})
+                return ProcessResult(argv=argv, return_code=0)
+
+        req = self._request(
+            tty=True,
+            stdin_open=False,
+            executor=_SpyExecutor(),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertTrue(
+            len(modes_seen) >= 1,
+            "executor was never invoked",
+        )
+        # RED: orchestrator never passes interactive=True.
+        self.assertTrue(
+            modes_seen[0]["interactive"],
+            "orchestrate_run must pass interactive=True when "
+            "tty=True (even with stdin_open=False)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

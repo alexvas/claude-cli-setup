@@ -51,6 +51,13 @@ _EXIT_CODES: dict[ExitKind, int] = {
     ExitKind.OPERATIONAL: 4,
 }
 
+# Maximum bytes of captured stdout / stderr included in run-failure
+# diagnostics (text and JSON modes).  Exceeding content is truncated
+# with a truncation marker so that evidence artifacts, log output, and
+# JSON payloads stay bounded even when a container emits megabytes of
+# unstructured diagnostics before exiting.
+MAX_RUN_DIAGNOSTIC_BYTES: int = 65_536
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Immutable dispatch boundary

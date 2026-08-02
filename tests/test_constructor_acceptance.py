@@ -855,6 +855,265 @@ class TestRunFailureDiagnostics(unittest.TestCase):
                           f"diagnostic content appears {count} times, "
                           f"expected exactly once")
 
+    # ── execution-mode wiring from CLI flags ─────────────────────
+
+    def test_default_flags_select_streaming_execution(self) -> None:
+        """With no ``--no-tty``/``--no-interactive`` overrides, the
+        full facade path (CLI → RunRequest → orchestrator → executor)
+        must select streaming/interactive execution so Docker
+        inherits the host terminal."""
+        modes_seen: list[dict[str, object]] = []
+
+        class _SpyExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> Any:
+                modes_seen.append({"interactive": interactive})
+                from docker.launcher import ProcessResult
+                return ProcessResult(argv=argv, return_code=0)
+
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/fake-project"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=_SpyExecutor(),
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(0, rc)
+        self.assertTrue(
+            len(modes_seen) >= 1,
+            "executor was never invoked through the facade",
+        )
+        # RED: the facade→orchestrator→executor chain never
+        # forwards tty/stdin_open as interactive=True.
+        self.assertTrue(
+            modes_seen[0]["interactive"],
+            "default CLI flags (tty=True, stdin_open=True) must "
+            "select interactive/streaming execution mode",
+        )
+
+    def test_no_tty_no_interactive_selects_captured_execution(self) -> None:
+        """When ``--no-tty --no-interactive`` is passed, the full
+        facade path must select captured execution so stdout/stderr
+        are available for diagnostics."""
+        modes_seen: list[dict[str, object]] = []
+
+        class _SpyExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = True) -> Any:
+                modes_seen.append({"interactive": interactive})
+                from docker.launcher import ProcessResult
+                return ProcessResult(argv=argv, return_code=0)
+
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/fake-project",
+             "--no-tty", "--no-interactive"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=_SpyExecutor(),
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(0, rc)
+        self.assertTrue(
+            len(modes_seen) >= 1,
+            "executor was never invoked through the facade",
+        )
+        # RED: the facade→orchestrator→executor chain never
+        # forwards tty=False/stdin_open=False as interactive=False.
+        self.assertFalse(
+            modes_seen[0]["interactive"],
+            "--no-tty --no-interactive must select captured "
+            "execution mode",
+        )
+
+    def test_interactive_nonzero_exit_maps_rc_and_no_duplicate_output(
+        self,
+    ) -> None:
+        """When a container exits nonzero in interactive mode,
+        the diagnostics have already appeared on the terminal
+        (streamed via Docker).  The facade must:
+
+        * map the return code to ``ExitKind.OPERATIONAL`` (rc=4)
+        * NOT render the captured streams a second time (they
+          are empty because ``capture_output`` was disabled)
+        * still include the exit code in structured output
+        """
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+        executor = self._scripted_executor(
+            return_code=1,
+            stdout="",   # not captured in interactive mode
+            stderr="",   # not captured in interactive mode
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/fake-project", "--tty"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc,
+                         "nonzero interactive exit must map to "
+                         "OPERATIONAL (exit code 4)")
+        self.assertEqual("", out,
+                         "stdout must be empty for error output")
+        # The diagnostic line must appear exactly once.
+        self.assertIn("[OPERATIONAL]", err)
+        self.assertIn("exited with code 1", err)
+        # No duplicate rendering — the exit message must appear
+        # exactly once on stderr.
+        self.assertEqual(
+            1, err.count("exited with code 1"),
+            "exit diagnostic must appear exactly once — "
+            "streamed output must not be rendered a second time",
+        )
+        # In interactive mode, captured streams are empty; the
+        # renderer must not emit a noisy "data: ..." line with
+        # empty/None content.
+        self.assertNotIn("data:", err,
+                         "empty streams must not produce a 'data:' "
+                         "line in interactive mode")
+
+    def test_captured_nonzero_output_is_bounded(self) -> None:
+        """A non-interactive container that fails may emit
+        megabytes of diagnostic output.  Both text and JSON
+        failure presentations must bound captured stdout/stderr
+        so evidence artifacts and log output do not grow
+        without limit.
+
+        ``MAX_RUN_DIAGNOSTIC_BYTES`` is a **byte** budget, not
+        a character budget.  Multibyte text (CJK, emoji, …)
+        must not slip past the bound.
+
+        The bound applies **independently** to stdout and
+        stderr — truncating only one stream is insufficient.
+        """
+        from docker.constructor_cli import MAX_RUN_DIAGNOSTIC_BYTES as _MAX
+
+        # ── oversized fixtures (multibyte, > 2× _MAX) ──────
+        def _oversized_stream(label: str) -> str:
+            ascii_line = f"[{label}] OK entry 0x{{idx:08x}}\n"
+            mb_line = f"[{label}] 🌐 entrée {{idx:08x}} ✗\n"
+            return "".join(
+                (ascii_line if i % 2 == 0 else mb_line).format(idx=i)
+                for i in range(8192)
+            )
+
+        huge_stdout = _oversized_stream("OUT")
+        huge_stderr = _oversized_stream("ERR")
+
+        for name, stream in ("stdout", huge_stdout), ("stderr", huge_stderr):
+            b = len(stream.encode("utf-8"))
+            self.assertGreater(
+                b, _MAX * 2,
+                f"{name} fixture ({b} UTF-8 bytes) must exceed "
+                f"MAX_RUN_DIAGNOSTIC_BYTES ({_MAX})",
+            )
+            self.assertLess(
+                len(stream), b,
+                f"{name} multibyte fixture must have "
+                "len(str) < len(bytes)",
+            )
+
+        executor = self._scripted_executor(
+            return_code=1,
+            stdout=huge_stdout,
+            stderr=huge_stderr,
+        )
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        # ── text mode ───────────────────────────────────────
+        rc_text, out_text, err_text = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/fake-project",
+             "--no-tty", "--no-interactive"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc_text)
+        # The diagnostic must contain captured content from
+        # both streams…
+        self.assertIn("[ERR]", err_text)
+        self.assertIn("[OUT]", err_text)
+        # …but the combined human-readable message must be
+        # bounded.  Since each stream is independently capped
+        # at _MAX UTF-8 bytes, the rendered message may carry
+        # up to 2× that plus label overhead.
+        err_bytes = len(err_text.encode("utf-8"))
+        self.assertLess(
+            err_bytes, 2 * _MAX + 2048,
+            "text-mode diagnostic (combined stdout + stderr) "
+            "must be bounded; per-stream budget is "
+            f"MAX_RUN_DIAGNOSTIC_BYTES ({_MAX}) each",
+        )
+
+        # ── JSON mode ───────────────────────────────────────
+        rc_json, out_json, err_json = _run(
+            self.m,
+            ["--output", "json", "run", "--main-project",
+             "/tmp/fake-project", "--no-tty", "--no-interactive"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc_json)
+        data = json.loads(out_json)
+
+        # Each captured stream is independently bounded.
+        for key in ("stdout", "stderr"):
+            val = data["data"].get(key, "")
+            val_bytes = len(str(val).encode("utf-8"))
+            self.assertLessEqual(
+                val_bytes, _MAX,
+                f"JSON captured {key} field must not exceed "
+                f"MAX_RUN_DIAGNOSTIC_BYTES ({_MAX}); "
+                f"got {val_bytes} UTF-8 bytes",
+            )
+            # Truncation metadata.
+            truncated_key = f"{key}_truncated"
+            self.assertTrue(
+                data["data"].get(truncated_key),
+                f"JSON response must carry '{truncated_key}': true "
+                f"when captured {key} exceeds "
+                "MAX_RUN_DIAGNOSTIC_BYTES",
+            )
+            # In-band sentinel inside the byte budget.
+            self.assertTrue(
+                str(val).rstrip().endswith("[truncated]"),
+                f"truncated {key} value must end with "
+                "'[truncated]' sentinel",
+            )
+
+        # Marker fits in the budget.
+        marker_bytes = len("[truncated]".encode("utf-8"))
+        self.assertLessEqual(
+            marker_bytes, _MAX,
+            f"'[truncated]' marker ({marker_bytes} UTF-8 bytes) "
+            f"must fit within MAX_RUN_DIAGNOSTIC_BYTES ({_MAX})",
+        )
+
 
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Mismatched image expectations (verify build)
