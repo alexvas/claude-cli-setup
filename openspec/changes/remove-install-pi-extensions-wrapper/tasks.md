@@ -6,13 +6,13 @@
 
 ## 2. Remove the Wrapper
 
-- [ ] 2.1 Delete `docker/install-pi-extensions.sh`.
-- [ ] 2.2 Remove the wrapper `COPY`, ownership, and mode setup from `Dockerfile` while retaining the protected Python installer modules required by the entrypoint.
-- [ ] 2.3 Verify the entrypoint remains the only image startup path that invokes protected extension installation and does so as `dev` after root-owned Pi-home repair.
+- [x] 2.1 Delete `docker/install-pi-extensions.sh`.
+- [x] 2.2 Remove the wrapper `COPY`, ownership, and mode setup from `Dockerfile` while retaining the protected Python installer modules required by the entrypoint.
+- [x] 2.3 Verify the entrypoint remains the only image startup path that invokes protected extension installation and does so as `dev` after root-owned Pi-home repair.
 
 ## 3. Migrate Runtime Verification
 
-- [ ] 3.1 Update `docker/verify-runtime.sh` to verify automatic extension installation outcomes and assert that the legacy image path is absent.
+- [x] 3.1 Update `docker/verify-runtime.sh` to verify automatic extension installation outcomes and assert that the legacy image path is absent.
 - [ ] 3.2 Update Stage 6 evidence and host-script tests to launch through the constructor-managed runtime path instead of executing `/home/dev/install-pi-extensions.sh`.
 - [ ] 3.3 Update semantic-source and source-contract tests to inspect `docker/runtime_installer.py` and `docker/entrypoint.sh`, removing shell-wrapper allowlists and assumptions.
 - [ ] 3.4 Add or retain failure-path coverage proving a missing Pi-home mount, failed integrity check, failed package installation, failed metadata/ownership validation, or failed rtk setup prevents Pi launch.

@@ -1731,10 +1731,15 @@ class TestShellScriptsNoInstallPiExtensionsWrapper(unittest.TestCase):
         for rel, path in sorted(_sh_files().items()):
             for lineno, line in _lines(path):
                 for label, pat in _INSTALL_PI_EXTENSIONS_SHELL_BANNED:
-                    if pat.search(line):
-                        violations.append(
-                            f"{rel}:{lineno}: {label} — {line.strip()}"
-                        )
+                    if not pat.search(line):
+                        continue
+                    # Negative checks asserting the path is absent are
+                    # legitimate — they enforce the removal contract.
+                    if "must be absent" in line or "test ! -f" in line:
+                        continue
+                    violations.append(
+                        f"{rel}:{lineno}: {label} — {line.strip()}"
+                    )
         if violations:
             self.fail(
                 "Shell scripts reference the obsolete "

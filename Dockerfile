@@ -203,9 +203,6 @@ RUN chown -R root:root /usr/local/lib/pi-cli \
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-COPY docker/install-pi-extensions.sh /home/dev/install-pi-extensions.sh
-RUN chmod 755 /home/dev/install-pi-extensions.sh
-
 # Keep the image root by default: entrypoint.sh repairs bind-mount ownership and drops to dev.
 WORKDIR /home/dev
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

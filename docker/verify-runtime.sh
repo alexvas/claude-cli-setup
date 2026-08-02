@@ -28,7 +28,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Generate a minimal effective runtime projection ──────────────
 PROJ_FILE=$(mktemp /tmp/pi-runtime-smoke-proj.XXXXXX.toml)
-trap 'rm -f "$PROJ_FILE"' EXIT
+PI_HOME_DIR=$(mktemp -d /tmp/pi-runtime-smoke-home.XXXXXX)
+trap 'rm -rf "$PROJ_FILE" "$PI_HOME_DIR"' EXIT
 
 PYTHONPATH="$REPO_DIR" python3 -c '
 import sys, shutil
@@ -46,6 +47,7 @@ with create_runtime_projection(proj) as h:
 docker run --rm \
     -e CHOWN_WORK_ON_START=0 \
     --mount "type=bind,src=$PROJ_FILE,dst=/run/pi-cli/docker-constructor.runtime.toml,readonly" \
+    --mount "type=bind,src=$PI_HOME_DIR,dst=/home/dev/.pi" \
     "$IMAGE" bash -c '
   set -eu
 
@@ -122,17 +124,52 @@ docker run --rm \
   node --version | grep -qE "^v[0-9]+\." || { echo "FAILED: node --version" >&2; exit 1; }
   echo "version checks ok"
 
-  echo "=== pi extension setup script checks ==="
-  script="/home/dev/install-pi-extensions.sh"
-  test -f "$script" || { echo "MISSING: $script" >&2; exit 1; }
-  script_owner=$(stat -c "%U:%G" "$script")
-  test "$script_owner" = "root:root" || { echo "OWNERSHIP MISMATCH: $script expected root:root, got $script_owner" >&2; exit 1; }
-  script_mode=$(stat -c "%a" "$script")
-  test "$script_mode" = "755" || { echo "MODE MISMATCH: $script expected 755, got $script_mode" >&2; exit 1; }
-  if ! test -r "$script"; then echo "ERROR: dev cannot read $script" >&2; exit 1; fi
-  if ! test -x "$script"; then echo "ERROR: dev cannot execute $script" >&2; exit 1; fi
-  if test -w "$script"; then echo "ERROR: dev can write $script (should be root:root 755)" >&2; exit 1; fi
-  echo "pi extension setup script ok"
+  echo "=== pi extension setup checks ==="
+  # Legacy wrapper must be absent after remove-install-pi-extensions-wrapper.
+  test ! -f /home/dev/install-pi-extensions.sh || { echo "STALE: /home/dev/install-pi-extensions.sh must be absent" >&2; exit 1; }
+  # Protected Python installer module must be present at the known path.
+  installer="/usr/local/lib/pi-cli/docker/runtime_installer.py"
+  test -f "$installer" || { echo "MISSING: $installer" >&2; exit 1; }
+  test -r "$installer" || { echo "UNREADABLE: $installer" >&2; exit 1; }
+  # Entrypoint must invoke the protected Python installer, not a shell wrapper.
+  entrypoint="/usr/local/bin/docker-entrypoint.sh"
+  test -x "$entrypoint" || { echo "NOT EXECUTABLE: $entrypoint" >&2; exit 1; }
+  grep -qF "docker.runtime_installer install" "$entrypoint" || { echo "ENTRYPOINT MISSING installer invocation" >&2; exit 1; }
+  echo "pi extension setup ok"
+
+  echo "=== automatic extension installation outcomes ==="
+  # After entrypoint runs the installer, extensions must be present under Pi home.
+  agent_dir="/home/dev/.pi/agent"
+  test -d "$agent_dir" || { echo "MISSING: $agent_dir" >&2; exit 1; }
+  # At least one installed extension must have a readable package.json.
+  found=0
+  for pkg_json in "$agent_dir"/npm/node_modules/*/package.json \
+                  "$agent_dir"/npm/node_modules/@*/*/package.json; do
+    test -f "$pkg_json" || continue
+    test -r "$pkg_json" || continue
+    pkg_name=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('name',''))" 2>/dev/null || true)
+    pkg_version=$(python3 -c "import json; print(json.load(open('$pkg_json')).get('version',''))" 2>/dev/null || true)
+    test -n "$pkg_name" || continue
+    test -n "$pkg_version" || continue
+    echo "  installed: $pkg_name@$pkg_version"
+    found=$((found + 1))
+  done
+  test "$found" -gt 0 || { echo "FAILED: no installed extensions found under $agent_dir/npm/node_modules" >&2; exit 1; }
+  # Installed extension files must be owned by dev:dev.
+  mismatch=$(find "$agent_dir/npm/node_modules" -maxdepth 4 \( ! -user dev -o ! -group dev \) -print -quit 2>/dev/null || true)
+  test -z "$mismatch" || { echo "OWNERSHIP MISMATCH in installed extensions: $mismatch" >&2; exit 1; }
+  echo "automatic extension installation ok"
+
+  echo "=== rtk integration outcomes ==="
+  # rtk init -g --agent pi creates an extension under the Pi home.
+  test -f "$agent_dir/extensions/rtk.ts" || { echo "MISSING rtk extension at $agent_dir/extensions/rtk.ts" >&2; exit 1; }
+  # rtk telemetry disable must have been applied.
+  enabled_line=$(rtk telemetry status 2>&1 | grep 'enabled:' || true)
+  case "$enabled_line" in
+    *"enabled: no"*|"enabled: false"*) ;;
+    *) echo "rtk telemetry not disabled: $enabled_line" >&2; exit 1 ;;
+  esac
+  echo "rtk integration ok"
 
   echo "=== ownership checks ==="
   required_paths="/home/dev/.local /home/dev/.rustup /home/dev/.cargo/bin /home/dev/mcp /home/dev/work /home/dev/.npm-global"
