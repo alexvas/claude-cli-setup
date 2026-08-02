@@ -31,5 +31,5 @@
 - [x] 4.2 Run the complete unit suite with `python3 -m unittest discover -s tests -q`.
 - [x] 4.3 Run `python3 -m compileall -q docker tests`.
 - [x] 4.4 Run `openspec validate fix-build-verification-rustfmt-node-tag --strict` and `git diff --check`.
-- [ ] 4.5 On a Docker host, rebuild the image through the facade and run `verify --scope build` against the rebuilt exact image.
-- [ ] 4.6 Confirm Node `v24.18.0`, rustc/cargo `1.97.1`, rustfmt rustup path/component provenance, clippy, and all other configured build checks pass.
+- [x] 4.5 On a Docker host, rebuild the image through the facade and run `verify --scope build` against the rebuilt exact image.
+- [x] 4.6 Confirm Node `v24.18.0`, rustc/cargo `1.97.1`, rustfmt rustup path/component provenance, clippy, and all other configured build checks pass.
