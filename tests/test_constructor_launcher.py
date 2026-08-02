@@ -2605,7 +2605,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         symlink so the spy and the orchestrator observe the
         same path."""
         from pathlib import Path
-        import docker.launcher as _launcher
+        import docker.versioning.artifact_cache as _artifact_cache
 
         cache_root = Path(self._tmpdir.name, "sub", "runtime-artifacts")
         symlink_dest = Path(self._tmpdir.name, "nowhere")
@@ -2621,7 +2621,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         # is watching.
         import unittest.mock as _mock
         with _mock.patch.object(
-            _launcher, "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT", watch,
+            _artifact_cache, "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT", watch,
         ):
             try:
                 req = self._request(
@@ -2661,7 +2661,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         patched so the test is hermetic — independent of
         repository state, prior runs, or developer-local
         artifact caches."""
-        import docker.launcher as launcher
+        import docker.versioning.artifact_cache as _artifact_cache
         from unittest import mock
 
         malformed = self._make_single_extension_fixture(
@@ -2691,7 +2691,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         cache_ops, restore_spy = self._install_cache_spy()
         try:
             with mock.patch.object(
-                launcher,
+                _artifact_cache,
                 "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
                 cache_root,
             ):

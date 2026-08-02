@@ -7,9 +7,9 @@
 ## 2. Define Content-Addressed Cache Contracts
 
 - [ ] 2.1 Add failing tests for canonical integrity identities, filesystem-safe cache keys, fixed cache layout, root containment, no-symlink traversal, regular-file requirements, and private permissions.
-- [ ] 2.2 Add immutable typed host DTOs for selected artifact materialization inputs and verified cache results without importing facade, parser, presentation, Docker execution, or container installer modules.
-- [ ] 2.3 Add injected cache filesystem, streaming transport, per-identity coordination, and clock/temporary-state boundaries with structured miss, corruption, transport, integrity, publication, cancellation, and interruption failures.
-- [ ] 2.4 Implement deterministic cache path derivation solely from validated algorithm and digest; reject URL-, package-, version-, and caller-path-derived cache locations.
+- [x] 2.2 Add immutable typed host DTOs for selected artifact materialization inputs and verified cache results without importing facade, parser, presentation, Docker execution, or container installer modules.
+- [x] 2.3 Add injected cache filesystem, streaming transport, per-identity coordination, and clock/temporary-state boundaries with structured miss, corruption, transport, integrity, publication, cancellation, and interruption failures.
+- [x] 2.4 Implement deterministic cache path derivation solely from validated algorithm and digest; reject URL-, package-, version-, and caller-path-derived cache locations.
 
 ## 3. Materialize and Publish Host Artifacts
 

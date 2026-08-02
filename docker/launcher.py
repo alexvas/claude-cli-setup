@@ -24,13 +24,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Protocol, Mapping
 
-DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT = (
-    ".docker-generated/runtime-artifacts/blobs"
-)
-"""Constructor-owned root beneath which algorithm/digest blobs
-live.  Every non-dry run must validate and materialize selected
-runtime artifacts under this directory before publishing the
-projection or invoking the Docker executor."""
+from docker.versioning.artifact_cache import DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT  # noqa: F401 — re-export
 from types import MappingProxyType
 
 
