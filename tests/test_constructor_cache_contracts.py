@@ -219,12 +219,75 @@ class TestCacheSafety(unittest.TestCase):
                 f"but no exception was raised for path {host_path!r}"
             )
 
-    # ── containment (the path is genuinely outside any plausible root) ─
+    @staticmethod
+    def _assert_accepted(host_path: str) -> None:
+        """Assert ``validate_cache_blob(host_path)`` returns
+        without raising (the blob is structurally sound).
+
+        Converts ``NotImplementedError`` to a clean FAIL so the
+        test team can see at a glance which safety contracts are
+        not yet wired."""
+        from docker.versioning.artifact_cache import validate_cache_blob
+
+        try:
+            validate_cache_blob(host_path)
+        except NotImplementedError:
+            import unittest as _ut
+            raise _ut.TestCase.failureException(
+                f"validate_cache_blob is NOT IMPLEMENTED — "
+                f"expected no exception for valid blob {host_path!r}"
+            ) from None
+        # Any other exception is a genuine failure (wrong rejection).
+
+    # ── containment: genuinely outside any plausible root ──────────
 
     def test_paths_outside_cache_root_rejected(self) -> None:
         """RED — paths outside the cache root are rejected with
         reason ``"containment"``."""
         self._assert_rejected("containment", "/etc/passwd")
+
+    def test_symlink_parent_escape_rejected(self) -> None:
+        """RED — a blob whose lexical path is inside the root but
+        whose resolved path escapes through a symlinked parent
+        directory is rejected with reason ``"containment"``."""
+        import tempfile
+        from unittest import mock
+
+        # ── arrange a blob in a directory *outside* the root ──
+        with tempfile.TemporaryDirectory() as outside_dir:
+            blob_real = os.path.join(outside_dir, "blob.tgz")
+            with open(blob_real, "wb") as fh:
+                fh.write(b"legitimate-bytes")
+            os.chmod(blob_real, 0o600)
+
+            # ── create a symlink *inside* the root that points to the
+            #    outside directory ──
+            with tempfile.TemporaryDirectory() as root:
+                link_parent = os.path.join(root, "link_parent")
+                os.symlink(outside_dir, link_parent)
+                blob_via_link = os.path.join(link_parent, "blob.tgz")
+
+                with mock.patch(
+                    "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+                    root,
+                ):
+                    self._assert_rejected("containment", blob_via_link)
+
+    # ── missing blob ───────────────────────────────────────────────
+
+    def test_missing_blob_path_rejected(self) -> None:
+        """RED — a path that does not exist is rejected with
+        reason ``"missing"``."""
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as root:
+            nonexistent = os.path.join(root, "nonexistent.tgz")
+            with mock.patch(
+                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+                root,
+            ):
+                self._assert_rejected("missing", nonexistent)
 
     # ── symlink (fixture inside a patched root, containment satisfied) ─
 
@@ -247,7 +310,7 @@ class TestCacheSafety(unittest.TestCase):
             ):
                 self._assert_rejected("symlink", link)
 
-    # ── not-regular-file (directory-as-blob inside patched root) ────
+    # ── not-regular-file (directory / non-regular inside root) ─────
 
     def test_directory_at_blob_path_rejected(self) -> None:
         """RED — within the cache root, a directory at the blob
@@ -264,6 +327,24 @@ class TestCacheSafety(unittest.TestCase):
                 root,
             ):
                 self._assert_rejected("not_regular_file", subdir)
+
+    def test_fifo_at_blob_path_rejected(self) -> None:
+        """RED — within the cache root, a named pipe (FIFO) is
+        rejected with reason ``"not_regular_file"``."""
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as root:
+            fifo_path = os.path.join(root, "fifo")
+            os.mkfifo(fifo_path)
+
+            with mock.patch(
+                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+                root,
+            ):
+                self._assert_rejected("not_regular_file", fifo_path)
+
+            os.unlink(fifo_path)
 
     # ── permissions (world-readable file inside patched root) ───────
 
@@ -283,6 +364,28 @@ class TestCacheSafety(unittest.TestCase):
                 root,
             ):
                 self._assert_rejected("permissions", path)
+
+            os.unlink(path)
+
+    # ── valid blob accepted (GREEN after implementation) ───────────
+
+    def test_valid_blob_accepted(self) -> None:
+        """RED (until implemented) — a regular file inside the
+        cache root with owner-only permissions is accepted without
+        raising."""
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as root:
+            fd, path = tempfile.mkstemp(dir=root)
+            os.close(fd)
+            os.chmod(path, 0o600)
+
+            with mock.patch(
+                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+                root,
+            ):
+                self._assert_accepted(path)
 
             os.unlink(path)
 
