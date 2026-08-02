@@ -23,6 +23,10 @@ from docker.versioning.model import (
     EffectiveRust,
     EffectiveTool,
 )
+from docker.versioning.inventory import load_inventory
+from docker.versioning.effective import (
+    resolve_build_projection,
+)
 from docker.versioning.rendering import (
     _write_toml,
     serialize_effective_build,
@@ -884,6 +888,490 @@ class TestObservationContracts(unittest.TestCase):
         proj_dict = _canonical_projection_dict()
         expected_node = _extract_expected_value("node.version", proj_dict)
         self.assertNotEqual(expected_node, norm)
+
+    # ── 1.1: Exact Node tag in inventory/effective projection ──────
+
+    def test_extract_node_version_from_exact_semver_tag(self) -> None:
+        """``_extract_node_version`` must recover the full X.Y.Z from
+        a pinned exact-semver Node image tag."""
+        # The pinned inventory tag is ``24.18.0-trixie-slim``.
+        self.assertEqual(
+            "24.18.0",
+            _extract_node_version("node:24.18.0-trixie-slim"),
+        )
+        self.assertEqual(
+            "24.18.0",
+            _extract_node_version(
+                "docker.io/library/node:24.18.0-trixie-slim"
+                "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde"
+                "6fe7d08ab13b7f50573",
+            ),
+        )
+
+    def test_floating_node_tag_is_not_exact_semver(self) -> None:
+        """A floating major-only tag like ``24-trixie-slim`` must
+        NOT be treated as an exact-verifiable semver."""
+        extracted = _extract_node_version("node:24-trixie-slim")
+        # RED: currently returns "24", not a valid X.Y.Z semver.
+        self.assertNotEqual(
+            extracted, "24",
+            "floating tag '24-trixie-slim' must not produce "
+            "a bare major version — the extraction must reject "
+            "it as not exact-verifiable",
+        )
+
+    def test_inventory_pipeline_resolves_exact_node_image(self) -> None:
+        """The actual ``docker-constructor.toml`` loaded through the
+        maintained inventory→effective-projection pipeline must
+        resolve the Node image to the exact ``24.18.0-trixie-slim``
+        tag with the pinned digest."""
+        repo_root = Path(__file__).resolve().parents[1]
+        inv_path = repo_root / "docker-constructor.toml"
+        self.assertTrue(inv_path.is_file(),
+                        f"inventory not found at {inv_path}")
+        inv = load_inventory(inv_path)
+
+        # The inventory tag is the exact semver the verifier must
+        # extract; a floating tag would break exact-version
+        # verification.
+        node = inv.stages.base.node
+        self.assertEqual(
+            node.tag, "24.18.0-trixie-slim",
+            "inventory must pin the exact Node semver tag",
+        )
+        # The digest is the immutable build authority.
+        self.assertEqual(
+            node.digest,
+            "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde"
+            "6fe7d08ab13b7f50573",
+            "inventory must retain the reviewed digest",
+        )
+
+        # The effective build projection is what the verifier reads
+        # to derive expectations — it must carry the exact image.
+        eff = resolve_build_projection(inv.build, {})
+        self.assertIn(
+            "24.18.0-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bd"
+            "a61be126426176fde6fe7d08ab13b7f50573",
+            eff.node.image,
+            "effective build projection node.image must contain the "
+            "exact tag@digest the verifier depends on",
+        )
+
+    # ── 1.2: Exact vs floating Node tag verification ──────────────
+
+    def test_exact_node_tag_with_matching_version_passes(self) -> None:
+        """When the effective projection pins an exact Node semver
+        tag and ``node --version`` reports the same version,
+        verification reports success."""
+        proj = _canonical_projection()
+        # Pin an exact semver tag.
+        proj = EffectiveBuildProjection(
+            platform=proj.platform,
+            node=EffectiveNode(
+                image="docker.io/library/node:24.18.0-trixie-slim"
+                      "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be12642"
+                      "6176fde6fe7d08ab13b7f50573",
+            ),
+            rust=proj.rust,
+            uv=proj.uv,
+            python_version=proj.python_version,
+            ty_version=proj.ty_version,
+            rtk=proj.rtk,
+            fd=proj.fd,
+            pi_version=proj.pi_version,
+            openspec_version=proj.openspec_version,
+            oh_my_zsh_revision=proj.oh_my_zsh_revision,
+        )
+        tf = _write_projection_fixture(proj)
+        # Matching output: node reports the exact version.
+        matching = dict(_MATCHING)
+        matching["node"] = "v24.18.0\n"
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        node_obs = {o.key: o for o in result.observations}["node.version"]
+        self.assertTrue(
+            node_obs.ok,
+            f"exact tag must pass: expected={node_obs.expected_value!r} "
+            f"observed={node_obs.observed_value!r}",
+        )
+
+    def test_floating_node_tag_rejected_as_not_exact_verifiable(self) -> None:
+        """When the effective projection uses a floating major-only
+        Node tag (e.g. ``24-trixie-slim``), verification must reject
+        it — not silently reduce to a major-version comparison."""
+        proj = _canonical_projection()
+        proj = EffectiveBuildProjection(
+            platform=proj.platform,
+            node=EffectiveNode(
+                image="docker.io/library/node:24-trixie-slim"
+                      "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be12642"
+                      "6176fde6fe7d08ab13b7f50573",
+            ),
+            rust=proj.rust,
+            uv=proj.uv,
+            python_version=proj.python_version,
+            ty_version=proj.ty_version,
+            rtk=proj.rtk,
+            fd=proj.fd,
+            pi_version=proj.pi_version,
+            openspec_version=proj.openspec_version,
+            oh_my_zsh_revision=proj.oh_my_zsh_revision,
+        )
+        tf = _write_projection_fixture(proj)
+        # Even when node --version matches the full semver, the
+        # floating tag makes the expectation non-exact.
+        matching = dict(_MATCHING)
+        matching["node"] = "v24.18.0\n"
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        # RED: the current extraction returns "24" which won't
+        # match "24.18.0", but the failure message should clearly
+        # say the tag is not exact-verifiable, not just "mismatch".
+        node_obs = {o.key: o for o in result.observations}["node.version"]
+        self.assertFalse(
+            node_obs.ok,
+            "floating tag '24-trixie-slim' must be rejected — "
+            "a major-only comparison is not exact-verifiable",
+        )
+        # The failure must identify the root cause: the tag is not
+        # an exact semver, not just a version difference.
+        observed = node_obs.observed_value or ""
+        self.assertIn("not exact", (observed + (node_obs.expected_value or "")).lower(),
+                       "floating tag rejection must mention 'not exact' "
+                       "or similar, not just report a version mismatch")
+
+    # ── 1.3: rustfmt independent version RED ─────────────────────
+
+    def test_rustfmt_provenance_passes_with_independent_version_banner(
+        self,
+    ) -> None:
+        """When Rust 1.97.1 is configured with the rustfmt component,
+        ``rustfmt --version`` correctly reports its own independent
+        version (e.g. ``1.9.0-stable``).  Verification must pass
+        because rustfmt provenance is determined by rustup toolchain
+        membership, not by comparing rustfmt's banner to the Rust
+        version."""
+        proj = _canonical_projection()
+        proj = EffectiveBuildProjection(
+            platform=proj.platform,
+            node=proj.node,
+            rust=EffectiveRust(
+                version="1.97.1",
+                profile="minimal",
+                components=("rustfmt",),
+                rustup=proj.rust.rustup,
+            ),
+            uv=proj.uv,
+            python_version=proj.python_version,
+            ty_version=proj.ty_version,
+            rtk=proj.rtk,
+            fd=proj.fd,
+            pi_version=proj.pi_version,
+            openspec_version=proj.openspec_version,
+            oh_my_zsh_revision=proj.oh_my_zsh_revision,
+        )
+        tf = _write_projection_fixture(proj)
+        # Real rustfmt 1.9.0-stable on Rust 1.97.1 toolchain.
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["rustfmt"] = (
+            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
+        )
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        obs_by_key = {o.key: o for o in result.observations}
+        rustfmt_obs = obs_by_key["rust.rustfmt"]
+        # RED: the current code compares rustfmt 1.9.0 to
+        # expected 1.97.1 (the Rust version) and reports a
+        # false negative — the provenance check must pass
+        # despite the independent version banner.
+        self.assertTrue(
+            rustfmt_obs.ok,
+            f"rustfmt 1.9.0-stable on Rust 1.97.1 must pass "
+            f"provenance check — got expected={rustfmt_obs.expected_value!r} "
+            f"observed={rustfmt_obs.observed_value!r}",
+        )
+
+    # ── 1.4: rustfmt provenance fixture RED tests ────────────────
+
+    def _proj_rust_1_97_1_with_rustfmt(self) -> EffectiveBuildProjection:
+        """Helper: canonical projection with Rust 1.97.1 and
+        rustfmt component only."""
+        proj = _canonical_projection()
+        return EffectiveBuildProjection(
+            platform=proj.platform,
+            node=proj.node,
+            rust=EffectiveRust(
+                version="1.97.1",
+                profile="minimal",
+                components=("rustfmt",),
+                rustup=proj.rust.rustup,
+            ),
+            uv=proj.uv,
+            python_version=proj.python_version,
+            ty_version=proj.ty_version,
+            rtk=proj.rtk,
+            fd=proj.fd,
+            pi_version=proj.pi_version,
+            openspec_version=proj.openspec_version,
+            oh_my_zsh_revision=proj.oh_my_zsh_revision,
+        )
+
+    def test_rustfmt_uninstalled_component_reported(self) -> None:
+        """When rustfmt is in the effective component list but not
+        actually installed for the configured toolchain, verification
+        must fail with provenance details."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        # rustfmt present as a binary but NOT installed as a rustup
+        # component for the toolchain.
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        # rustfmt --version still works (it's on PATH) but
+        # rustup component list shows it's not installed.
+        matching["rustfmt"] = (
+            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
+        )
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        obs_by_key = {o.key: o for o in result.observations}
+        rustfmt_obs = obs_by_key["rust.rustfmt"]
+        # RED: current code only compares version numbers —
+        # it won't detect that the component isn't installed.
+        self.assertFalse(
+            rustfmt_obs.ok,
+            "rustfmt not installed as a rustup component for the "
+            "configured toolchain must be reported as a failure",
+        )
+
+    def test_rustfmt_outside_configured_toolchain(self) -> None:
+        """When rustfmt resolves to a binary outside the configured
+        rustup toolchain directory, verification must fail."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        # rustfmt version banner coincidentally matches the
+        # toolchain version — current code would pass.
+        matching["rustfmt"] = (
+            "rustfmt 1.97.1-stable (8bab26f4f6 2025-01-15)\n"
+        )
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        obs_by_key = {o.key: o for o in result.observations}
+        rustfmt_obs = obs_by_key["rust.rustfmt"]
+        # RED: current code would pass because versions match,
+        # but provenance check would fail because rustfmt isn't
+        # from the configured toolchain.
+        self.assertFalse(
+            rustfmt_obs.ok,
+            "rustfmt outside the configured rustup toolchain must "
+            "be reported as a provenance failure — version matching "
+            "is insufficient",
+        )
+
+    def test_rustfmt_malformed_rustup_output(self) -> None:
+        """When rustup output cannot be parsed, verification must
+        report the failure clearly rather than silently passing."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["rustfmt"] = ""  # empty output
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        obs_by_key = {o.key: o for o in result.observations}
+        rustfmt_obs = obs_by_key["rust.rustfmt"]
+        # RED: current code normalizes empty string to "" which
+        # won't match the expected version — but the failure
+        # should say *why* (unparseable rustfmt output), not
+        # just report a version mismatch.
+        self.assertFalse(
+            rustfmt_obs.ok,
+            "malformed/empty rustfmt output must be reported as "
+            "a verification failure",
+        )
+
+    def test_rustfmt_mismatched_toolchain_reported(self) -> None:
+        """When rustfmt belongs to a different toolchain than the
+        one configured, verification must identify the mismatch."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        # rustfmt from a *different* toolchain (1.83.0)
+        matching["rustfmt"] = (
+            "rustfmt 1.83.0-stable (abc1234 2024-11-26)\n"
+        )
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        obs_by_key = {o.key: o for o in result.observations}
+        rustfmt_obs = obs_by_key["rust.rustfmt"]
+        # RED: with version comparison, 1.83.0 ≠ 1.97.1 is already
+        # a mismatch — but the failure message should highlight the
+        # toolchain mismatch, not just a bare version diff.
+        self.assertFalse(
+            rustfmt_obs.ok,
+            "rustfmt from toolchain 1.83.0 must be rejected when "
+            "the configured toolchain is 1.97.1",
+        )
+        # The failure detail must mention the toolchain mismatch.
+        observed = rustfmt_obs.observed_value or ""
+        self.assertIn(
+            "1.83.0", observed,
+            "failure detail must identify the actual toolchain "
+            "rustfmt resolves to",
+        )
+
+    def test_rustfmt_provenance_invokes_rustup_which(self) -> None:
+        """Proving rustfmt provenance requires running
+        ``rustup which rustfmt`` to confirm the binary resolves
+        through the configured toolchain.  The current
+        implementation only runs ``rustfmt --version``."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["rustfmt"] = (
+            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
+        )
+        # rustup which rustfmt → the expected toolchain path.
+        matching["rustup"] = (
+            "/home/dev/.rustup/toolchains/1.97.1-x86_64-unknown"
+            "-linux-gnu/bin/rustfmt\n"
+        )
+        runner = ToolVersionRunner(matching)
+        verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        # RED: ``rustup which rustfmt`` is never invoked — only
+        # ``rustfmt --version`` runs.
+        rustup_commands = [
+            " ".join(c) for c in runner.calls
+            if "rustup" in c
+        ]
+        self.assertTrue(
+            len(rustup_commands) >= 1,
+            "rustfmt provenance must invoke 'rustup which rustfmt' "
+            f"— got {len(rustup_commands)} rustup commands",
+        )
+
+    def test_rustfmt_provenance_invokes_rustup_component_list(self) -> None:
+        """Proving rustfmt provenance requires running
+        ``rustup component list --toolchain <toolchain>`` to
+        confirm the component is installed.  The current
+        implementation only runs ``rustfmt --version``."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["rustfmt"] = (
+            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
+        )
+        # rustup component list output.
+        matching["rustup"] = (
+            "rustfmt-x86_64-unknown-linux-gnu (installed)\n"
+            "clippy-x86_64-unknown-linux-gnu (default)\n"
+        )
+        runner = ToolVersionRunner(matching)
+        verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        # RED: ``rustup component list --toolchain …`` is never
+        # invoked — only ``rustfmt --version`` runs.
+        rustup_commands = [
+            " ".join(c) for c in runner.calls
+            if "rustup" in c
+        ]
+        self.assertTrue(
+            len(rustup_commands) >= 1,
+            "rustfmt provenance must invoke "
+            "'rustup component list --toolchain …' "
+            f"— got {len(rustup_commands)} rustup commands",
+        )
+
+    # ── 1.5: Conditional rustfmt/clippy checks remain absent ─────
+
+    def test_rustfmt_check_absent_when_not_configured(self) -> None:
+        """When rustfmt is not in the Rust components list, the
+        rustfmt observation contract must not be included."""
+        # Already covered by existing TestVerificationContracts
+        # tests (test_only_rustfmt_includes_rustfmt_only, etc.).
+        # This test confirms the invariant from the ground up.
+        proj = _canonical_projection()
+        proj = EffectiveBuildProjection(
+            platform=proj.platform,
+            node=proj.node,
+            rust=EffectiveRust(
+                version="1.97.1",
+                profile="minimal",
+                components=(),  # no components configured
+                rustup=proj.rust.rustup,
+            ),
+            uv=proj.uv,
+            python_version=proj.python_version,
+            ty_version=proj.ty_version,
+            rtk=proj.rtk,
+            fd=proj.fd,
+            pi_version=proj.pi_version,
+            openspec_version=proj.openspec_version,
+            oh_my_zsh_revision=proj.oh_my_zsh_revision,
+        )
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        # Even if rustfmt is on PATH, the check must be skipped.
+        matching["rustfmt"] = (
+            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
+        )
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        keys = {o.key for o in result.observations}
+        self.assertNotIn(
+            "rust.rustfmt", keys,
+            "rustfmt observation must be absent when rustfmt is "
+            "not in the configured components",
+        )
+        self.assertNotIn(
+            "rust.clippy", keys,
+            "clippy observation must be absent when clippy is "
+            "not in the configured components",
+        )
 
 
 class TestBuildObservationModel(unittest.TestCase):
