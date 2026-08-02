@@ -4304,5 +4304,85 @@ class TestRealPackageInstallerPartialWrite(unittest.TestCase):
         )
 
 
+class TestArchitectureHostURLBoundary(unittest.TestCase):
+    """RED — runtime URLs must be host-only; the container projection and
+    installer must not expose or depend on downloadable URLs or download-
+    transport/workspace production boundaries."""
+
+    def test_projection_dto_has_no_url_field(self) -> None:
+        from docker.runtime_installer import ProjectionEntry
+        annotations = getattr(ProjectionEntry, "__annotations__", {})
+        self.assertNotIn(
+            "artifact_url", annotations,
+            "ProjectionEntry must not expose artifact_url; URLs are host-only",
+        )
+
+    def test_projection_dto_has_canonical_identity_field(self) -> None:
+        from docker.runtime_installer import ProjectionEntry
+        annotations = getattr(ProjectionEntry, "__annotations__", {})
+        self.assertIn(
+            "artifact_id", annotations,
+            "ProjectionEntry must carry a canonical artifact identity "
+            "(not a downloadable URL)",
+        )
+
+    def test_installer_source_has_no_download_transport_imports(self) -> None:
+        """The container installer source must never import urllib,
+        requests, http.client, socket, or curl — whether top-level
+        or inside a function body.
+
+        Checking only ``vars(module)`` misses ``from X import Y``
+        inside a function (the name is local, not module-level).
+        This test scans the actual source text for import
+        statements that reference forbidden download-transport
+        modules."""
+        import re
+
+        import docker.runtime_installer
+        src = inspect.getsource(docker.runtime_installer)
+        forbidden = re.compile(
+            r"^\s*(?:from|import)\s+"
+            r"(?:urllib|requests|http\.client|socket|curl)"
+            r"(?:\b|\s)",
+            re.MULTILINE,
+        )
+        violations = [
+            m.group(0).strip()
+            for m in forbidden.finditer(src)
+        ]
+        self.assertEqual(
+            [], violations,
+            "installer source imports forbidden download transport:\n"
+            + "\n".join(f"  {v}" for v in violations),
+        )
+
+    def test_installer_has_no_artifact_downloader_boundary(self) -> None:
+        import docker.runtime_installer as mod
+        self.assertFalse(
+            hasattr(mod, "ArtifactDownloader"),
+            "ArtifactDownloader protocol must not exist — the container "
+            "receives pre-materialized read-only mounts",
+        )
+
+    def test_installer_has_no_temp_workspace_boundary(self) -> None:
+        import docker.runtime_installer as mod
+        self.assertFalse(
+            hasattr(mod, "TempWorkspace"),
+            "TempWorkspace must not exist — no mutable download workspace "
+            "inside the container",
+        )
+
+    def test_installer_has_no_download_factory_function(self) -> None:
+        import docker.runtime_installer as mod
+        self.assertFalse(
+            hasattr(mod, "real_workspace"),
+            "real_workspace factory must not exist in the production module",
+        )
+        self.assertFalse(
+            hasattr(mod, "real_download"),
+            "real_download factory must not exist in the production module",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

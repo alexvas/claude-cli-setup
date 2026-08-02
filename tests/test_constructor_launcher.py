@@ -2211,5 +2211,578 @@ class TestOrchestrateRunExecutionModes(TestRunTransaction):
         )
 
 
+class TestEndToEndPlanningGuards(TestRunTransaction):
+    """RED — invalid inventory, override, artifact identity, cache
+    root, or mount target must fail **before** cache mutation,
+    projection publication, gateway effects, or Docker execution."""
+
+    # ── malformed inventory helpers ────────────────────────────
+
+    @staticmethod
+    def _make_malformed_inventory(
+        base_path: str,
+        *,
+        bad_integrity: str,
+    ) -> str:
+        """Copy the real inventory and replace the *existing*
+        ``pi-read`` 0.2.0 integrity line with *bad_integrity*.
+
+        The replacement must be a valid-base64, correct-prefix
+        value so the TOML parses successfully and the model regex
+        accepts it — the failure point is the missing semantic
+        artifact-identity / mount-target validation during run
+        planning, not TOML-level integrity rejection."""
+        import shutil
+
+        real = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..", "docker-constructor.toml",
+            ),
+        )
+        fixture = os.path.join(base_path, "malformed.toml")
+        shutil.copy2(real, fixture)
+        with open(fixture) as fh:
+            text = fh.read()
+        # The existing pi-read 0.2.0 integrity line:
+        original = (
+            'integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5'
+            'ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="'
+        )
+        replaced = text.replace(original, f'integrity = "{bad_integrity}"')
+        if replaced == text:
+            raise RuntimeError(
+                "Failed to substitute integrity in fixture — "
+                "the expected original line was not found"
+            )
+        with open(fixture, "w") as fh:
+            fh.write(replaced)
+        return fixture
+
+    @staticmethod
+    def _make_single_extension_fixture(
+        base_path: str,
+        *,
+        bad_integrity: str,
+    ) -> str:
+        """Create a minimal inventory TOML containing **only**
+        the ``pi-read`` extension with a deliberately wrong
+        *bad_integrity* (valid-SRI format, wrong digest).
+
+        No other extensions are present, so a correct
+        materializer fetches exactly the pi-read URL and fails
+        at digest comparison — the call-count assertion is
+        deterministic."""
+        fixture = os.path.join(base_path, "single-ext.toml")
+        with open(fixture, "w") as fh:
+            fh.write(
+                '[runtime]\n'
+                'revision = "2025-08-01T00:00:00Z"\n'
+                '\n'
+                '[runtime.pi-extensions.pi-read]\n'
+                'version = "0.2.0"\n'
+                '\n'
+                '[runtime.pi-extensions.pi-read.source]\n'
+                'type = "npm"\n'
+                'package = "@arcanemachine/pi-read"\n'
+                '\n'
+                '[runtime.pi-extensions.pi-read.artifacts."0.2.0"]\n'
+                'url = "https://registry.npmjs.org/@arcanemachine'
+                '/pi-read/-/pi-read-0.2.0.tgz"\n'
+                f'integrity = "{bad_integrity}"\n'
+                '\n'
+                '[runtime.pi-extensions.pi-read.update]\n'
+                'provider = "npm"\n'
+                'stable_only = true\n'
+                '\n'
+                '[runtime.pi-extensions.pi-read.override]\n'
+                'constraint = ">=0.2.0"\n'
+                'allow_prerelease = false\n'
+                'scheme = "numeric"\n'
+                '\n'
+                '[runtime.pi-extensions.pi-read.validation]\n'
+                'metadata_file = "package.json"\n'
+            )
+        return fixture
+
+    # ── spies ──────────────────────────────────────────────────
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._stages: list[str] = []
+
+    class _StageSpy:
+        """Records ordered stage traversal."""
+
+        def __init__(self, stages: list[str]) -> None:
+            self._stages = stages
+
+        def record(self, name: str) -> None:
+            self._stages.append(name)
+
+    @staticmethod
+    def _spy_factory(
+        stages: list[str],
+    ):
+        """Projection factory that records when it was called."""
+
+        class _Spy(RecordingProjectionFactory):
+            def __call__(self, projection, *, parent_dir):
+                stages.append("projection")
+                return super().__call__(projection, parent_dir=parent_dir)
+
+        return _Spy()
+
+    @staticmethod
+    def _spy_executor(
+        stages: list[str],
+        returncode: int = 0,
+    ):
+        """Executor that records invocation."""
+
+        class _Spy:
+            def run(
+                self,
+                argv: tuple[str, ...],
+                *,
+                interactive: bool = False,
+            ) -> object:
+                from docker.launcher import ProcessResult
+                stages.append("executor")
+                return ProcessResult(argv=argv, return_code=returncode)
+
+        return _Spy()
+
+    # ── assertion helpers ──────────────────────────────────────
+
+    def _assert_never_reached(self, stage: str) -> None:
+        self.assertNotIn(
+            stage, self._stages,
+            f"{stage} stage reached — should have been blocked; "
+            f"stages={self._stages}",
+        )
+
+    @staticmethod
+    def _gateway_effect_triggered(
+        result: object,
+    ) -> bool:
+        """True when the rendered Docker args include ``--add-host``
+        (the persisted gateway effect)."""
+        return (
+            hasattr(result, "run_args")
+            and result.run_args
+            and any(
+                "--add-host" in a
+                for a in result.run_args
+            )
+        )
+
+    @staticmethod
+    def _install_cache_spy(
+        watch_prefix: str = "runtime-artifacts",
+    ) -> tuple[list[str], object]:
+        """Instrument the full cache filesystem boundary and return
+        ``(ops_list, restore_fn)``.
+
+        Every ``open``, ``os.rename``, ``os.replace``, ``os.link``,
+        ``os.mkdir``, ``os.listdir``, and ``os.scandir`` call touching
+        a path that contains *watch_prefix* is recorded in *ops_list*.
+
+        The caller MUST invoke the returned *restore* callable after
+        the operation-under-test to unpatch the builtins."""
+        import builtins as _bi
+
+        prefix = watch_prefix
+        ops: list[str] = []
+        _orig_open = _bi.open
+        _orig_rename = os.rename
+        _orig_replace = os.replace
+        _orig_link = os.link
+        _orig_mkdir = os.mkdir
+        _orig_listdir = os.listdir
+        _orig_scandir = os.scandir
+
+        def _is_cache(obj: object) -> bool:
+            return prefix in str(obj)
+
+        def _trap_open(file, *a, **kw):
+            if _is_cache(file):
+                ops.append(f"open:{file}")
+            return _orig_open(file, *a, **kw)
+
+        def _trap_rename(src, dst):
+            if _is_cache(src) or _is_cache(dst):
+                ops.append(f"rename:{src}->{dst}")
+            return _orig_rename(src, dst)
+
+        def _trap_replace(src, dst):
+            if _is_cache(src) or _is_cache(dst):
+                ops.append(f"replace:{src}->{dst}")
+            return _orig_replace(src, dst)
+
+        def _trap_link(src, dst):
+            if _is_cache(src) or _is_cache(dst):
+                ops.append(f"link:{src}->{dst}")
+            return _orig_link(src, dst)
+
+        def _trap_mkdir(path, *a, **kw):
+            if _is_cache(path):
+                ops.append(f"mkdir:{path}")
+            return _orig_mkdir(path, *a, **kw)
+
+        def _trap_listdir(path):
+            if _is_cache(path):
+                ops.append(f"listdir:{path}")
+            return _orig_listdir(path)
+
+        def _trap_scandir(path):
+            if _is_cache(path):
+                ops.append(f"scandir:{path}")
+            return _orig_scandir(path)
+
+        _bi.open = _trap_open  # type: ignore[assignment]
+        os.rename = _trap_rename  # type: ignore[assignment]
+        os.replace = _trap_replace  # type: ignore[assignment]
+        os.link = _trap_link  # type: ignore[assignment]
+        os.mkdir = _trap_mkdir  # type: ignore[assignment]
+        os.listdir = _trap_listdir  # type: ignore[assignment]
+        os.scandir = _trap_scandir  # type: ignore[assignment]
+
+        def _restore() -> None:
+            _bi.open = _orig_open  # type: ignore[assignment]
+            os.rename = _orig_rename  # type: ignore[assignment]
+            os.replace = _orig_replace  # type: ignore[assignment]
+            os.link = _orig_link  # type: ignore[assignment]
+            os.mkdir = _orig_mkdir  # type: ignore[assignment]
+            os.listdir = _orig_listdir  # type: ignore[assignment]
+            os.scandir = _orig_scandir  # type: ignore[assignment]
+
+        return ops, _restore
+
+    def _assert_no_effects(
+        self,
+        result: object,
+        cache_ops: list[str],
+        *,
+        projection: bool = True,
+        cache: bool = True,
+        gateway: bool = True,
+        executor: bool = True,
+    ) -> None:
+        """Assert that none of the requested boundaries were
+        touched.
+
+        *projection* — ``_create_projection`` was never called.
+        *cache* — no filesystem ops under ``runtime-artifacts``.
+        *gateway* — ``--add-host`` not in rendered args.
+        *executor* — ``executor.run()`` was never invoked."""
+        if projection:
+            self._assert_never_reached("projection")
+        if cache:
+            self.assertFalse(
+                cache_ops,
+                f"cache ops triggered but should have been blocked: "
+                f"{cache_ops}",
+            )
+        if gateway:
+            self.assertFalse(
+                self._gateway_effect_triggered(result),
+                "gateway effect triggered but should have been blocked",
+            )
+        if executor:
+            self._assert_never_reached("executor")
+
+    # ── invalid inventory ─────────────────────────────────────
+
+    def test_invalid_inventory_fails_before_projection(self) -> None:
+        cache_ops, restore = self._install_cache_spy()
+        try:
+            req = self._request(
+                inventory_path="/nonexistent/inventory.toml",
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
+            self.assertEqual(result.exit_kind, ExitKind.CONFIG)
+            self._assert_no_effects(result, cache_ops)
+        finally:
+            restore()
+
+    # ── invalid override ──────────────────────────────────────
+
+    def test_invalid_override_fails_before_projection(self) -> None:
+        cache_ops, restore = self._install_cache_spy()
+        try:
+            req = self._request(
+                overrides={
+                    "runtime.pi-extensions.nonexistent.version": "9.9.9",
+                },
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
+            self.assertEqual(result.exit_kind, ExitKind.CONFIG)
+            self._assert_no_effects(result, cache_ops)
+        finally:
+            restore()
+
+    # ── malformed / unsupported identity ─────────────────────
+
+    def test_malformed_integrity_fails_before_any_effect(self) -> None:
+        """An integrity string that fails the model regex
+        (e.g. ``sha1-`` prefix or non-base64 payload) must be
+        rejected at inventory load — **before** any cache,
+        gateway, projection, or executor boundary."""
+        malformed = self._make_malformed_inventory(
+            self._tmpdir.name,
+            bad_integrity="sha1-!!!!notbase64!!!!",
+        )
+        cache_ops, restore = self._install_cache_spy()
+        try:
+            req = self._request(
+                inventory_path=malformed,
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
+            self.assertEqual(result.exit_kind, ExitKind.CONFIG)
+            self._assert_no_effects(result, cache_ops)
+        finally:
+            restore()
+
+    def test_unsupported_algorithm_fails_before_any_effect(self) -> None:
+        """An integrity with an unsupported algorithm
+        (e.g. ``sha1-AAAA...``) must be rejected at inventory
+        load — **before** any cache, gateway, projection, or
+        executor boundary."""
+        malformed = self._make_malformed_inventory(
+            self._tmpdir.name,
+            bad_integrity="sha1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+        )
+        cache_ops, restore = self._install_cache_spy()
+        try:
+            req = self._request(
+                inventory_path=malformed,
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
+            self.assertEqual(result.exit_kind, ExitKind.CONFIG)
+            self._assert_no_effects(result, cache_ops)
+        finally:
+            restore()
+
+    # ── cache-root validation ─────────────────────────────────
+
+    def test_run_request_must_not_defer_materialization(self) -> None:
+        """``RunRequest`` MUST NOT expose a ``cache_root`` field.
+        Materialization is not a caller choice — every non-dry
+        run must prepare artifacts before publication.  An
+        optional field that defers materialization when empty
+        contradicts the authoritative launcher/runtime specs."""
+        import dataclasses
+        from docker.launcher import RunRequest
+        fields = {f.name for f in dataclasses.fields(RunRequest)}
+        self.assertNotIn(
+            "cache_root", fields,
+            "RunRequest must NOT expose cache_root — "
+            "materialization is constructor-owned, not optional",
+        )
+
+    def test_invalid_cache_root_fails_before_cache_and_execution(
+        self,
+    ) -> None:
+        """RED — when the constructor-owned cache root target
+        is a symlink (or otherwise corrupt), the orchestrator
+        must fail **before** any cache mutation, gateway
+        rendering, or Docker execution.
+
+        The cache root is monkey-patched to a known-corrupt
+        symlink so the spy and the orchestrator observe the
+        same path."""
+        from pathlib import Path
+        import docker.launcher as _launcher
+
+        cache_root = Path(self._tmpdir.name, "sub", "runtime-artifacts")
+        symlink_dest = Path(self._tmpdir.name, "nowhere")
+        os.mkdir(str(cache_root.parent))
+        os.symlink(str(symlink_dest), str(cache_root))
+
+        watch = str(cache_root)
+        cache_ops, restore_spy = self._install_cache_spy(
+            watch_prefix=watch,
+        )
+        # Monkey-patch the constructor-owned default so the
+        # orchestrator targets the same corrupt path the spy
+        # is watching.
+        import unittest.mock as _mock
+        with _mock.patch.object(
+            _launcher, "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT", watch,
+        ):
+            try:
+                req = self._request(
+                    executor=self._spy_executor(self._stages),
+                    inspector=FakeContainerNameInspector(set()),
+                    _create_projection=self._spy_factory(self._stages),
+                )
+                result = self._run(req)
+            finally:
+                restore_spy()
+
+        # RED: cache root is a constructor-owned constant but
+        # orchestrate_run never inspects it — execution proceeds.
+        self._assert_no_effects(result, cache_ops)
+
+    # ── digest-mismatch at materialization ───────────────────
+
+    def test_digest_mismatch_fails_before_projection_and_execution(
+        self,
+    ) -> None:
+        """RED — when the materializer fetches the artifact
+        and the computed digest does not match the inventory
+        integrity, the orchestrator must fail **before**
+        projection publication, gateway rendering, and Docker
+        execution.
+
+        The test injects a deterministic byte fetcher that
+        records every call.  It asserts the fetcher is called
+        exactly once with the reviewed URL and returns known
+        wrong bytes.  Temporary cache work during
+        download+verify is allowed, but no verified blob may
+        be published and no projection, gateway, or executor
+        effect may occur.
+
+        A unique temporary cache root under the test's own
+        ``_tmpdir`` is used and the module-level constant is
+        patched so the test is hermetic — independent of
+        repository state, prior runs, or developer-local
+        artifact caches."""
+        import docker.launcher as launcher
+        from unittest import mock
+
+        malformed = self._make_single_extension_fixture(
+            self._tmpdir.name,
+            bad_integrity=(
+                "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+            ),
+        )
+
+        expected_url = (
+            "https://registry.npmjs.org/@arcanemachine/pi-read"
+            "/-/pi-read-0.2.0.tgz"
+        )
+        fetch_calls: list[tuple[str, ...]] = []
+
+        def _wrong_bytes(url: str) -> bytes:
+            fetch_calls.append((url,))
+            return b"known-wrong-bytes-for-deterministic-mismatch"
+
+        cache_root = os.path.join(
+            self._tmpdir.name,
+            "runtime-artifacts",
+            "blobs",
+        )
+
+        cache_ops, restore_spy = self._install_cache_spy()
+        try:
+            with mock.patch.object(
+                launcher,
+                "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+                cache_root,
+            ):
+                req = self._request(
+                    inventory_path=malformed,
+                    _artifact_fetcher=_wrong_bytes,
+                    executor=self._spy_executor(self._stages),
+                    inspector=FakeContainerNameInspector(set()),
+                    _create_projection=self._spy_factory(self._stages),
+                )
+                result = self._run(req)
+
+            # RED: no materialization layer — the fetcher is never
+            # called, the inventory loads, projection is created,
+            # and the executor runs.
+            self.assertEqual(
+                fetch_calls,
+                [(expected_url,)],
+                "fetcher must be called exactly once with the "
+                "reviewed URL before projection or executor",
+            )
+            self._assert_no_effects(
+                result, cache_ops,
+                cache=False,
+            )
+            published: list[str] = []
+            if os.path.isdir(cache_root):
+                for dirpath, _dirnames, filenames in os.walk(cache_root):
+                    for name in filenames:
+                        published.append(os.path.join(dirpath, name))
+            self.assertFalse(
+                published,
+                f"verified blob(s) published under {cache_root} "
+                f"despite digest mismatch: {published}",
+            )
+            self.assertFalse(
+                any(op.startswith(p) for p in ("rename", "replace", "link")
+                    for op in cache_ops),
+                f"publication op in cache despite digest mismatch: "
+                f"{cache_ops}",
+            )
+        finally:
+            restore_spy()
+
+    # ── malformed post-materialization mount DTO ──────────────
+
+    def test_malformed_mount_target_fails_before_projection_and_execution(
+        self,
+    ) -> None:
+        """RED — a mount DTO carrying a traversal segment
+        (``../../../etc/passwd``), an absolute target outside
+        ``/run/pi-cli/runtime-artifacts``, or a non-canonical
+        path must be rejected **before** projection
+        publication, cache mutation, gateway rendering, and
+        Docker execution.
+
+        A canonical base64-derived mount target from a valid
+        SRI is inherently safe.  Unsafe targets only arise
+        from a malformed DTO crossing the post-materialization
+        boundary — the orchestrator must validate every
+        :class:`ArtifactMount` before the projection factory
+        is invoked."""
+        from docker.versioning.rendering import ArtifactMount
+
+        cache_ops, restore = self._install_cache_spy()
+        try:
+            # Use a real temporary blob so the only rejectable
+            # property is the traversal target.
+            real_blob = os.path.join(self._tmpdir.name, "real-blob.tgz")
+            with open(real_blob, "wb") as fh:
+                fh.write(b"real-bytes")
+
+            req = self._request(
+                _artifact_mounts=(
+                    ArtifactMount(
+                        host_path=real_blob,
+                        container_target="../../../etc/passwd",
+                    ),
+                ),
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
+            # RED: the orchestrator does not validate mount
+            # targets — the traversal is accepted, projection is
+            # created, and the executor runs.
+            self._assert_no_effects(result, cache_ops)
+        finally:
+            restore()
+
+
 if __name__ == "__main__":
     unittest.main()

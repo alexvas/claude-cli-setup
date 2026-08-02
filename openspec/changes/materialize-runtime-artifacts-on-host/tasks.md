@@ -1,8 +1,8 @@
 ## 1. Align the Active Runtime Design
 
-- [ ] 1.1 Confirm the direct-Docker run orchestration, runtime projection lifecycle, and protected installer from `replace-compose-with-direct-docker` are complete or deliberately amend that change so this work replaces rather than duplicates container downloading.
-- [ ] 1.2 Add failing architecture tests requiring runtime URLs to remain host-only and forbidding container installer imports or production boundaries for download transport and download workspaces.
-- [ ] 1.3 Add failing end-to-end planning tests proving invalid inventory, override, artifact identity, cache root, or mount target fails before cache mutation, projection publication, gateway effects, or Docker execution.
+- [x] 1.1 Confirm the direct-Docker run orchestration, runtime projection lifecycle, and protected installer from `replace-compose-with-direct-docker` are complete or deliberately amend that change so this work replaces rather than duplicates container downloading.
+- [x] 1.2 Add failing architecture tests requiring runtime URLs to remain host-only and forbidding container installer imports or production boundaries for download transport and download workspaces.
+- [x] 1.3 Add failing end-to-end planning tests proving invalid inventory, override, artifact identity, cache root, or mount target fails before cache mutation, projection publication, gateway effects, or Docker execution.
 
 ## 2. Define Content-Addressed Cache Contracts
 

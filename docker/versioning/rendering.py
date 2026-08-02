@@ -30,6 +30,26 @@ _CONTAINER_PI_HOME = "/home/dev/.pi"
 
 
 @dataclass(frozen=True)
+class ArtifactMount:
+    """Post-materialization mount specification for a single
+    verified runtime artifact blob.
+
+    The *container_target* MUST be a canonical path beneath
+    ``/run/pi-cli/runtime-artifacts``, derived solely from the
+    validated integrity digest.  Traversal segments, absolute
+    paths outside the canonical root, and non-canonical
+    targets are rejected before the renderer emits any mount
+    argument."""
+
+    host_path: str
+    """Absolute host path to the verified blob in the cache."""
+
+    container_target: str
+    """Canonical read-only mount target inside the container
+    (e.g. ``"/run/pi-cli/runtime-artifacts/sha512/<digest>"``)."""
+
+
+@dataclass(frozen=True)
 class CacheControls:
     """Docker build cache controls.
 
@@ -156,6 +176,12 @@ class RunRenderInputs:
     the container.  ``None`` omits the variable; a string like ``"1"``
     or ``"0"`` adds ``--env CHOWN_WORK_ON_START=<value>``.
     """
+
+    artifact_mounts: tuple[ArtifactMount, ...] = ()
+    """Verified runtime artifact blobs to mount as individual
+    read-only volumes.  An empty tuple means no artifact mounts
+    (dry-run or pre-materialization error).  Every mount target
+    is validated for canonical form before rendering."""
 
 
 # ── platform helpers ────────────────────────────────────────────────

@@ -23,6 +23,14 @@ import enum
 import os
 from dataclasses import dataclass, field
 from typing import Protocol, Mapping
+
+DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT = (
+    ".docker-generated/runtime-artifacts/blobs"
+)
+"""Constructor-owned root beneath which algorithm/digest blobs
+live.  Every non-dry run must validate and materialize selected
+runtime artifacts under this directory before publishing the
+projection or invoking the Docker executor."""
 from types import MappingProxyType
 
 
@@ -41,7 +49,7 @@ class ExecutionMode(enum.Enum):
     INTERACTIVE = "interactive"
 
 from docker.versioning.dispatch_types import ExitKind
-from docker.versioning.rendering import RunRenderInputs
+from docker.versioning.rendering import ArtifactMount, RunRenderInputs
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -299,6 +307,18 @@ class RunExecutor(Protocol):
         ...
 
 
+class ArtifactByteFetcher(Protocol):
+    """Injected byte-fetch boundary for runtime artifact
+    downloads.
+
+    Called once per selected artifact cache-miss.  Returns the
+    raw bytes from the reviewed URL.  Test doubles return
+    controlled bytes so digest-mismatch and network-error
+    paths are deterministic."""
+
+    def __call__(self, url: str) -> bytes: ...
+
+
 class ProcessRunner:
     """Injectable process-execution boundary.
 
@@ -387,6 +407,18 @@ class RunRequest:
 
     projection_parent_dir: str = ".docker-generated/runtime"
     """Parent directory for private runtime projection files."""
+
+    _artifact_fetcher: ArtifactByteFetcher | None = None
+    """Injected byte-fetch boundary for deterministic
+    materialization tests.  ``None`` selects the real
+    download transport; a test double returns controlled
+    bytes so digest-mismatch paths are network-independent."""
+
+    _artifact_mounts: tuple[ArtifactMount, ...] = ()
+    """Injected post-materialization mount specifications.
+    Defaults to an empty tuple (no artifact mounts).
+    Exposed as a testing boundary for mount-target
+    validation guards."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.overrides, MappingProxyType):
@@ -519,6 +551,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 stdin_open=request.stdin_open,
                 command=request.command,
                 chown_on_start=request.chown_on_start,
+                artifact_mounts=request._artifact_mounts,
             )
             run_args = render_run_vector(render_inputs)
             display = shlex.join(run_args)
@@ -605,6 +638,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 stdin_open=request.stdin_open,
                 command=request.command,
                 chown_on_start=request.chown_on_start,
+                artifact_mounts=request._artifact_mounts,
             )
             run_args = render_run_vector(render_inputs)
 
