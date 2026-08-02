@@ -989,6 +989,143 @@ class TestRunFailureDiagnostics(unittest.TestCase):
                          "empty streams must not produce a 'data:' "
                          "line in interactive mode")
 
+    def test_interactive_output_reaches_host_streams_not_captured(
+        self,
+    ) -> None:
+        """Regression: in streaming/interactive mode Docker
+        output must appear on the host terminal (inherited
+        stdin/stdout/stderr) and must NOT be hidden inside
+        ``ProcessResult.stdout`` for the facade to render a
+        second time.
+
+        The observed failure mode is:
+
+        1. Docker streams startup and shell output to the
+           host terminal — user sees it live.
+        2. ``ProcessResult.stdout`` is **empty** because
+           ``capture_output=False`` let the subprocess inherit
+           the host streams.
+        3. The facade receives an empty ``stdout`` field and
+           renders ONLY the exit status — no duplicate.
+
+        Timing matters: output must be observable on the host
+        terminal **before** the process exits.  Captured-and-
+        replayed output would appear only after ``_run()``
+        returns, which is too late.
+        """
+        import threading
+
+        host_terminal = io.StringIO()
+
+        process_output = (
+            "[container] Starting services...\n"
+            "[container] pi@host:~$ echo hello\n"
+            "[container] hello\n"
+            "[container] pi@host:~$ exit 1\n"
+        )
+
+        output_written = threading.Event()
+        executor_released = threading.Event()
+
+        class _StreamingExecutor:
+            """Fake executor simulating interactive Docker.
+
+            Writes streamed output to the host terminal, then
+            blocks until the test thread has verified that the
+            output arrived before completion."""
+            def run(self, argv, *, interactive=False):
+                if interactive:
+                    host_terminal.write(process_output)
+                    host_terminal.flush()
+                    output_written.set()
+                    # Block here — the test thread now asserts
+                    # that output is visible while the "process"
+                    # is still running.
+                    executor_released.wait()
+                from docker.launcher import ProcessResult
+                return ProcessResult(
+                    argv=argv,
+                    return_code=1,
+                    stdout="",   # not captured — went to terminal
+                    stderr="",   # not captured — went to terminal
+                )
+
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        result: list[tuple[int, str, str]] = []
+
+        def _run_in_worker() -> None:
+            result.append(_run(
+                self.m,
+                ["run", "--main-project", "/tmp/fake-project",
+                 "--tty"],
+                _process_runner=runner,
+                _container_inspector=self._fake_inspector("pi-0001"),
+                _run_executor=_StreamingExecutor(),
+                _create_projection=lambda p, **kw: (
+                    self._ProjectionHandle()
+                ),
+                _prompt_user=lambda _: True,
+            ))
+
+        worker = threading.Thread(target=_run_in_worker, daemon=True)
+        worker.start()
+
+        try:
+            # RED — the orchestrator never passes
+            # interactive=True, so output_written is never set
+            # and this wait times out.
+            timed_out = not output_written.wait(timeout=2.0)
+            self.assertFalse(
+                timed_out,
+                "interactive executor must write output to "
+                "the host terminal — timed out waiting for "
+                "output_written event",
+            )
+
+            # ── assertions while the executor is still blocked ──
+            self.assertIn(
+                "Starting services",
+                host_terminal.getvalue(),
+                "interactive output must be visible on the "
+                "host terminal BEFORE the process exits",
+            )
+            self.assertIn(
+                "exit 1",
+                host_terminal.getvalue(),
+                "full streaming output must reach the host "
+                "terminal",
+            )
+        finally:
+            # Always release the executor — an assertion
+            # failure above must not leak the worker thread or
+            # skip projection cleanup.
+            executor_released.set()
+
+        worker.join(timeout=2.0)
+        self.assertFalse(
+            worker.is_alive(),
+            "worker thread must finish after executor "
+            "is released",
+        )
+
+        rc, out, err = result[0]
+
+        # Post-completion assertions.
+        #   1. Exit code maps correctly.
+        self.assertEqual(4, rc,
+                         "nonzero interactive exit must map to "
+                         "OPERATIONAL (exit code 4)")
+        #   2. The facade's rendered stderr must NOT contain
+        #      the streamed output again.
+        self.assertNotIn(
+            "Starting services", err,
+            "facade must not re-render output that already "
+            "appeared on the host terminal",
+        )
+
     def test_captured_nonzero_output_is_bounded(self) -> None:
         """A non-interactive container that fails may emit
         megabytes of diagnostic output.  Both text and JSON

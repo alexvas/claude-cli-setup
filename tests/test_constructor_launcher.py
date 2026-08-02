@@ -1969,6 +1969,54 @@ class TestProcessRunnerExecutionModes(unittest.TestCase):
         finally:
             _subprocess_module.run = original_run  # type: ignore[assignment]
 
+    def test_captured_mode_forbids_tty_allocation(self) -> None:
+        """Captured (non-interactive) execution must **not**
+        pass ``--tty`` or ``--interactive`` to Docker.
+        ``capture_output`` alone must handle ``stdout`` /
+        ``stderr``; stdin defaults to inherit (the existing
+        behaviour is sufficient)."""
+        import subprocess as _subprocess_module
+
+        original_run = _subprocess_module.run
+        captured_kwargs: list[dict[str, object]] = []
+        captured_argv: list[list[str]] = []
+
+        def _fake_subprocess_run(argv: list[str], **kw: object) -> object:
+            captured_kwargs.append(kw)
+            captured_argv.append(argv)
+            from subprocess import CompletedProcess
+            return CompletedProcess(argv, 0, stdout="", stderr="")
+
+        _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
+        try:
+            runner = ProcessRunner()
+            # RED: ProcessRunner.run() does not accept
+            # ``capture_output`` yet.
+            runner.run(["docker", "run", "img"],
+                       capture_output=True)  # type: ignore[call-arg]
+            self.assertTrue(
+                len(captured_kwargs) >= 1,
+                "subprocess.run must be called",
+            )
+            kw = captured_kwargs[0]
+            # Captured mode must still capture stdout/stderr.
+            self.assertTrue(
+                kw.get("capture_output"),
+                "captured mode must enable capture_output",
+            )
+            # No TTY allocation in the docker argv.
+            flat_argv = " ".join(captured_argv[0])
+            self.assertNotIn(
+                "--tty", flat_argv,
+                "captured mode must not pass --tty to Docker",
+            )
+            self.assertNotIn(
+                "--interactive", flat_argv,
+                "captured mode must not pass --interactive to Docker",
+            )
+        finally:
+            _subprocess_module.run = original_run  # type: ignore[assignment]
+
 
 class TestOrchestrateRunExecutionModes(TestRunTransaction):
     """When ``orchestrate_run`` receives a mode-aware executor,
@@ -2104,6 +2152,57 @@ class TestOrchestrateRunExecutionModes(TestRunTransaction):
             modes_seen[0]["interactive"],
             "orchestrate_run must pass interactive=True when "
             "tty=True (even with stdin_open=False)",
+        )
+
+    def test_executor_oserror_maps_to_operational(self) -> None:
+        """When the executor raises :class:`OSError` — Docker
+        not installed, permission denied, binary not found —
+        ``orchestrate_run`` must catch it and return an
+        ``OPERATIONAL`` result with the original error message
+        preserved so the facade can surface actionable
+        diagnostics.
+
+        The failure must surface even when the orchestrator
+        has correctly dispatched ``interactive=True`` based on
+        ``tty``/``stdin_open`` flags — the mode signal must
+        reach the executor before the crash."""
+        _oserror_message = (
+            "[Errno 2] No such file or directory: 'docker'"
+        )
+        mode_seen: list[dict[str, object]] = []
+
+        class _CrashingExecutor:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> ProcessResult:
+                mode_seen.append({"interactive": interactive})
+                raise OSError(_oserror_message)
+
+        req = self._request(
+            tty=True,
+            stdin_open=True,
+            executor=_CrashingExecutor(),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        # RED: orchestrator never passes interactive=True.
+        self.assertTrue(
+            len(mode_seen) >= 1,
+            "executor was never invoked",
+        )
+        self.assertTrue(
+            mode_seen[0]["interactive"],
+            "orchestrate_run must pass interactive=True "
+            "before the executor raises OSError",
+        )
+        self.assertEqual(
+            result.exit_kind, ExitKind.OPERATIONAL,
+            "OSError during interactive execution must map "
+            "to OPERATIONAL",
+        )
+        self.assertIn(
+            _oserror_message, result.message or "",
+            "OPERATIONAL result must preserve the original "
+            "OSError message for diagnostics",
         )
 
 
