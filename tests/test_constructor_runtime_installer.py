@@ -3595,6 +3595,51 @@ class TestSourceContract(unittest.TestCase):
         self.assertNotIn("update", fields)
         self.assertNotIn("override", fields)
 
+    def test_entrypoint_invokes_protected_installer_not_wrapper(self) -> None:
+        entrypoint = os.path.join(
+            os.path.dirname(__file__), "..", "docker", "entrypoint.sh",
+        )
+        with open(entrypoint) as fh:
+            content = fh.read()
+        self.assertIn(
+            "python3 -m docker.runtime_installer install", content,
+            "entrypoint must invoke the protected Python installer, "
+            "not a legacy shell wrapper",
+        )
+
+    def test_dockerfile_copies_installer_module_not_wrapper(self) -> None:
+        dockerfile = os.path.join(
+            os.path.dirname(__file__), "..", "Dockerfile",
+        )
+        with open(dockerfile) as fh:
+            content = fh.read()
+        self.assertIn(
+            "COPY docker/runtime_installer.py", content,
+            "Dockerfile must copy the protected Python installer",
+        )
+        self.assertNotIn(
+            "COPY docker/install-pi-extensions.sh", content,
+            "Dockerfile must NOT copy the legacy shell wrapper",
+        )
+
+    def test_dockerfile_entrypoint_is_sole_startup_path(self) -> None:
+        dockerfile = os.path.join(
+            os.path.dirname(__file__), "..", "Dockerfile",
+        )
+        with open(dockerfile) as fh:
+            content = fh.read()
+        self.assertIn(
+            'ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]',
+            content,
+            "Dockerfile must define the entrypoint as the sole startup path",
+        )
+        # The entrypoint is the only supported runtime extension-installation
+        # path; no other scripts should be copied as startup surface.
+        self.assertNotIn(
+            "COPY docker/install-pi-extensions.sh", content,
+            "Dockerfile must NOT copy the obsolete shell wrapper",
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 10.2 — Exit codes

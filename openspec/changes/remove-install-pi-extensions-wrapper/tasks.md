@@ -1,8 +1,8 @@
 ## 1. Establish Removal Contracts
 
-- [ ] 1.1 Confirm `replace-compose-with-direct-docker` has completed protected entrypoint installation, ownership repair, rtk registration, and focused validation before removing the compatibility endpoint.
-- [ ] 1.2 Add failing image/source contract tests asserting that `docker/install-pi-extensions.sh` and `/home/dev/install-pi-extensions.sh` are absent.
-- [ ] 1.3 Replace wrapper-oriented tests with failing contracts for constructor-managed entrypoint installation, mounted-home rejection, package metadata/ownership validation, and rtk setup.
+- [x] 1.1 Confirm `replace-compose-with-direct-docker` has completed protected entrypoint installation, ownership repair, rtk registration, and focused validation before removing the compatibility endpoint.
+- [x] 1.2 Add failing image/source contract tests asserting that `docker/install-pi-extensions.sh` and `/home/dev/install-pi-extensions.sh` are absent.
+- [x] 1.3 Replace wrapper-oriented tests with failing contracts for constructor-managed entrypoint installation, mounted-home rejection, package metadata/ownership validation, and rtk setup.
 
 ## 2. Remove the Wrapper
 

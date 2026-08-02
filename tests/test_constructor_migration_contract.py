@@ -1674,3 +1674,83 @@ class TestShellRuntimeNoStaleInventoryPaths(unittest.TestCase):
                 "Shell scripts reference removed baked-in inventory path:\n"
                 + "\n".join(violations)
             )
+
+
+# ════════════════════════════════════════════════════════════════════
+# install-pi-extensions.sh wrapper-removal contract
+# ════════════════════════════════════════════════════════════════════
+
+_INSTALL_PI_EXTENSIONS_DOCKERFILE_BANNED = [
+    (
+        "install-pi-extensions.sh COPY into image",
+        re.compile(r"COPY\s+docker/install-pi-extensions\.sh"),
+    ),
+    (
+        "install-pi-extensions.sh chmod in image",
+        re.compile(r"chmod\s+\d+\s+/home/dev/install-pi-extensions\.sh"),
+    ),
+]
+
+_INSTALL_PI_EXTENSIONS_SHELL_BANNED = [
+    (
+        "/home/dev/install-pi-extensions.sh referenced",
+        re.compile(r"/home/dev/install-pi-extensions\.sh"),
+    ),
+]
+
+
+class TestDockerfileNoInstallPiExtensionsWrapper(unittest.TestCase):
+    """Dockerfile MUST NOT COPY ``docker/install-pi-extensions.sh``
+    into the runtime image."""
+
+    def test_dockerfile_no_install_pi_extensions_wrapper(self) -> None:
+        dockerfile = REPO / "Dockerfile"
+        if not dockerfile.is_file():
+            return
+        violations: list[str] = []
+        for lineno, line in _lines(dockerfile):
+            for label, pat in _INSTALL_PI_EXTENSIONS_DOCKERFILE_BANNED:
+                if pat.search(line):
+                    violations.append(
+                        f"Dockerfile:{lineno}: {label} — {line.strip()}"
+                    )
+        if violations:
+            self.fail(
+                "Dockerfile still copies the obsolete "
+                "install-pi-extensions.sh wrapper:\n"
+                + "\n".join(violations)
+            )
+
+
+class TestShellScriptsNoInstallPiExtensionsWrapper(unittest.TestCase):
+    """Shell scripts MUST NOT reference the removed
+    ``/home/dev/install-pi-extensions.sh`` image path."""
+
+    def test_shell_scripts_no_install_pi_extensions_wrapper(self) -> None:
+        violations: list[str] = []
+        for rel, path in sorted(_sh_files().items()):
+            for lineno, line in _lines(path):
+                for label, pat in _INSTALL_PI_EXTENSIONS_SHELL_BANNED:
+                    if pat.search(line):
+                        violations.append(
+                            f"{rel}:{lineno}: {label} — {line.strip()}"
+                        )
+        if violations:
+            self.fail(
+                "Shell scripts reference the obsolete "
+                "/home/dev/install-pi-extensions.sh path:\n"
+                + "\n".join(violations)
+            )
+
+
+class TestInstallPiExtensionsScriptFileAbsent(unittest.TestCase):
+    """The wrapper script ``docker/install-pi-extensions.sh`` MUST NOT
+    exist in the repository source tree."""
+
+    def test_install_pi_extensions_script_file_absent(self) -> None:
+        wrapper = REPO / "docker" / "install-pi-extensions.sh"
+        if wrapper.is_file():
+            self.fail(
+                f"{wrapper} still exists in the repository; it must be "
+                "removed as part of this change"
+            )
