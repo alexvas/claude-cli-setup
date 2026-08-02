@@ -26,8 +26,8 @@
 
 ## 5. Validate the Breaking Migration
 
-- [ ] 5.1 Run focused constructor runtime-installer, entrypoint, source-contract, documentation, runtime verification, and Stage 6 host-script tests without Docker or network where fakes are available.
-- [ ] 5.2 Run shell/static checks, Python compile checks, and `git diff --check`.
-- [ ] 5.3 Run the full non-Docker test suite and record or resolve all regressions caused by removal of the wrapper contract.
-- [ ] 5.4 Build and inspect the runtime image when Docker is available, proving the legacy path is absent and constructor-managed launch still installs/validates extensions and rtk configuration.
-- [ ] 5.5 Run `openspec validate remove-install-pi-extensions-wrapper --strict` and confirm all tasks, delta requirements, docs, and implementation agree.
+- [x] 5.1 Run focused constructor runtime-installer, entrypoint, source-contract, documentation, runtime verification, and Stage 6 host-script tests without Docker or network where fakes are available.
+- [x] 5.2 Run shell/static checks, Python compile checks, and `git diff --check`.
+- [x] 5.3 Run the full non-Docker test suite and record or resolve all regressions caused by removal of the wrapper contract.
+- [x] 5.4 Build and inspect the runtime image when Docker is available, proving the legacy path is absent and constructor-managed launch still installs/validates extensions and rtk configuration.
+- [x] 5.5 Run `openspec validate remove-install-pi-extensions-wrapper --strict` and confirm all tasks, delta requirements, docs, and implementation agree.
