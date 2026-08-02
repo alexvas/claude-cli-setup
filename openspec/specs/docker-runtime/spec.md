@@ -5,6 +5,59 @@ Define the current Docker image, compose service, and container startup behavior
 
 ## Requirements
 
+### Requirement: Expose only effective runtime dependency metadata to the container
+The project SHALL derive a narrow effective runtime projection from the reviewed `runtime` section of `docker-constructor.toml` after applying validated runtime overrides. Each reviewed runtime extension SHALL own an artifact catalog keyed by exact version, with exact artifact identity and integrity in every entry, and its selected default version SHALL have a matching catalog entry. The projection SHALL contain only effective package identity, version, the selected artifact identity, checksum/integrity, and validation metadata required for runtime installation and SHALL exclude the reviewed source, unselected artifact alternatives, build section, and host-only runtime metadata.
+
+#### Scenario: Mounting runtime dependency configuration
+- **WHEN** the constructor facade launches a container
+- **THEN** it SHALL validate and mount the generated effective runtime projection read-only at `/run/pi-cli/docker-constructor.runtime.toml`
+- **AND** it SHALL NOT mount `docker-constructor.toml` or a host-side effective build projection
+
+#### Scenario: Isolating concurrent runtime projections
+- **WHEN** multiple runtime launches use different effective selections
+- **THEN** each launch SHALL atomically create and mount a private projection under `.docker-generated/runtime/`
+- **AND** one launch SHALL NOT rewrite another launch's mounted projection
+- **AND** the launcher SHALL remove its private host file after Docker exits or launch fails
+
+#### Scenario: Applying a runtime override
+- **WHEN** a supported runtime override is supplied to `run`
+- **THEN** the resolver SHALL validate it against policy in the reviewed runtime source entry
+- **AND** it SHALL select the reviewed artifact catalog entry whose exact version key matches the effective overridden version
+- **AND** the mounted projection SHALL contain that version and its matching artifact identity and integrity
+- **AND** an otherwise policy-valid version with no matching reviewed catalog entry SHALL be rejected before projection creation
+- **AND** the resolver SHALL NOT discover artifacts over the network, synthesize artifact URLs, or reuse integrity from another version
+- **AND** the reviewed `docker-constructor.toml` SHALL remain unchanged
+
+#### Scenario: Installing Pi extensions at runtime
+- **WHEN** the entrypoint or protected installer detects a missing or mismatched configured Pi extension
+- **THEN** it SHALL resolve the exact runtime package artifact declared by the effective runtime projection
+- **AND** it SHALL verify the declared checksum/integrity before installation
+- **AND** it SHALL install idempotently into the mounted Pi home
+- **AND** it SHALL validate installed package identity and version after installation
+
+#### Scenario: Rejecting host-only metadata at runtime
+- **WHEN** the effective runtime projection is generated and validated
+- **THEN** its closed DTO schema SHALL reject build entries, update-provider metadata, update/override policy, and source fields not needed for runtime installation
+- **AND** runtime code SHALL NOT require those fields
+
+### Requirement: Expose one constructor CLI facade
+The project SHALL expose `docker/docker-constructor.py` as the sole supported user-facing command entry point. The facade SHALL provide primary commands `build`, `run`, and `check-updates` and auxiliary commands `validate`, `show`, `doctor`, and `verify`; it SHALL NOT expose a `schema` command.
+
+#### Scenario: Delegating a facade command
+- **WHEN** a user invokes any supported constructor command with command-specific or global flags
+- **THEN** the facade SHALL parse and validate user arguments, coordinate prompts, render output, and map errors to exit codes
+- **AND** it SHALL delegate inventory, networking, project selection, provider, Docker orchestration, and verification behavior to internal APIs
+
+#### Scenario: Verifying through the facade
+- **WHEN** a user invokes `docker-constructor.py verify` with selected verification flags
+- **THEN** internal verification APIs SHALL execute the requested checks and return structured results
+- **AND** the facade SHALL only select checks and present those results
+
+#### Scenario: Avoiding competing entry points
+- **WHEN** maintained documentation or repository-owned automation invokes constructor behavior
+- **THEN** it SHALL use `docker/docker-constructor.py`
+- **AND** it SHALL NOT invoke `versions.py`, `launch-pi.py`, standalone verification scripts, Compose, or `build_wrapper.py` as user-facing commands
+
 ### Requirement: Build a developer runtime image
 The system SHALL provide a multi-stage Docker image for running π inside an isolated container.
 
@@ -97,17 +150,18 @@ The system SHALL create and use a `dev` user whose UID and GID can be aligned wi
 - **AND** ensures user `dev` exists with the requested UID, home directory `/home/dev`, and shell `zsh` when available
 
 ### Requirement: Mount host projects 1:1
-The system SHALL run the container against host project directories without remapping their paths.
+The system SHALL run the container directly against host project directories without remapping their paths or using Compose fragments.
 
-#### Scenario: Launching the base compose service
-- **WHEN** `docker run` starts service `pi`
-- **THEN** `PROJECT_PATH_1` is required
-- **AND** the service working directory is set to `PROJECT_PATH_1`
-- **AND** the same absolute host path is bind-mounted into the same absolute path inside the container
+#### Scenario: Launching with a main project
+- **WHEN** `docker/docker-constructor.py run` starts the Pi image through `docker run`
+- **THEN** `PROJECT_PATH_1` SHALL identify the selected main project
+- **AND** the container working directory SHALL be set to `PROJECT_PATH_1`
+- **AND** the same absolute host path SHALL be bind-mounted into the same absolute path inside the container
 
 #### Scenario: Adding optional extra projects
-- **WHEN** additional projects are selected through `--project` flags
-- **THEN** `PROJECT_PATH_2` and `PROJECT_PATH_3` are mounted 1:1 through direct Docker bind-mount arguments with consecutive numbering
+- **WHEN** the user selects additional projects
+- **THEN** each selected path SHALL be added as a separate 1:1 bind mount
+- **AND** corresponding `PROJECT_PATH_2` and `PROJECT_PATH_3` environment values SHALL be passed to the container
 
 ### Requirement: Repair mount ownership on startup
 The system SHALL be able to fix ownership and access permissions of mounted project worktrees before dropping privileges. The runtime SHALL explicitly install `util-linux` to provide `mountpoint`. The supported Compose and launcher interfaces SHALL define `PROJECT_PATH_*` as host-directory bind mounts. `CHOWN_WORK_ON_START` repair SHALL consider only configured `PROJECT_PATH_*` paths, SHALL require each target to be a container mount point (`mountpoint -q`), and SHALL NOT scan or modify ordinary image-layer directories, fixed runtime home paths, or non-project mounts.
@@ -183,16 +237,17 @@ The system SHALL make bundled π assets available in the runtime home directory.
 - **AND** SHALL not install extensions into the image-provided `/home/dev/.pi`
 
 ### Requirement: Present a consistent Pi container interface
-The project SHALL identify the developer container, constructor CLI, and supported documentation as Pi-oriented interfaces.
+The project SHALL identify the developer image, direct Docker build command, launcher command, and supported documentation as Pi-oriented interfaces without requiring a Compose service.
 
 #### Scenario: Following documented build instructions
 - **WHEN** a user follows a build command from any maintained README translation
-- **THEN** the command SHALL target the Pi container
-- **AND** the image SHALL be tagged consistently with the project naming convention
+- **THEN** the command SHALL invoke `./docker/docker-constructor.py build`
+- **AND** SHALL produce the canonical tagged Pi runtime image
 
 #### Scenario: Following documented run instructions
-- **WHEN** a user follows a run or CLI verification command from any maintained README translation
-- **THEN** it SHALL invoke the Pi container and the `pi` CLI rather than the retired Claude service or CLI
+- **WHEN** a user follows runtime launch instructions from any maintained README translation
+- **THEN** the launcher SHALL invoke the Pi image and Pi CLI through direct Docker
+- **AND** SHALL NOT require Compose files or a Compose service
 
 ### Requirement: Document the current runtime image
 The Russian, English, and Chinese README files SHALL present the current Docker development environment around the primary user workflows of building the image, launching it with interactive project selection, updating managed components, and performing occasional maintenance. Internal implementation invariants and image-development diagnostics SHALL NOT interrupt those primary workflows.

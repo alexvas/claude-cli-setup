@@ -100,17 +100,27 @@ Overrideable entries SHALL keep an exact default `version` separate from an `ove
 - **AND** SHALL NOT resolve the newest version matching `override.constraint`
 
 ### Requirement: Prohibit duplicated version defaults
-`docker-constructor.toml` SHALL be the only source of selected default versions, revisions, artifact URLs, and digests. Dockerfile, Docker orchestration, runtime verification, extension setup, environment templates, and documentation SHALL NOT define independent concrete fallback values.
+The `build` and `runtime` sections of `docker-constructor.toml` SHALL be the only sources of their respective selected versions, revisions, artifact URLs, digests, and integrity metadata. Dockerfile, direct Docker command rendering, verification, extension setup, environment templates, and documentation SHALL NOT define independent concrete fallback values.
 
 #### Scenario: Resolving a canonical Docker build
-- **WHEN** the canonical version resolver launches a build
-- **THEN** it SHALL supply all required build arguments from the validated effective inventory
-- **AND** SHALL NOT define concrete version defaults in orchestration configuration
+- **WHEN** `./docker/docker-constructor.py build` launches a build
+- **THEN** it SHALL supply every required Docker build argument from the validated effective build projection
+- **AND** it SHALL invoke `docker build` without concrete script-local version defaults
 
 #### Scenario: Invoking Docker without resolved versions
-- **WHEN** repository-owned low-level Docker orchestration is invoked without required resolved version values
-- **THEN** it SHALL fail with an actionable instruction to use the version resolver
-- **AND** SHALL NOT silently fall back to hard-coded versions
+- **WHEN** a repository-owned low-level Docker build path is invoked without validated resolved build values
+- **THEN** it SHALL fail with an actionable instruction to use the constructor facade
+- **AND** it SHALL NOT silently fall back to hard-coded versions
+
+#### Scenario: Keeping build dependency knowledge on the host
+- **WHEN** a runtime image is assembled or launched
+- **THEN** neither `docker-constructor.toml` nor an effective build projection SHALL be copied into the image or mounted in the container
+- **AND** build-only versions, artifact URLs, checksums, provider metadata, and override policy SHALL remain unavailable as configuration files inside the runtime container
+
+#### Scenario: Verifying build-installed tools
+- **WHEN** verification checks tools installed during image build
+- **THEN** internal host-side verification APIs SHALL compare container observations with host-side effective build expectations
+- **AND** they SHALL NOT provide the reviewed source or effective build projection to the container
 
 #### Scenario: Protecting the authoritative inventory
 - **WHEN** an effective-inventory output path resolves to repository-root `docker-constructor.toml`

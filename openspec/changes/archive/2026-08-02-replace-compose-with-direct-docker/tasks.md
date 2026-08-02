@@ -295,15 +295,15 @@
 
 ### GREEN
 
-- [ ] 14.3 On a Docker-capable host, invoke `docker/docker-constructor.py verify --collect-evidence <path>` for one canonical build and representative main-plus-additional-project launch.
+- [x] 14.3 On a Docker-capable host, invoke `docker/docker-constructor.py verify --collect-evidence <path>` for one canonical build and representative main-plus-additional-project launch.
 
 ### INTROSPECT
 
-- [ ] 14.4 Compare collected command arguments and container state with daemon-independent fixtures; convert each mismatch into a regression test before implementation changes.
-- [ ] 14.5 Inspect the bundle for runtime projection identity, read-only mount, absence of reviewed/build configuration, integrity-checked extensions, expected image contents, and redaction.
+- [x] 14.4 Compare collected command arguments and container state with daemon-independent fixtures; convert each mismatch into a regression test before implementation changes.
+- [x] 14.5 Inspect the bundle for runtime projection identity, read-only mount, absence of reviewed/build configuration, integrity-checked extensions, expected image contents, and redaction.
 
 ### VALIDATE
 
-- [ ] 14.6 Preserve and checksum the host-generated evidence bundle, then copy it into the development container.
-- [ ] 14.7 In the development container, rerun the complete daemon-independent validation suite and strict OpenSpec validation.
-- [ ] 14.8 Have the agent review the copied index, structured evidence, and bounded raw outputs against every change requirement and record acceptance findings.
+- [x] 14.6 Preserve and checksum the host-generated evidence bundle, then copy it into the development container.
+- [x] 14.7 In the development container, rerun the complete daemon-independent validation suite and strict OpenSpec validation.
+- [x] 14.8 Have the agent review the copied index, structured evidence, and bounded raw outputs against every change requirement and record acceptance findings.
