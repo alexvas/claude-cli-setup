@@ -172,6 +172,39 @@ def _resolve_runtime_projection(
     return tomls[0] if tomls else None
 
 
+def _discover_runtime_projection_from_container(
+    container: str, runner: object,
+) -> Path | None:
+    """Return the host source of the container's runtime projection mount.
+
+    The running container is authoritative: its mount metadata binds the
+    exact projection used for this session.  ``None`` lets callers retain
+    their legacy generated-artifact fallback when inspection is unavailable.
+    """
+    try:
+        result = runner.run((
+            "docker", "inspect", "--format", "{{json .Mounts}}", container,
+        ))
+    except OSError:
+        return None
+    if result.return_code != 0:
+        return None
+    try:
+        mounts = _json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(mounts, list):
+        return None
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            continue
+        if mount.get("Destination") == "/run/pi-cli/docker-constructor.runtime.toml":
+            source = mount.get("Source")
+            if isinstance(source, str) and source:
+                return Path(source)
+    return None
+
+
 def _discover_project_paths_from_container(
     container: str, runner: object,
 ) -> tuple[Path, ...] | None:
@@ -859,29 +892,39 @@ def _real_dispatcher(
                         else:
                             container = ids[0]
             if container:
+                # ── resolve runner (shared by discovery + verify) ─
+                _runner = _process_runner
+                if _runner is None:
+                    _runner = ProcessRunner()
+
                 # ── resolve runtime projection ────────────────────
+                explicit_projection = c_args.get("runtime_projection")
                 runtime_proj_path = _resolve_runtime_projection(
-                    c_args.get("runtime_projection"), _repo_root
+                    explicit_projection, _repo_root
                 )
+                if not explicit_projection:
+                    runtime_proj_path = (
+                        _discover_runtime_projection_from_container(
+                            container, _runner,
+                        )
+                        or runtime_proj_path
+                    )
                 if runtime_proj_path is None:
                     results["runtime"] = {
                         "all_ok": False,
                         "checks": [],
                         "errors": [
                             "no runtime projection found; "
-                            "pass --runtime-projection or ensure "
-                            ".docker-generated/runtime/ contains a .toml file"
+                            "pass --runtime-projection, ensure the running "
+                            "container has its runtime projection mount, or "
+                            "ensure .docker-generated/runtime/ contains a "
+                            ".toml file"
                         ],
                     }
                     all_ok = False
                     container = None
 
             if container:
-                # ── resolve runner (shared by discovery + verify) ─
-                _runner = _process_runner
-                if _runner is None:
-                    _runner = ProcessRunner()
-
                 # ── resolve project paths ────────────────────────
                 raw_projects = c_args.get("projects")
                 if raw_projects:

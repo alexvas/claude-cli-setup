@@ -2359,6 +2359,37 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         self.assertEqual(4, rc)
         self.assertIn("no docker daemon", err)
 
+    def test_runtime_projection_discovered_from_container_mount(self) -> None:
+        """Without an explicit path, mount metadata identifies the exact
+        host projection used by the selected running container."""
+        from docker.constructor_cli import (
+            _discover_runtime_projection_from_container,
+        )
+        from docker.launcher import ProcessResult
+
+        mounted = self._runtime_dir / "mounted-by-pi-42.toml"
+        mounted.write_text("[extensions]\n")
+        calls: list[tuple[str, ...]] = []
+
+        class _Runner:
+            def run(self, argv, *, mode=None):
+                calls.append(tuple(argv))
+                return ProcessResult(
+                    argv=tuple(argv), return_code=0,
+                    stdout=json.dumps([{
+                        "Destination": "/run/pi-cli/docker-constructor.runtime.toml",
+                        "Source": str(mounted),
+                    }]),
+                    stderr="",
+                )
+
+        discovered = _discover_runtime_projection_from_container("pi-42", _Runner())
+        self.assertEqual(mounted, discovered)
+        self.assertEqual(
+            ("docker", "inspect", "--format", "{{json .Mounts}}", "pi-42"),
+            calls[0],
+        )
+
     def test_explicit_runtime_projection_path(self) -> None:
         """``--runtime-projection`` overrides auto-discovery."""
         # Create a separate projection file
@@ -2713,11 +2744,16 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
         ce = data["data"]["verification"]["collect_evidence"]
         self.assertTrue(ce["dry_run"])
         # All runner calls come from verify_runtime (not collect_evidence).
-        # In dry-run mode collect_evidence adds zero calls.  Only docker inspect
-        # is indicative of evidence collection (auto-inspect when commands empty).
-        evidence_calls = [c for c in calls if "inspect" in c]
-        self.assertEqual(0, len(evidence_calls),
-                         "collect_evidence must not invoke runner in dry-run")
+        # Runtime verification may inspect the selected container to derive its
+        # mounted projection; evidence collection itself adds no commands in
+        # dry-run mode.
+        mount_inspects = [
+            c for c in calls
+            if c[:3] == ("docker", "inspect", "--format")
+            and "{{json .Mounts}}" in c
+        ]
+        self.assertEqual(1, len(mount_inspects),
+                         "runtime verification must inspect its projection mount")
 
 
 if __name__ == "__main__":
