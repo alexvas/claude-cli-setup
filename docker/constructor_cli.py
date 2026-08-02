@@ -706,11 +706,13 @@ def _real_dispatcher(
         # ── RunResult → CommandResult ──────────────────────────
         data: dict[str, object] | None = None
         if result.run_args:
+            interactive = run_request.tty or run_request.stdin_open
             data = {
                 "run_args": list(result.run_args),
                 "display_string": result.display_string,
                 "container_name": result.container_name,
                 "projection_hash": result.projection_hash,
+                "mode": "interactive" if interactive else "captured",
             }
             # Preserve raw execution outcome for diagnosis.
             # Under --tty Docker may merge stderr into stdout;
@@ -719,12 +721,22 @@ def _real_dispatcher(
             # container output cannot blow up evidence or logs.
             if result.process_result is not None:
                 data["exit_code"] = result.process_result.return_code
-                for stream_name in ("stderr", "stdout"):
-                    raw = getattr(result.process_result, stream_name)
-                    truncated, was_cut = _truncate_diagnostic(raw or "")
-                    data[stream_name] = truncated
-                    if was_cut:
-                        data[f"{stream_name}_truncated"] = True
+                if interactive:
+                    # Streams were inherited — output already
+                    # reached the terminal.  Omit captured data
+                    # so JSON consumers are not confused by empty
+                    # fields.
+                    pass
+                else:
+                    for stream_name in ("stderr", "stdout"):
+                        raw = getattr(result.process_result,
+                                      stream_name)
+                        truncated, was_cut = _truncate_diagnostic(
+                            raw or "",
+                        )
+                        data[stream_name] = truncated
+                        if was_cut:
+                            data[f"{stream_name}_truncated"] = True
 
         return CommandResult(
             exit_kind=ExitKind(result.exit_kind.value),
@@ -1141,17 +1153,21 @@ def _render_data_text(data: object) -> str:
     Dicts with a ``display_string`` key (build dry-run, doctor
     summaries) render that string verbatim.
 
-    When the dict carries ``stdout`` and/or ``stderr`` keys
-    (run-failure diagnostics), only the non-empty streams are
-    rendered with clear labels.  Everything else falls back to
-    ``str(data)``.
+    Run-failure diagnostics carry a ``mode`` field:
+    ``"interactive"`` means output was streamed to the terminal
+    (nothing to re-render); ``"captured"`` surfaces ``stdout``
+    and/or ``stderr`` with labels.
     """
     if isinstance(data, dict) and "display_string" in data:
         ds = data["display_string"]
         if ds is not None and str(ds):
             return str(ds)
-    # Run-failure diagnostics: surface captured streams with labels.
-    if isinstance(data, dict) and ("stdout" in data or "stderr" in data):
+    # Run-failure diagnostics: only render captured streams.
+    if isinstance(data, dict) and data.get("mode") == "interactive":
+        # Output was streamed to the terminal — nothing to
+        # re-render.
+        return ""
+    if isinstance(data, dict) and data.get("mode") == "captured":
         lines: list[str] = []
         out = data.get("stdout")
         if out and str(out).strip():

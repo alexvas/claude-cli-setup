@@ -737,7 +737,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         rc, out, err = _run(
             self.m,
             ["--output", "json", "run", "--main-project",
-             "/tmp/fake-project"],
+             "/tmp/fake-project", "--no-tty", "--no-interactive"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
             _run_executor=executor,
@@ -748,6 +748,8 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         self.assertEqual("", err)
         data = json.loads(out)
         self.assertEqual("operational", data.get("status"))
+        # Mode marker for captured execution.
+        self.assertEqual("captured", data["data"]["mode"])
         # run_args preserved.
         self.assertIn("run_args", data["data"])
         self.assertIn("docker", data["data"]["run_args"][0])
@@ -772,13 +774,13 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         self.assertEqual(3, rc)
         self.assertIn("no main project", _strip_ansi(err).lower())
 
-    def test_tty_failure_exposes_both_streams_in_json(self) -> None:
-        """Under ``--tty``, Docker may merge stderr into stdout.
-        When ``docker run`` exits nonzero, the structured result must
-        include captured stdout *in addition to* stderr so callers can
-        diagnose without guessing which stream holds the error."""
+    def test_captured_failure_exposes_both_streams_in_json(self) -> None:
+        """In captured (non-interactive) mode, both stdout and
+        stderr are captured independently and surfaced in the JSON
+        result so callers can diagnose without guessing which
+        stream holds the error."""
         stderr_text = "error: container failed to start"
-        stdout_text = "standard output merged under --tty"
+        stdout_text = "captured standard output"
         executor = self._scripted_executor(
             return_code=1,
             stdout=stdout_text,
@@ -787,6 +789,90 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         runner = _make_fake_process_runner(
             return_code=0, stdout="pi-0001\n",
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["--output", "json", "run", "--main-project",
+             "/tmp/fake-project", "--no-tty", "--no-interactive"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertEqual("", err)
+        data = json.loads(out)
+        self.assertEqual("operational", data.get("status"))
+        # Mode marker confirms captured (non-interactive) execution.
+        self.assertEqual("captured", data["data"]["mode"])
+        # Both streams must be present.
+        self.assertIn("stderr", data["data"])
+        self.assertIn(stderr_text, data["data"]["stderr"])
+        # Captured mode preserves both streams independently.
+        self.assertIn("stdout", data["data"],
+                       "stdout must be captured alongside stderr "
+                       "in captured non-interactive mode")
+        self.assertIn(stdout_text, data["data"]["stdout"])
+
+    def test_captured_failure_text_mode_shows_stdout_diagnostics(self) -> None:
+        """In captured (non-interactive) mode, text-mode diagnostics
+        surface stdout with a clear label even when stderr is empty,
+        so the user always sees the real failure text."""
+        stdout_text = (
+            "captured output with container failure\n"
+        )
+        executor = self._scripted_executor(
+            return_code=1,
+            stdout=stdout_text,
+            stderr="",   # only stdout carries the diagnostic
+        )
+
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/fake-project",
+             "--no-tty", "--no-interactive"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+
+        self.assertEqual(4, rc)
+        self.assertEqual("", out)
+        # The diagnostic stream must contain the captured
+        # stdout content.
+        self.assertIn(stdout_text.strip(), err,
+                       "text-mode failure must surface captured "
+                       "stdout diagnostics")
+        # The output must label captured streams clearly.
+        self.assertIn("stdout", err.lower(),
+                       "the output must label the captured stdout "
+                       "clearly (e.g. 'stdout: ...')")
+        # No duplication of diagnostic content.
+        count = err.count(stdout_text.strip())
+        self.assertEqual(1, count,
+                          f"diagnostic content appears {count} times, "
+                          f"expected exactly once")
+
+    def test_interactive_json_preserves_identity_omits_streams(self) -> None:
+        """In interactive (streaming) mode the JSON result carries
+        ``"mode": "interactive"``, preserves exit_code and identity
+        fields, and deliberately omits stdout/stderr because output
+        was already delivered to the host terminal."""
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+        executor = self._scripted_executor(
+            return_code=1,
+            stdout="",   # not captured — inherited by terminal
+            stderr="",   # not captured — inherited by terminal
         )
 
         rc, out, err = _run(
@@ -803,62 +889,27 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         self.assertEqual("", err)
         data = json.loads(out)
         self.assertEqual("operational", data.get("status"))
-        # Both streams must be present.
-        self.assertIn("stderr", data["data"])
-        self.assertIn(stderr_text, data["data"]["stderr"])
-        # Under --tty the diagnostic may land in stdout.
-        self.assertIn("stdout", data["data"],
-                       "stdout must be captured alongside stderr "
-                       "when --tty merges output streams")
-        self.assertIn(stdout_text, data["data"]["stdout"])
 
-    def test_tty_failure_text_mode_shows_stdout_diagnostics(self) -> None:
-        """Under ``--tty``, Docker may merge stderr into stdout.
-        In text mode, a nonzero run must surface captured stdout on
-        the diagnostic stream with a clear label — even when stderr
-        is empty the user must see the real failure text."""
-        stdout_text = (
-            "standard output mixed with error: "
-            "container failed to start\n"
-        )
-        executor = self._scripted_executor(
-            return_code=1,
-            stdout=stdout_text,
-            stderr="",  # merged into stdout by --tty
-        )
+        # Schema contract: mode marker.
+        self.assertEqual("interactive", data["data"]["mode"],
+                         "interactive execution must be recorded "
+                         "as mode=interactive")
 
-        runner = _make_fake_process_runner(
-            return_code=0, stdout="pi-0001\n",
-        )
+        # Identity fields preserved.
+        for key in ("exit_code", "container_name", "run_args",
+                     "projection_hash"):
+            self.assertIsNotNone(
+                data["data"].get(key),
+                f"{key} must be present in interactive JSON result",
+            )
 
-        rc, out, err = _run(
-            self.m,
-            ["run", "--main-project", "/tmp/fake-project", "--tty"],
-            _process_runner=runner,
-            _container_inspector=self._fake_inspector("pi-0001"),
-            _run_executor=executor,
-            _create_projection=lambda p, **kw: self._ProjectionHandle(),
-            _prompt_user=lambda _: True,
-        )
-
-        self.assertEqual(4, rc)
-        self.assertEqual("", out)
-        # The diagnostic stream must contain the actual failure text
-        # from stdout — when --tty merges stderr into stdout, the
-        # only place the error lives is in process_result.stdout.
-        self.assertIn(stdout_text.strip(), err,
-                       "text-mode failure must surface stdout "
-                       "diagnostics when --tty merges streams")
-        # The output must label captured streams clearly so users
-        # know where the diagnostic came from.
-        self.assertIn("stdout", err.lower(),
-                       "the output must label the captured stdout "
-                       "clearly (e.g. 'stdout: ...')")
-        # No duplication of diagnostic content.
-        count = err.count(stdout_text.strip())
-        self.assertEqual(1, count,
-                          f"diagnostic content appears {count} times, "
-                          f"expected exactly once")
+        # Streams deliberately omitted — output already on terminal.
+        for stream in ("stderr", "stdout"):
+            self.assertNotIn(
+                stream, data["data"],
+                f"{stream} must be absent from interactive JSON "
+                f"result — output was streamed to the terminal",
+            )
 
     # ── execution-mode wiring from CLI flags ─────────────────────
 
