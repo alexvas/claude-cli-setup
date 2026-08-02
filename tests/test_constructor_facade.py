@@ -1485,7 +1485,8 @@ class TestRunExecutionBoundaries(unittest.TestCase):
         calls: list[tuple[list[str]]] = []
 
         class FakeRunner:
-            def run(self, argv: list[str]) -> ProcessResult:
+            def run(self, argv: list[str], *,
+                    mode=None) -> ProcessResult:
                 calls.append((list(argv),))
                 return ProcessResult(
                     argv=tuple(argv), return_code=0,
@@ -1576,7 +1577,8 @@ class TestRunExecutionBoundaries(unittest.TestCase):
                 self.runner = runner
                 self.calls: list[object] = []
 
-            def run(self, argv: tuple[str, ...]) -> Any:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> Any:
                 self.calls.append(argv)
                 return self.runner.run(list(argv))
 
@@ -1666,7 +1668,8 @@ class TestRunExecutionBoundaries(unittest.TestCase):
         class FakeExecutor:
             def __init__(self, runner):
                 self._runner = runner
-            def run(self, argv):
+            def run(self, argv, *,
+                    interactive=False):
                 return self._runner.run(list(argv))
 
         runner = type("R", (), {
@@ -1713,7 +1716,8 @@ class TestTUISelectorWiring(unittest.TestCase):
         from docker.launcher import ProcessResult
 
         class FakeRunner:
-            def run(self, argv: list[str]) -> Any:
+            def run(self, argv: list[str], *,
+                    mode=None) -> Any:
                 return ProcessResult(
                     argv=tuple(argv), return_code=0,
                     stdout="fake-stdout", stderr="",
@@ -1728,7 +1732,8 @@ class TestTUISelectorWiring(unittest.TestCase):
         class FakeExecutor:
             def __init__(self, runner: Any) -> None:
                 self._runner = runner
-            def run(self, argv: tuple[str, ...]) -> Any:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> Any:
                 return self._runner.run(list(argv))
 
         def factory(projection: object, *, parent_dir: str) -> Any:
@@ -2114,7 +2119,8 @@ class TestVerifyBuildWiring(unittest.TestCase):
         calls: list[tuple[str, ...]] = []
 
         class _Rec:
-            def run(self, argv):
+            def run(self, argv, *,
+                    mode=None):
                 calls.append(tuple(argv))
                 return ProcessResult(
                     argv=tuple(argv), return_code=return_code,
@@ -2264,7 +2270,8 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         calls: list[tuple[str, ...]] = []
 
         class _Rec:
-            def run(self, argv):
+            def run(self, argv, *,
+                    mode=None):
                 calls.append(tuple(argv))
                 return ProcessResult(
                     argv=tuple(argv), return_code=return_code,
@@ -2337,7 +2344,8 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         calls_list: list[tuple[str, ...]] = []
 
         class _OSErrorRunner:
-            def run(self, argv):
+            def run(self, argv, *,
+                    mode=None):
                 calls_list.append(tuple(argv))
                 raise OSError("no docker daemon")
 
@@ -2615,7 +2623,8 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
         calls: list[tuple[str, ...]] = []
 
         class _Rec:
-            def run(self, argv):
+            def run(self, argv, *,
+                    mode=None):
                 calls.append(tuple(argv))
                 return ProcessResult(
                     argv=tuple(argv), return_code=return_code,

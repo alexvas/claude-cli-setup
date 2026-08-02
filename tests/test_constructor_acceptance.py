@@ -98,7 +98,8 @@ def _make_fake_process_runner(
     from docker.launcher import ProcessResult
 
     class _Runner:
-        def run(self, argv):
+        def run(self, argv, *,
+                mode=None):
             return ProcessResult(
                 argv=tuple(argv), return_code=return_code,
                 stdout=stdout, stderr=stderr,
@@ -117,7 +118,8 @@ def _make_recording_runner(
     calls: list[tuple[str, ...]] = []
 
     class _Rec:
-        def run(self, argv):
+        def run(self, argv, *,
+                mode=None):
             calls.append(tuple(argv))
             return ProcessResult(
                 argv=tuple(argv), return_code=return_code,
@@ -273,7 +275,8 @@ class _ScriptedProcessRunner:
         self._handlers.append((substr, (rc, stdout, stderr)))
         return self
 
-    def run(self, argv: Sequence[str]) -> Any:
+    def run(self, argv: Sequence[str], *,
+            interactive: bool = False) -> Any:
         cmd = " ".join(argv)
         self._called.append(tuple(argv))
         # Scan in reverse — last registered wins.
@@ -643,7 +646,8 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         ``ProcessResult`` with the given outcome."""
         from docker.launcher import ProcessResult
         class Executor:
-            def run(self, argv: tuple[str, ...]) -> ProcessResult:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> ProcessResult:
                 return ProcessResult(
                     argv=tuple(argv),
                     return_code=return_code,
@@ -661,7 +665,8 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         import errno
 
         class _FailingExecutor:
-            def run(self, argv: tuple[str, ...]) -> None:
+            def run(self, argv: tuple[str, ...], *,
+                    interactive: bool = False) -> None:
                 raise OSError(
                     errno.ENOENT,
                     "docker: command not found",

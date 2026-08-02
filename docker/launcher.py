@@ -19,10 +19,26 @@ performed ad-hoc by the module.
 
 from __future__ import annotations
 
+import enum
 import os
 from dataclasses import dataclass, field
 from typing import Protocol, Mapping
 from types import MappingProxyType
+
+
+class ExecutionMode(enum.Enum):
+    """Explicit mode for the Docker process boundary.
+
+    ``CAPTURED`` — stdout/stderr are captured for diagnostics;
+    no ``--tty``/``--interactive`` flags are passed to Docker.
+
+    ``INTERACTIVE`` — stdin/stdout/stderr inherit the host
+    terminal.  The mode controls stream inheritance; it does
+    **not** guarantee which Docker flags (``--tty``,
+    ``--interactive``) appear — those are chosen separately
+    based on ``tty`` and ``stdin_open``."""
+    CAPTURED = "captured"
+    INTERACTIVE = "interactive"
 
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.rendering import RunRenderInputs
@@ -278,7 +294,8 @@ class RunExecutor(Protocol):
     or prompts the user.
     """
 
-    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+    def run(self, argv: tuple[str, ...], *,
+            interactive: bool = False) -> ProcessResult:
         ...
 
 
@@ -289,17 +306,27 @@ class ProcessRunner:
     :class:`ProcessResult` instead of invoking a real subprocess.
     """
 
-    def run(self, argv: list[str]) -> ProcessResult:
-        """Execute *argv* and return a structured result."""
+    def run(self, argv: list[str], *,
+            mode: ExecutionMode = ExecutionMode.CAPTURED) -> ProcessResult:
+        """Execute *argv* and return a structured result.
+
+        ``mode`` controls whether stdout/stderr are captured or
+        the host terminal is inherited."""
         import subprocess
-        proc = subprocess.run(
-            argv, text=True, capture_output=True, check=False,
-        )
+        if mode is ExecutionMode.CAPTURED:
+            proc = subprocess.run(
+                argv, text=True, capture_output=True, check=False,
+            )
+        else:
+            proc = subprocess.run(
+                argv, text=True, capture_output=False,
+                stdin=None, stdout=None, stderr=None, check=False,
+            )
         return ProcessResult(
             argv=tuple(argv),
             return_code=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
+            stdout=proc.stdout or "",
+            stderr=proc.stderr or "",
         )
 
 
@@ -583,7 +610,10 @@ def orchestrate_run(request: RunRequest) -> RunResult:
 
             # ── Step 7: execute ──────────────────────────────
             try:
-                result = request.executor.run(run_args)
+                result = request.executor.run(
+                    run_args,
+                    interactive=(request.tty or request.stdin_open),
+                )
             except Exception as exc:
                 return RunResult(
                     exit_kind=ExitKind.OPERATIONAL,
@@ -639,7 +669,8 @@ class DockerContainerInspector:
         """Run ``docker ps -a --format '{{.Names}}'`` and return the
         set of container names."""
         try:
-            result = self._runner.run(list(self._ARGV))
+            result = self._runner.run(list(self._ARGV),
+                                      mode=ExecutionMode.CAPTURED)
         except OSError as exc:
             raise ContainerInspectError(str(exc)) from exc
 
@@ -664,6 +695,11 @@ class DockerRunExecutor:
     def __init__(self, runner: ProcessRunner) -> None:
         self._runner = runner
 
-    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+    def run(self, argv: tuple[str, ...], *,
+            interactive: bool = False) -> ProcessResult:
         """Execute the rendered ``docker`` argument vector."""
-        return self._runner.run(list(argv))
+        mode = (
+            ExecutionMode.INTERACTIVE if interactive
+            else ExecutionMode.CAPTURED
+        )
+        return self._runner.run(list(argv), mode=mode)

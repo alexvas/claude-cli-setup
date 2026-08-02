@@ -29,6 +29,7 @@ from docker.launcher import (
     ContainerNameInspector,
     DockerContainerInspector,
     DockerRunExecutor,
+    ExecutionMode,
     NoMainProjectError,
     ProcessResult,
     ProcessRunner,
@@ -57,7 +58,8 @@ class FakeProcessRunner(ProcessRunner):
         self._responses: list[ProcessResult] = list(responses or [])
         self.calls: list[list[str]] = []
 
-    def run(self, argv: list[str]) -> ProcessResult:
+    def run(self, argv: list[str], *,
+            mode: ExecutionMode = ExecutionMode.CAPTURED) -> ProcessResult:
         self.calls.append(argv)
         if self._responses:
             return self._responses.pop(0)
@@ -820,7 +822,8 @@ class FakeRunExecutor:
         self._fail_with = fail_with
         self.calls: list[tuple[str, ...]] = []
 
-    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+    def run(self, argv: tuple[str, ...], *,
+            interactive: bool = False) -> ProcessResult:
         if self._fail_with is not None:
             raise self._fail_with
         self.calls.append(argv)
@@ -839,7 +842,8 @@ class _BombExecutor:
     Docker — including ``docker run``.  Any invocation is a test
     failure."""
 
-    def run(self, argv: tuple[str, ...]) -> ProcessResult:
+    def run(self, argv: tuple[str, ...], *,
+            interactive: bool = False) -> ProcessResult:
         raise AssertionError(
             "_BombExecutor.run() called — dry-run must not invoke Docker",
         )
@@ -1609,7 +1613,8 @@ class TestRunTransaction(unittest.TestCase):
                     return handle
 
             class _AssertingExecutor:
-                def run(self, argv: tuple[str, ...]) -> Any:
+                def run(self, argv: tuple[str, ...], *,
+                        interactive: bool = False) -> Any:
                     for path, _ in recorded:
                         if os.path.exists(path):
                             mode = os.stat(path).st_mode & 0o777
@@ -1722,7 +1727,9 @@ class TestDockerContainerInspector(unittest.TestCase):
         must be caught and wrapped so callers only handle the
         documented domain error."""
         class BrokenRunner(ProcessRunner):
-            def run(self, argv: list[str]) -> ProcessResult:
+            def run(self, argv: list[str], *,
+                    mode: ExecutionMode = ExecutionMode.CAPTURED,
+                    ) -> ProcessResult:
                 raise OSError("docker not found")
 
         inspector = DockerContainerInspector(BrokenRunner())
@@ -1794,7 +1801,9 @@ class TestDockerRunExecutor(unittest.TestCase):
 
     def test_process_runner_oserror_propagates(self) -> None:
         class BrokenRunner(ProcessRunner):
-            def run(self, argv: list[str]) -> ProcessResult:
+            def run(self, argv: list[str], *,
+                    mode: ExecutionMode = ExecutionMode.CAPTURED,
+                    ) -> ProcessResult:
                 raise OSError("docker not found")
 
         executor = DockerRunExecutor(BrokenRunner())
@@ -1811,21 +1820,21 @@ class TestDockerRunExecutor(unittest.TestCase):
 
         class _SpyRunner(ProcessRunner):
             def run(self, argv: list[str], *,
-                    capture_output: bool = True) -> ProcessResult:
-                mode_seen.append({"capture_output": capture_output})
+                    mode: ExecutionMode = ExecutionMode.CAPTURED,
+                    ) -> ProcessResult:
+                mode_seen.append({"mode": mode})
                 return ProcessResult(argv=tuple(argv), return_code=0)
 
         executor = DockerRunExecutor(_SpyRunner())
-        # RED: DockerRunExecutor.run() does not accept `interactive` yet.
-        # The intended API passes interactive=True → capture_output=False.
+        # interactive=True → mode is INTERACTIVE
         executor.run(("docker", "run", "--tty", "img"),
-                     interactive=True)  # type: ignore[call-arg]
+                     interactive=True)
         self.assertTrue(
             len(mode_seen) >= 1,
             "executor must invoke the runner",
         )
-        self.assertFalse(
-            mode_seen[0]["capture_output"],
+        self.assertIs(
+            mode_seen[0]["mode"], ExecutionMode.INTERACTIVE,
             "interactive mode must disable capture_output "
             "so Docker inherits the host terminal",
         )
@@ -1838,21 +1847,21 @@ class TestDockerRunExecutor(unittest.TestCase):
 
         class _SpyRunner(ProcessRunner):
             def run(self, argv: list[str], *,
-                    capture_output: bool = True) -> ProcessResult:
-                mode_seen.append({"capture_output": capture_output})
+                    mode: ExecutionMode = ExecutionMode.CAPTURED,
+                    ) -> ProcessResult:
+                mode_seen.append({"mode": mode})
                 return ProcessResult(argv=tuple(argv), return_code=0)
 
         executor = DockerRunExecutor(_SpyRunner())
-        # RED: DockerRunExecutor.run() does not accept `interactive` yet.
-        # The intended API passes interactive=False → capture_output=True.
+        # interactive=False → mode is CAPTURED
         executor.run(("docker", "run", "img"),
-                     interactive=False)  # type: ignore[call-arg]
+                     interactive=False)
         self.assertTrue(
             len(mode_seen) >= 1,
             "executor must invoke the runner",
         )
-        self.assertTrue(
-            mode_seen[0]["capture_output"],
+        self.assertIs(
+            mode_seen[0]["mode"], ExecutionMode.CAPTURED,
             "captured mode must enable capture_output "
             "so diagnostics are available",
         )
@@ -1881,10 +1890,8 @@ class TestProcessRunnerExecutionModes(unittest.TestCase):
         _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
         try:
             runner = ProcessRunner()
-            # RED: ProcessRunner.run() does not accept `capture_output` yet.
-            # The intended API disables capture for interactive execution.
             runner.run(["docker", "run", "--tty", "img"],
-                       capture_output=False)  # type: ignore[call-arg]
+                       mode=ExecutionMode.INTERACTIVE)
             self.assertTrue(
                 len(captured_kwargs) >= 1,
                 "subprocess.run must be called exactly once",
@@ -1915,9 +1922,8 @@ class TestProcessRunnerExecutionModes(unittest.TestCase):
         _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
         try:
             runner = ProcessRunner()
-            # RED: ProcessRunner.run() does not accept capture_output yet.
             runner.run(["docker", "run", "--tty", "img"],
-                       capture_output=False)  # type: ignore[call-arg]
+                       mode=ExecutionMode.INTERACTIVE)
             self.assertTrue(
                 len(captured_kwargs) >= 1,
                 "subprocess.run must be called exactly once",
@@ -1990,10 +1996,9 @@ class TestProcessRunnerExecutionModes(unittest.TestCase):
         _subprocess_module.run = _fake_subprocess_run  # type: ignore[assignment]
         try:
             runner = ProcessRunner()
-            # RED: ProcessRunner.run() does not accept
             # ``capture_output`` yet.
             runner.run(["docker", "run", "img"],
-                       capture_output=True)  # type: ignore[call-arg]
+                       mode=ExecutionMode.CAPTURED)
             self.assertTrue(
                 len(captured_kwargs) >= 1,
                 "subprocess.run must be called",

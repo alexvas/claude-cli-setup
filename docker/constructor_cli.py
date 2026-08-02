@@ -58,6 +58,40 @@ _EXIT_CODES: dict[ExitKind, int] = {
 # unstructured diagnostics before exiting.
 MAX_RUN_DIAGNOSTIC_BYTES: int = 65_536
 
+_TRUNCATION_MARKER = "[truncated]"
+_TRUNCATION_MARKER_BYTES = len(_TRUNCATION_MARKER.encode("utf-8"))
+
+
+def _truncate_diagnostic(value: str) -> tuple[str, bool]:
+    """Truncate *value* to at most ``MAX_RUN_DIAGNOSTIC_BYTES``
+    UTF-8 bytes, ending with ``[truncated]`` when truncation
+    is necessary.
+
+    Returns ``(maybe_truncated, was_truncated)``."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= MAX_RUN_DIAGNOSTIC_BYTES:
+        return value, False
+    # Leave room for the marker.
+    limit = MAX_RUN_DIAGNOSTIC_BYTES - _TRUNCATION_MARKER_BYTES
+    if limit <= 0:
+        return _TRUNCATION_MARKER, True
+    truncated_bytes = encoded[:limit]
+    # Drop any trailing incomplete multibyte sequence.
+    try:
+        truncated_text = truncated_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        # Strip trailing byte(s) until valid.
+        for cut in range(1, 5):
+            try:
+                truncated_text = encoded[:limit - cut].decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            truncated_text = ""
+    result = truncated_text + _TRUNCATION_MARKER
+    return result, True
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Immutable dispatch boundary
@@ -681,10 +715,16 @@ def _real_dispatcher(
             # Preserve raw execution outcome for diagnosis.
             # Under --tty Docker may merge stderr into stdout;
             # capture both streams so callers never lose diagnostics.
+            # Both streams are independently bounded so runaway
+            # container output cannot blow up evidence or logs.
             if result.process_result is not None:
                 data["exit_code"] = result.process_result.return_code
-                data["stderr"] = result.process_result.stderr
-                data["stdout"] = result.process_result.stdout
+                for stream_name in ("stderr", "stdout"):
+                    raw = getattr(result.process_result, stream_name)
+                    truncated, was_cut = _truncate_diagnostic(raw or "")
+                    data[stream_name] = truncated
+                    if was_cut:
+                        data[f"{stream_name}_truncated"] = True
 
         return CommandResult(
             exit_kind=ExitKind(result.exit_kind.value),
