@@ -115,10 +115,10 @@
 
 ### Обновление смонтированных Pi extensions
 
-После изменения `runtime.pi-extensions` запустите контейнер с нужным Pi home и защищённый идемпотентный установщик:
+После изменения `runtime.pi-extensions` запустите контейнер с примонтированным Pi home — точка входа автоматически выполнит идемпотентную установку через `docker.runtime_installer`:
 
 ```bash
-./docker/docker-constructor.py run -- /home/dev/install-pi-extensions.sh
+./docker/docker-constructor.py run
 ```
 
 ### Исправление владельца и прав на хосте

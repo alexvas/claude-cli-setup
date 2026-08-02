@@ -19,10 +19,10 @@
 
 ## 4. Update Live Contracts and Documentation
 
-- [ ] 4.1 Remove manual wrapper commands from `README.md`, `README.en.md`, and `README.zh.md`; document `docker/docker-constructor.py run` as the supported setup path.
-- [ ] 4.2 Update maintained OpenSpec diagrams and prose that identify `install-pi-extensions.sh` as the current installer, without rewriting archived changes.
-- [ ] 4.3 Remove or update current inventory fixture comments and other non-archived live references to the deleted wrapper.
-- [ ] 4.4 Search the repository for `install-pi-extensions.sh` and `/home/dev/install-pi-extensions.sh`; ensure remaining matches are limited to historical archives or this removal change.
+- [x] 4.1 Remove manual wrapper commands from `README.md`, `README.en.md`, and `README.zh.md`; document `docker/docker-constructor.py run` as the supported setup path.
+- [x] 4.2 Update maintained OpenSpec diagrams and prose that identify `install-pi-extensions.sh` as the current installer, without rewriting archived changes.
+- [x] 4.3 Remove or update current inventory fixture comments and other non-archived live references to the deleted wrapper.
+- [x] 4.4 Search the repository for `install-pi-extensions.sh` and `/home/dev/install-pi-extensions.sh`; ensure remaining matches are limited to historical archives or this removal change.
 
 ## 5. Validate the Breaking Migration
 

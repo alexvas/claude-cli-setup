@@ -107,10 +107,10 @@
 
 ### 刷新挂载的 Pi extensions
 
-更改 `runtime.pi-extensions` 后，挂载目标 Pi home 并运行受保护且幂等的安装程序：
+更改 `runtime.pi-extensions` 后，挂载目标 Pi home 并启动容器 —— 入口点将自动通过 `docker.runtime_installer` 运行幂等安装程序：
 
 ```bash
-./docker/docker-constructor.py run -- /home/dev/install-pi-extensions.sh
+./docker/docker-constructor.py run
 ```
 
 ### 修复主机所有权和权限

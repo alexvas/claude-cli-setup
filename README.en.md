@@ -107,10 +107,10 @@ Ordinary builds, validation, launch, and extension setup never perform update di
 
 ### Refresh mounted Pi extensions
 
-After changing `runtime.pi-extensions`, launch with the intended Pi home mounted and run the protected, idempotent installer:
+After changing `runtime.pi-extensions`, launch with the intended Pi home mounted — the entrypoint will automatically run the idempotent installer via `docker.runtime_installer`:
 
 ```bash
-./docker/docker-constructor.py run -- /home/dev/install-pi-extensions.sh
+./docker/docker-constructor.py run
 ```
 
 ### Repair host ownership and permissions

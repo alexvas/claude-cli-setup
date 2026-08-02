@@ -715,6 +715,35 @@ def _main_spec_files() -> dict[str, pathlib.Path]:
     return result
 
 
+def _is_negative_contract_line(line: str, match: re.Match[str]) -> bool:
+    """True when the *match* term is governed by an explicit prohibition.
+
+    Only ``SHALL NOT`` / ``MUST NOT`` and ``without … using/requiring``
+    are accepted, and they must appear in the same clause as the match —
+    a line that prohibits one thing while endorsing another does not
+    exempt the endorsement.
+    """
+    start, end = match.start(), match.end()
+    # Only treat ``.`` as a delimiter when followed by whitespace or
+    # end-of-string — spec bullets embed dots in ``versions.py``.
+    _clause_break = re.compile(r"[.;]\s")
+    clause_start = 0
+    for m2 in re.finditer(_clause_break, line[:start]):
+        clause_start = m2.end()
+    clause_end = len(line)
+    m3 = re.search(_clause_break, line[end:])
+    if m3:
+        clause_end = end + m3.start()
+    clause = line[clause_start:clause_end]
+    # The negative language must appear *before* the match within the
+    # clause — otherwise it could govern a later, unrelated term.
+    prefix = clause[: end - clause_start]
+    return bool(
+        re.search(r"\b(SHALL NOT|MUST NOT)\b", prefix)
+        or re.search(r"without\b.*\b(using|requiring)", prefix)
+    )
+
+
 class TestNoStaleMainSpecReferences(unittest.TestCase):
     """Authoritative ``openspec/specs/`` MUST NOT reference removed
     CLIs, Compose, inf-splitter, or generated fragments."""
@@ -726,6 +755,12 @@ class TestNoStaleMainSpecReferences(unittest.TestCase):
                 for label, pat in _SPEC_FORBIDDEN:
                     m = pat.search(line)
                     if not m:
+                        continue
+                    # Explicit negative contract statements (SHALL NOT,
+                    # MUST NOT, without … using/requiring) governing
+                    # the matched term are legitimate retirement
+                    # language, not stale endorsements.
+                    if _is_negative_contract_line(line, m):
                         continue
                     violations.append(
                         f"{rel}:{lineno}: {label} — "
