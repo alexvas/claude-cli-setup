@@ -191,7 +191,7 @@ provider = "git-ref"
 ref = "master"
 
 # ---------------------------------------------------------------------------
-# Pi extensions — installed at runtime by install-pi-extensions.sh
+# Pi extensions — installed at runtime by the entrypoint via docker.runtime_installer
 # ---------------------------------------------------------------------------
 
 [runtime.pi-extensions.pi-read]
