@@ -213,6 +213,11 @@ _MATCHING: dict[str, str] = {
     "pi":        "v1.4.236\n",
     "openspec":  "openspec v0.15.0\n",
     "git":       "eea3ac1a6802f0d8a778447413b9b52a14decb40\n",
+    "rustup":    (
+        "/home/dev/.rustup/toolchains/1.83.0-x86_64-unknown"
+        "-linux-gnu/bin/rustfmt\n"
+        "rustfmt-x86_64-unknown-linux-gnu (installed)\n"
+    ),
 }
 
 _MISMATCHED: dict[str, str] = {
@@ -245,11 +250,37 @@ def _normalize_v_stripped(raw: str) -> str:
     return tok
 
 
+def _normalize_component_status(raw: str) -> str:
+    """Parse ``rustup component list`` output and return
+    ``"installed"`` or ``"not-installed"`` for the rustfmt entry."""
+    for line in raw.splitlines():
+        line = line.strip()
+        if "rustfmt" in line and "(installed)" in line:
+            return "installed"
+    return "not-installed"
+
+
+_RUSTUP_TOOLCHAIN_PATH_RE = re.compile(
+    r"\.rustup/toolchains/(\d+\.\d+\.\d+)-[^/]+/bin/rustfmt(?:\.exe)?"
+)
+
+
+def _normalize_rustup_toolchain_version(raw: str) -> str:
+    """Extract the toolchain version from a rustup which path
+    matching the ``…/.rustup/toolchains/<ver>-<target>/bin/rustfmt``
+    layout.  Falls back to the raw stripped value for non-matching
+    paths so they cannot coincidentally match a version."""
+    s = raw.strip()
+    m = _RUSTUP_TOOLCHAIN_PATH_RE.search(s)
+    return m.group(1) if m else s
+
+
 _NORMALIZERS: dict[str, object] = {
     "node.version":     _normalize_node,
     "rust.version":     _extract_first_version_token,
     "rust.cargo":       _extract_first_version_token,
-    "rust.rustfmt":     _extract_first_version_token,
+    "rust.rustfmt":     _normalize_rustup_toolchain_version,
+    "rust.rustfmt.component": _normalize_component_status,
     "rust.clippy":      _extract_first_version_token,
     "uv.version":       _extract_first_version_token,
     "python.version":   _extract_first_version_token,
@@ -267,7 +298,8 @@ _CONTRACT_TO_TOOL: dict[str, str] = {
     "node.version": "node",
     "rust.version": "rustc",
     "rust.cargo": "cargo",
-    "rust.rustfmt": "rustfmt",
+    "rust.rustfmt": "rustup",
+    "rust.rustfmt.component": "rustup",
     "rust.clippy": "clippy",
     "uv.version": "uv",
     "python.version": "python3",
@@ -555,7 +587,11 @@ class TestAlteredProjection(unittest.TestCase):
             "node":     "v18.19.0\n",
             "rustc":    "rustc 1.75.0 (90b35a623 2024-11-26)\n",
             "cargo":    "cargo 1.75.0 (5ffa321 2024-11-26)\n",
-            "rustfmt":  "rustfmt 1.75.0-stable (abc1234 2024-11-26)\n",
+            "rustup":   (
+                "/home/dev/.rustup/toolchains/1.75.0-x86_64-unknown"
+                "-linux-gnu/bin/rustfmt\n"
+                "rustfmt-x86_64-unknown-linux-gnu (installed)\n"
+            ),
             "clippy":   "clippy 0.1.75 (abc1234 2024-11-26)\n",
             "uv":       "uv 0.5.0\n",
             "git":      "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n",
@@ -667,11 +703,16 @@ class TestConditionalComponents(unittest.TestCase):
         contracts = _applicable_contracts(proj_dict)
         keys = {c.key for c in contracts}
         self.assertIn("rust.rustfmt", keys)
+        self.assertIn("rust.rustfmt.component", keys)
         self.assertNotIn("rust.clippy", keys)
-        # All non-Rust-component contracts still present
+        # All non-Rust-component contracts plus the two dynamic
+        # rustfmt contracts are present.
         all_keys = {c.key for c in _CONTRACTS}
+        expected_extra = {"rust.rustfmt", "rust.rustfmt.component"}
         expected_excluded = {"rust.clippy"}
-        self.assertEqual(all_keys - expected_excluded, keys)
+        self.assertEqual(
+            (all_keys - expected_excluded) | expected_extra, keys,
+        )
 
     def test_only_clippy_includes_clippy_only(self) -> None:
         """When only clippy is declared, rustfmt contract is omitted."""
@@ -700,19 +741,29 @@ class TestConditionalComponents(unittest.TestCase):
 
     def test_applicable_contracts_order_matches_conracts(self) -> None:
         """Applicable contracts preserve the deterministic _CONTRACTS
-        order and are a subsequence of it."""
+        order, with the two dynamic ``rust.rustfmt*`` contracts
+        appended at the end."""
         proj = self._proj_with_components("rustfmt", "clippy")
         proj_dict = serialize_effective_build(proj)
         contracts = _applicable_contracts(proj_dict)
         full_keys = [c.key for c in _CONTRACTS]
         applicable_keys = [c.key for c in contracts]
-        # Every applicable key must appear in full_keys in the same order
-        it = iter(full_keys)
-        for k in applicable_keys:
-            self.assertIn(k, full_keys)
-        # Verify subsequence property
-        filtered = [k for k in full_keys if k in set(applicable_keys)]
-        self.assertEqual(filtered, applicable_keys)
+        # The two dynamic contracts are appended after the static ones.
+        dynamic_keys = {"rust.rustfmt", "rust.rustfmt.component"}
+        static_keys = [k for k in applicable_keys
+                       if k not in dynamic_keys]
+        # Static keys must be a subsequence of _CONTRACTS order.
+        filtered = [k for k in full_keys if k in set(static_keys)]
+        self.assertEqual(filtered, static_keys)
+        # The dynamic contracts must be the last two keys, in order.
+        self.assertEqual(
+            "rust.rustfmt", applicable_keys[-2],
+            "rust.rustfmt must be the second-to-last applicable contract",
+        )
+        self.assertEqual(
+            "rust.rustfmt.component", applicable_keys[-1],
+            "rust.rustfmt.component must be the last applicable contract",
+        )
 
     # ── Behavioral RED tests ───────────────────────────────────────
 
@@ -838,7 +889,7 @@ class TestObservationContracts(unittest.TestCase):
         keys = tuple(c.key for c in _CONTRACTS)
         self.assertEqual(
             ("node.version", "rust.version", "rust.cargo",
-             "rust.rustfmt", "rust.clippy",
+             "rust.clippy",
              "uv.version", "python.version", "ty.version",
              "rtk.version", "fd.version", "pi.version",
              "openspec.version", "oh-my-zsh.revision"),
@@ -911,14 +962,11 @@ class TestObservationContracts(unittest.TestCase):
     def test_floating_node_tag_is_not_exact_semver(self) -> None:
         """A floating major-only tag like ``24-trixie-slim`` must
         NOT be treated as an exact-verifiable semver."""
-        extracted = _extract_node_version("node:24-trixie-slim")
-        # RED: currently returns "24", not a valid X.Y.Z semver.
-        self.assertNotEqual(
-            extracted, "24",
-            "floating tag '24-trixie-slim' must not produce "
-            "a bare major version — the extraction must reject "
-            "it as not exact-verifiable",
-        )
+        with self.assertRaises(ValueError) as ctx:
+            _extract_node_version("node:24-trixie-slim")
+        msg = str(ctx.exception).lower()
+        self.assertIn("not an exact semver", msg,
+                       "ValueError must explain the tag is not exact-verifiable")
 
     def test_inventory_pipeline_resolves_exact_node_image(self) -> None:
         """The actual ``docker-constructor.toml`` loaded through the
@@ -1078,12 +1126,14 @@ class TestObservationContracts(unittest.TestCase):
             oh_my_zsh_revision=proj.oh_my_zsh_revision,
         )
         tf = _write_projection_fixture(proj)
-        # Real rustfmt 1.9.0-stable on Rust 1.97.1 toolchain.
+        # rustfmt 1.9.0-stable resolves through the 1.97.1 toolchain.
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        matching["rustfmt"] = (
-            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
+        # rustup which rustfmt → path inside the 1.97.1 toolchain.
+        matching["rustup"] = (
+            "/home/dev/.rustup/toolchains/1.97.1-x86_64-unknown"
+            "-linux-gnu/bin/rustfmt\n"
         )
         runner = ToolVersionRunner(matching)
         result = verify_build(VerifyBuildRequest(
@@ -1092,10 +1142,9 @@ class TestObservationContracts(unittest.TestCase):
         ))
         obs_by_key = {o.key: o for o in result.observations}
         rustfmt_obs = obs_by_key["rust.rustfmt"]
-        # RED: the current code compares rustfmt 1.9.0 to
-        # expected 1.97.1 (the Rust version) and reports a
-        # false negative — the provenance check must pass
-        # despite the independent version banner.
+        # GREEN: rustfmt provenance passes because the rustup
+        # which path contains the configured 1.97.1 toolchain,
+        # regardless of rustfmt's independent version banner.
         self.assertTrue(
             rustfmt_obs.ok,
             f"rustfmt 1.9.0-stable on Rust 1.97.1 must pass "
@@ -1134,16 +1183,12 @@ class TestObservationContracts(unittest.TestCase):
         must fail with provenance details."""
         proj = self._proj_rust_1_97_1_with_rustfmt()
         tf = _write_projection_fixture(proj)
-        # rustfmt present as a binary but NOT installed as a rustup
-        # component for the toolchain.
+        # rustfmt is NOT managed by rustup — ``rustup which``
+        # will fail with a non-zero exit code.
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        # rustfmt --version still works (it's on PATH) but
-        # rustup component list shows it's not installed.
-        matching["rustfmt"] = (
-            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
-        )
+        # No "rustup" key → exit 1, "no version known" on stderr.
         runner = ToolVersionRunner(matching)
         result = verify_build(VerifyBuildRequest(
             image="pi-cli-pi:latest",
@@ -1167,11 +1212,9 @@ class TestObservationContracts(unittest.TestCase):
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        # rustfmt version banner coincidentally matches the
-        # toolchain version — current code would pass.
-        matching["rustfmt"] = (
-            "rustfmt 1.97.1-stable (8bab26f4f6 2025-01-15)\n"
-        )
+        # rustup which returns a path outside the configured
+        # toolchain directory.
+        matching["rustup"] = "/usr/bin/rustfmt\n"
         runner = ToolVersionRunner(matching)
         result = verify_build(VerifyBuildRequest(
             image="pi-cli-pi:latest",
@@ -1179,14 +1222,40 @@ class TestObservationContracts(unittest.TestCase):
         ))
         obs_by_key = {o.key: o for o in result.observations}
         rustfmt_obs = obs_by_key["rust.rustfmt"]
-        # RED: current code would pass because versions match,
-        # but provenance check would fail because rustfmt isn't
-        # from the configured toolchain.
+        # GREEN: the rustup which path does not contain 1.97.1,
+        # so provenance fails even if version banners match.
         self.assertFalse(
             rustfmt_obs.ok,
             "rustfmt outside the configured rustup toolchain must "
             "be reported as a provenance failure — version matching "
             "is insufficient",
+        )
+
+    def test_rustfmt_path_outside_rustup_toolchain_dir(self) -> None:
+        """When ``rustup which rustfmt`` returns a path that contains
+        the configured version number but lies outside of rustup's
+        ``toolchains`` directory (e.g. ``/opt/tools/1.97.1/bin/rustfmt``),
+        provenance must fail.  Coincidental version-number matches are
+        not a substitute for toolchain membership."""
+        proj = self._proj_rust_1_97_1_with_rustfmt()
+        tf = _write_projection_fixture(proj)
+        matching = dict(_MATCHING)
+        matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
+        # Path contains 1.97.1 but is NOT inside .rustup/toolchains/.
+        matching["rustup"] = "/opt/tools/1.97.1/bin/rustfmt\n"
+        runner = ToolVersionRunner(matching)
+        result = verify_build(VerifyBuildRequest(
+            image="pi-cli-pi:latest",
+            effective_projection_path=tf, runner=runner,
+        ))
+        obs_by_key = {o.key: o for o in result.observations}
+        rustfmt_obs = obs_by_key["rust.rustfmt"]
+        self.assertFalse(
+            rustfmt_obs.ok,
+            "rustfmt at /opt/tools/1.97.1/bin/rustfmt must fail "
+            "provenance — it is not inside the rustup toolchains "
+            "directory, so the path does not prove toolchain membership",
         )
 
     def test_rustfmt_malformed_rustup_output(self) -> None:
@@ -1197,7 +1266,9 @@ class TestObservationContracts(unittest.TestCase):
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        matching["rustfmt"] = ""  # empty output
+        # rustup which returns unparseable output — no X.Y.Z
+        # token to extract.
+        matching["rustup"] = ""  # empty output
         runner = ToolVersionRunner(matching)
         result = verify_build(VerifyBuildRequest(
             image="pi-cli-pi:latest",
@@ -1223,9 +1294,11 @@ class TestObservationContracts(unittest.TestCase):
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        # rustfmt from a *different* toolchain (1.83.0)
-        matching["rustfmt"] = (
-            "rustfmt 1.83.0-stable (abc1234 2024-11-26)\n"
+        # rustup which returns a path from a *different* toolchain
+        # (1.83.0).
+        matching["rustup"] = (
+            "/home/dev/.rustup/toolchains/1.83.0-x86_64-unknown"
+            "-linux-gnu/bin/rustfmt\n"
         )
         runner = ToolVersionRunner(matching)
         result = verify_build(VerifyBuildRequest(
@@ -1234,9 +1307,8 @@ class TestObservationContracts(unittest.TestCase):
         ))
         obs_by_key = {o.key: o for o in result.observations}
         rustfmt_obs = obs_by_key["rust.rustfmt"]
-        # RED: with version comparison, 1.83.0 ≠ 1.97.1 is already
-        # a mismatch — but the failure message should highlight the
-        # toolchain mismatch, not just a bare version diff.
+        # GREEN: the observed path contains toolchain 1.83.0,
+        # not the expected 1.97.1.
         self.assertFalse(
             rustfmt_obs.ok,
             "rustfmt from toolchain 1.83.0 must be rejected when "
@@ -1252,18 +1324,14 @@ class TestObservationContracts(unittest.TestCase):
 
     def test_rustfmt_provenance_invokes_rustup_which(self) -> None:
         """Proving rustfmt provenance requires running
-        ``rustup which rustfmt`` to confirm the binary resolves
-        through the configured toolchain.  The current
-        implementation only runs ``rustfmt --version``."""
+        ``rustup which --toolchain <configured> rustfmt`` to confirm
+        the binary resolves through the configured toolchain, not
+        the active/default one."""
         proj = self._proj_rust_1_97_1_with_rustfmt()
         tf = _write_projection_fixture(proj)
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        matching["rustfmt"] = (
-            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
-        )
-        # rustup which rustfmt → the expected toolchain path.
         matching["rustup"] = (
             "/home/dev/.rustup/toolchains/1.97.1-x86_64-unknown"
             "-linux-gnu/bin/rustfmt\n"
@@ -1273,32 +1341,28 @@ class TestObservationContracts(unittest.TestCase):
             image="pi-cli-pi:latest",
             effective_projection_path=tf, runner=runner,
         ))
-        # RED: ``rustup which rustfmt`` is never invoked — only
-        # ``rustfmt --version`` runs.
-        rustup_commands = [
-            " ".join(c) for c in runner.calls
-            if "rustup" in c
-        ]
-        self.assertTrue(
-            len(rustup_commands) >= 1,
-            "rustfmt provenance must invoke 'rustup which rustfmt' "
-            f"— got {len(rustup_commands)} rustup commands",
+        # GREEN: the exact ``rustup which --toolchain 1.97.1
+        # rustfmt`` command must appear in the recorded calls.
+        expected_cmd = (
+            "docker", "run", "--rm", "pi-cli-pi:latest",
+            "rustup", "which", "--toolchain", "1.97.1", "rustfmt",
+        )
+        self.assertIn(
+            expected_cmd, runner.calls,
+            "rustfmt provenance must invoke the exact "
+            "'rustup which --toolchain 1.97.1 rustfmt' command",
         )
 
     def test_rustfmt_provenance_invokes_rustup_component_list(self) -> None:
         """Proving rustfmt provenance requires running
         ``rustup component list --toolchain <toolchain>`` to
-        confirm the component is installed.  The current
-        implementation only runs ``rustfmt --version``."""
+        confirm the component is installed."""
         proj = self._proj_rust_1_97_1_with_rustfmt()
         tf = _write_projection_fixture(proj)
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        matching["rustfmt"] = (
-            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
-        )
-        # rustup component list output.
+        # rustup component list output with rustfmt installed.
         matching["rustup"] = (
             "rustfmt-x86_64-unknown-linux-gnu (installed)\n"
             "clippy-x86_64-unknown-linux-gnu (default)\n"
@@ -1308,17 +1372,17 @@ class TestObservationContracts(unittest.TestCase):
             image="pi-cli-pi:latest",
             effective_projection_path=tf, runner=runner,
         ))
-        # RED: ``rustup component list --toolchain …`` is never
-        # invoked — only ``rustfmt --version`` runs.
-        rustup_commands = [
-            " ".join(c) for c in runner.calls
-            if "rustup" in c
-        ]
-        self.assertTrue(
-            len(rustup_commands) >= 1,
-            "rustfmt provenance must invoke "
-            "'rustup component list --toolchain …' "
-            f"— got {len(rustup_commands)} rustup commands",
+        # GREEN: the exact ``rustup component list --toolchain
+        # 1.97.1`` command must appear in the recorded calls.
+        expected_cmd = (
+            "docker", "run", "--rm", "pi-cli-pi:latest",
+            "rustup", "component", "list",
+            "--toolchain", "1.97.1",
+        )
+        self.assertIn(
+            expected_cmd, runner.calls,
+            "rustfmt provenance must invoke the exact "
+            "'rustup component list --toolchain 1.97.1' command",
         )
 
     # ── 1.5: Conditional rustfmt/clippy checks remain absent ─────
@@ -1352,10 +1416,6 @@ class TestObservationContracts(unittest.TestCase):
         matching = dict(_MATCHING)
         matching["rustc"] = "rustc 1.97.1 (8bab26f4f6 2025-01-15)\n"
         matching["cargo"] = "cargo 1.97.1 (8bab26f4f6 2025-01-15)\n"
-        # Even if rustfmt is on PATH, the check must be skipped.
-        matching["rustfmt"] = (
-            "rustfmt 1.9.0-stable (8bab26f4f6 2025-01-15)\n"
-        )
         runner = ToolVersionRunner(matching)
         result = verify_build(VerifyBuildRequest(
             image="pi-cli-pi:latest",
