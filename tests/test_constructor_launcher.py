@@ -1567,6 +1567,90 @@ class TestRunTransaction(unittest.TestCase):
         self.assertIn("PROJECT_PATH_1=/work/main", result.run_args)
         self.assertIn("PROJECT_PATH_2=/work/opt", result.run_args)
 
+    # ── projection readability before execution ──────────────────
+
+    def test_projection_readable_before_docker_run(self) -> None:
+        """Before ``docker run`` executes, the projection file must
+        be world-readable (0444) so container-remapped users can
+        access it via the bind-mount.
+
+        Exercises the real :func:`create_runtime_projection` through
+        a wrapping spy — the file on disk is created by the
+        production code, not by a test double."""
+        import os
+        import stat
+
+        from docker.versioning.effective import (
+            _repo_runtime_dir,
+            create_runtime_projection,
+        )
+
+        # The real factory validates the path is under the
+        # repository-owned runtime directory and the renderer
+        # requires the file live directly inside …/runtime/.
+        import uuid
+        real_parent = _repo_runtime_dir()
+        unique_name = f"proj-{uuid.uuid4().hex}.toml"
+        real_host_path = os.path.join(real_parent, unique_name)
+        try:
+            recorded: list[tuple[str, str]] = []  # (path, content_hash)
+            observed_modes: list[int] = []
+
+            class _WrappingFactory:
+                """Spy that delegates to the real projection factory."""
+
+                def __call__(self, projection: object, *,
+                             parent_dir: str) -> Any:
+                    handle = create_runtime_projection(
+                        projection,
+                        host_path=real_host_path,
+                    )
+                    recorded.append((handle.path, handle.content_hash))
+                    return handle
+
+            class _AssertingExecutor:
+                def run(self, argv: tuple[str, ...]) -> Any:
+                    for path, _ in recorded:
+                        if os.path.exists(path):
+                            mode = os.stat(path).st_mode & 0o777
+                            observed_modes.append(mode)
+                    from docker.launcher import ProcessResult
+                    return ProcessResult(
+                        argv=argv, return_code=0,
+                        stdout="", stderr="",
+                    )
+
+            req = self._request(
+                executor=_AssertingExecutor(),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=_WrappingFactory(),
+            )
+
+            result = self._run(req)
+            # Sanity: the wrapper was called and the executor ran.
+            self.assertTrue(
+                len(recorded) >= 1,
+                "wrapping factory was not called — projection creation "
+                "may have failed before execution",
+            )
+            self.assertTrue(
+                len(observed_modes) >= 1,
+                "executor was never reached — projection created but "
+                "execution did not proceed",
+            )
+            for mode in observed_modes:
+                self.assertEqual(
+                    0o444, mode,
+                    f"projection mode {oct(mode)} before docker run "
+                    f"— expected 0o444 for remapped-container access",
+                )
+            # Content hash was recorded from the real factory.
+            self.assertIsNotNone(recorded[0][1])
+        finally:
+            import shutil
+            if os.path.exists(real_host_path):
+                os.unlink(real_host_path)
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 11.3 - Docker-backed boundaries (ProcessRunner injection)

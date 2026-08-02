@@ -672,9 +672,12 @@ def _real_dispatcher(
                 "projection_hash": result.projection_hash,
             }
             # Preserve raw execution outcome for diagnosis.
+            # Under --tty Docker may merge stderr into stdout;
+            # capture both streams so callers never lose diagnostics.
             if result.process_result is not None:
                 data["exit_code"] = result.process_result.return_code
                 data["stderr"] = result.process_result.stderr
+                data["stdout"] = result.process_result.stdout
 
         return CommandResult(
             exit_kind=ExitKind(result.exit_kind.value),
@@ -1089,11 +1092,27 @@ def _render_data_text(data: object) -> str:
     """Render CommandResult data for text-mode display.
 
     Dicts with a ``display_string`` key (build dry-run, doctor
-    summaries) render that string verbatim.  Everything else falls
-    back to ``str(data)``.
+    summaries) render that string verbatim.
+
+    When the dict carries ``stdout`` and/or ``stderr`` keys
+    (run-failure diagnostics), only the non-empty streams are
+    rendered with clear labels.  Everything else falls back to
+    ``str(data)``.
     """
     if isinstance(data, dict) and "display_string" in data:
-        return str(data["display_string"])
+        ds = data["display_string"]
+        if ds is not None and str(ds):
+            return str(ds)
+    # Run-failure diagnostics: surface captured streams with labels.
+    if isinstance(data, dict) and ("stdout" in data or "stderr" in data):
+        lines: list[str] = []
+        out = data.get("stdout")
+        if out and str(out).strip():
+            lines.append(f"stdout: {str(out).strip()}")
+        err = data.get("stderr")
+        if err and str(err).strip():
+            lines.append(f"stderr: {str(err).strip()}")
+        return "\n       ".join(lines) if lines else ""
     return str(data)
 
 

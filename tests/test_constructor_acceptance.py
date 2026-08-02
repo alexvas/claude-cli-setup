@@ -767,6 +767,94 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         self.assertEqual(3, rc)
         self.assertIn("no main project", _strip_ansi(err).lower())
 
+    def test_tty_failure_exposes_both_streams_in_json(self) -> None:
+        """Under ``--tty``, Docker may merge stderr into stdout.
+        When ``docker run`` exits nonzero, the structured result must
+        include captured stdout *in addition to* stderr so callers can
+        diagnose without guessing which stream holds the error."""
+        stderr_text = "error: container failed to start"
+        stdout_text = "standard output merged under --tty"
+        executor = self._scripted_executor(
+            return_code=1,
+            stdout=stdout_text,
+            stderr=stderr_text,
+        )
+
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["--output", "json", "run", "--main-project",
+             "/tmp/fake-project", "--tty"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+        self.assertEqual(4, rc)
+        self.assertEqual("", err)
+        data = json.loads(out)
+        self.assertEqual("operational", data.get("status"))
+        # Both streams must be present.
+        self.assertIn("stderr", data["data"])
+        self.assertIn(stderr_text, data["data"]["stderr"])
+        # Under --tty the diagnostic may land in stdout.
+        self.assertIn("stdout", data["data"],
+                       "stdout must be captured alongside stderr "
+                       "when --tty merges output streams")
+        self.assertIn(stdout_text, data["data"]["stdout"])
+
+    def test_tty_failure_text_mode_shows_stdout_diagnostics(self) -> None:
+        """Under ``--tty``, Docker may merge stderr into stdout.
+        In text mode, a nonzero run must surface captured stdout on
+        the diagnostic stream with a clear label — even when stderr
+        is empty the user must see the real failure text."""
+        stdout_text = (
+            "standard output mixed with error: "
+            "container failed to start\n"
+        )
+        executor = self._scripted_executor(
+            return_code=1,
+            stdout=stdout_text,
+            stderr="",  # merged into stdout by --tty
+        )
+
+        runner = _make_fake_process_runner(
+            return_code=0, stdout="pi-0001\n",
+        )
+
+        rc, out, err = _run(
+            self.m,
+            ["run", "--main-project", "/tmp/fake-project", "--tty"],
+            _process_runner=runner,
+            _container_inspector=self._fake_inspector("pi-0001"),
+            _run_executor=executor,
+            _create_projection=lambda p, **kw: self._ProjectionHandle(),
+            _prompt_user=lambda _: True,
+        )
+
+        self.assertEqual(4, rc)
+        self.assertEqual("", out)
+        # The diagnostic stream must contain the actual failure text
+        # from stdout — when --tty merges stderr into stdout, the
+        # only place the error lives is in process_result.stdout.
+        self.assertIn(stdout_text.strip(), err,
+                       "text-mode failure must surface stdout "
+                       "diagnostics when --tty merges streams")
+        # The output must label captured streams clearly so users
+        # know where the diagnostic came from.
+        self.assertIn("stdout", err.lower(),
+                       "the output must label the captured stdout "
+                       "clearly (e.g. 'stdout: ...')")
+        # No duplication of diagnostic content.
+        count = err.count(stdout_text.strip())
+        self.assertEqual(1, count,
+                          f"diagnostic content appears {count} times, "
+                          f"expected exactly once")
+
 
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Mismatched image expectations (verify build)

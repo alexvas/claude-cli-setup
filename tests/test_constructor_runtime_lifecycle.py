@@ -83,6 +83,13 @@ def _make_fake_fs(store: dict[str, bytes], runtime_dir: str):
 
     _counter = 0  # for urandom and unique temp names
 
+    # ── chmod: no-op for in-memory store ────────────────────────
+    def _chmod(path: str, mode: int) -> None:
+        # In-memory files have no real mode bits; the operation
+        # is recorded only through the real-filesystem tests.
+        if path not in store:
+            raise FileNotFoundError(f"no such file: {path}")
+
     # ── mkstemp: create an in-memory temp entry ──────────────────
     def _mkstemp(suffix=".tmp", prefix=".atomic.", dir=""):
         nonlocal _counter
@@ -183,6 +190,7 @@ def _make_fake_fs(store: dict[str, bytes], runtime_dir: str):
         link=_link,
         fsync=lambda fd: None,   # no-op: in-memory is always synced
         mkstemp=_mkstemp,
+        chmod=_chmod,
         urandom=_urandom,
         path=_FakePath(),
         makedirs=lambda p, exist_ok=False: None,  # no-op
@@ -936,6 +944,45 @@ class TestRuntimeLifecycle(unittest.TestCase):
         self.assertNotIn("source", content)
         self.assertNotIn("update", content)
         self.assertNotIn("override", content)
+
+    # ── projection filesystem mode ────────────────────────────────
+
+    def test_projection_mode_is_world_readable_not_owner_only(self):
+        """The published projection file must be readable by
+        non-owner users — container-remapped UIDs cannot read files
+        locked at owner-only 0600."""
+        import stat
+        proj = resolve_runtime(_runtime(), {})
+        target = os.path.join(self._tmp, "world-readable.toml")
+        path, _ = create_runtime_projection(proj, host_path=target)
+        mode = os.stat(path).st_mode & 0o777
+        self.assertEqual(
+            0o444, mode,
+            f"projection mode {oct(mode)} — expected 0o444 "
+            f"so container-remapped users can read it",
+        )
+        # Content unchanged after mode correction.
+        with open(path) as fh:
+            content = fh.read()
+        self.assertIn("pi-read", content)
+        self.assertIn("@example/pi-read", content)
+
+    def test_mkstemp_default_mode_is_0600(self):
+        """mkstemp creates files at 0600 (owner read-write only).
+        The projection must never be left at this restrictive mode
+        — this test documents the baseline the code must override."""
+        import stat
+        fd, tmp = tempfile.mkstemp(dir=self._tmp)
+        try:
+            os.close(fd)
+            mode = os.stat(tmp).st_mode & 0o777
+            self.assertEqual(
+                0o600, mode,
+                f"mkstemp creates files at {oct(mode)}, expected 0o600 "
+                f"— this is the baseline the projection must override",
+            )
+        finally:
+            os.unlink(tmp)
 
 
 class TestSerializedProjectionValidator(unittest.TestCase):

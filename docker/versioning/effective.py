@@ -553,6 +553,7 @@ class Filesystem:
         link: ``os.link`` equivalent.
         fsync: ``os.fsync`` equivalent.
         mkstemp: ``tempfile.mkstemp`` equivalent.
+        chmod: ``os.chmod`` equivalent.
         urandom: ``os.urandom`` equivalent.
         path: ``os.path`` module (or substitute).
         makedirs: ``os.makedirs`` equivalent.
@@ -562,7 +563,8 @@ class Filesystem:
 
     __slots__ = (
         "open", "unlink", "link", "fsync", "mkstemp",
-        "urandom", "path", "makedirs", "close_fd", "repo_runtime_dir",
+        "chmod", "urandom", "path", "makedirs", "close_fd",
+        "repo_runtime_dir",
     )
 
     def __init__(
@@ -573,6 +575,7 @@ class Filesystem:
         link=os.link,
         fsync=os.fsync,
         mkstemp=tempfile.mkstemp,
+        chmod=os.chmod,
         urandom=os.urandom,
         path=os.path,
         makedirs=os.makedirs,
@@ -584,6 +587,7 @@ class Filesystem:
         self.link = link
         self.fsync = fsync
         self.mkstemp = mkstemp
+        self.chmod = chmod
         self.urandom = urandom
         self.path = path
         self.makedirs = makedirs
@@ -1035,6 +1039,11 @@ def create_runtime_projection(
             fh.write(content)
             fh.flush()
             _fs.fsync(fh.fileno())
+        # Make the file world-readable before linking so the
+        # published path is never observable at the mkstemp
+        # default 0600.  Container-remapped UIDs depend on
+        # mode bits, not on ownership coincidence.
+        _fs.chmod(tmp_path, 0o444)
     except Exception:
         try:
             _fs.unlink(tmp_path)
