@@ -49,6 +49,69 @@ from docker.versioning.dispatch_types import ExitKind
 # ═══════════════════════════════════════════════════════════════════
 
 
+# ── repo-cache leak guard ───────────────────────────────────────
+
+_REPO_CACHE = os.path.join(os.path.dirname(__file__), "..", ".docker-generated", "runtime-artifacts")
+
+
+def _repo_cache_file_set() -> frozenset[str]:
+    """Return an immutable set of every regular file under the repository
+    cache tree, relative to the repo root."""
+    try:
+        files: set[str] = set()
+        for dirpath, _dirnames, filenames in os.walk(_REPO_CACHE):
+            for name in filenames:
+                files.add(os.path.relpath(os.path.join(dirpath, name)))
+        return frozenset(files)
+    except FileNotFoundError:
+        return frozenset()
+
+
+def _assert_repo_cache_unchanged(before: frozenset[str]) -> frozenset[str]:
+    """Assert the repository cache has the exact same files as *before*.
+    Returns the current set for chaining (e.g. snapshot for next check)."""
+    after = _repo_cache_file_set()
+    assert after == before, (
+        f"repo cache leaked: {sorted(after - before)} added, "
+        f"{sorted(before - after)} removed"
+    )
+    return after
+
+
+# ────────────────────────────────────────────────────────────────
+
+
+
+# ── shared-lock-directory leak guard ────────────────────────────────
+# Tests must NEVER create /tmp/locks.  FileIdentityLockFactory
+# derives its lock root from the cache-root parent, so every test
+# must place its cache root beneath a private temporary directory.
+# Pre-existing /tmp/locks from outside callers is tolerated — the
+# guard only flags a *new* creation.  Tests do not own or delete it.
+
+_SHARED_LOCK_LEAK = "/tmp/locks"
+
+
+def _shared_lock_leak_snapshot() -> bool:
+    """Return ``True`` when the shared lock directory already exists."""
+    return os.path.exists(_SHARED_LOCK_LEAK)
+
+
+def _assert_no_shared_lock_created(before: bool, *, _path: str = _SHARED_LOCK_LEAK) -> None:
+    """Fail when the shared lock directory was *created* during a test.
+
+    ``before`` is the snapshot taken in ``setUp``.  If ``_path`` did not
+    exist before but exists now, the test leaked it."""
+    if before:
+        return
+    assert not os.path.exists(_path), (
+        f"{_path} was created outside the test root — "
+        "a test passed FileIdentityLockFactory a cache_root whose "
+        "parent is not confined to a per-test temporary directory"
+    )
+
+
+
 class FakeProcessRunner(ProcessRunner):
     """Deterministic :class:`ProcessRunner` that consumes canned
     :class:`ProcessResult` responses in FIFO order.  Falls back to
@@ -973,8 +1036,22 @@ class TestRunTransaction(unittest.TestCase):
     projection cleanup."""
 
     def setUp(self) -> None:
+        self._lock_leak_before = _shared_lock_leak_snapshot()
         import tempfile
         self._tmpdir = tempfile.TemporaryDirectory()
+        import docker.versioning.artifact_cache as artifact_cache
+        from unittest import mock
+        self._artifact_cache_root = os.path.join(
+            self._tmpdir.name, "runtime-artifacts", "blobs",
+        )
+        self._cache_root_patch = mock.patch.object(
+            artifact_cache,
+            "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+            self._artifact_cache_root,
+        )
+        self._cache_root_patch.start()
+        # ── repo-cache leak guard ───────────────────────────
+        self._repo_cache_snapshot = _repo_cache_file_set()
         # projection_parent_dir must contain the .docker-generated/runtime
         # segments required by run-renderer validation.
         self._proj_parent = os.path.join(
@@ -995,17 +1072,50 @@ class TestRunTransaction(unittest.TestCase):
         )
         fixture = os.path.join(self._tmpdir.name, "docker-constructor.toml")
         shutil.copy2(real, fixture)
+        override_url = (
+            "https://registry.npmjs.org/@arcanemachine/pi-read/"
+            "-/pi-read-0.3.0.tgz"
+        )
         with open(fixture, "a") as fh:
             fh.write(
                 '\n'
                 '[runtime.pi-extensions.pi-read.artifacts."0.3.0"]\n'
-                'url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.3.0.tgz"\n'
-                'integrity = "sha512-HVRCJdfUNS4642pHcL57fyprYKNZGK2Szx+7i2DHTIAacwqTdlxGN7NwiVi2QtXSwcC1j7/w8xZeNJ9u6ioQ6g=="\n'
+                f'url = "{override_url}"\n'
+                'integrity = "sha512-placeholder"\n'
             )
+
+        # Make every fixture artifact deterministic and network-independent.
+        import base64
+        import hashlib
+        import re
+        with open(fixture) as fh:
+            content = fh.read()
+
+        def replace_integrity(match: re.Match[str]) -> str:
+            url = match.group(1)
+            digest = base64.b64encode(
+                hashlib.sha512(self._artifact_bytes(url)).digest()
+            ).decode("ascii")
+            return f'url = "{url}"\nintegrity = "sha512-{digest}"'
+
+        content = re.sub(
+            r'url = "([^"]+)"\nintegrity = "[^"]+"',
+            replace_integrity,
+            content,
+        )
+        with open(fixture, "w") as fh:
+            fh.write(content)
         return fixture
 
+    @staticmethod
+    def _artifact_bytes(url: str) -> bytes:
+        return ("launcher-fixture-artifact:" + url).encode("utf-8")
+
     def tearDown(self) -> None:
+        self._cache_root_patch.stop()
         self._tmpdir.cleanup()
+        _ = _assert_repo_cache_unchanged(self._repo_cache_snapshot)
+        _assert_no_shared_lock_created(self._lock_leak_before)
 
     # ── helpers ──────────────────────────────────────────────────
 
@@ -1018,6 +1128,7 @@ class TestRunTransaction(unittest.TestCase):
             "pi_home_host": "/home/alice/.pi",
             "projection_parent_dir": self._proj_parent,
             "_create_projection": RecordingProjectionFactory(),
+            "_artifact_fetcher": self._artifact_bytes,
         }
         kwargs.update(overrides)
         return RunRequest(**kwargs)  # type: ignore[arg-type]
@@ -2274,11 +2385,16 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         at digest comparison — the call-count assertion is
         deterministic."""
         fixture = os.path.join(base_path, "single-ext.toml")
+        canonical = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "docker-constructor.toml",
+        ))
+        with open(canonical) as source:
+            build_prefix = source.read().split(
+                "\n[runtime.pi-extensions.", 1,
+            )[0]
         with open(fixture, "w") as fh:
+            fh.write(build_prefix + "\n\n")
             fh.write(
-                '[runtime]\n'
-                'revision = "2025-08-01T00:00:00Z"\n'
-                '\n'
                 '[runtime.pi-extensions.pi-read]\n'
                 'version = "0.2.0"\n'
                 '\n'
@@ -2682,10 +2798,15 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
             fetch_calls.append((url,))
             return b"known-wrong-bytes-for-deterministic-mismatch"
 
-        cache_root = os.path.join(
-            self._tmpdir.name,
-            "runtime-artifacts",
-            "blobs",
+        import tempfile
+        isolated_cache = tempfile.TemporaryDirectory(
+            prefix="digest-mismatch-cache-",
+            dir=self._tmpdir.name,
+        )
+        cache_root = os.path.join(isolated_cache.name, "blobs")
+        self.assertFalse(
+            os.path.lexists(cache_root),
+            "digest-mismatch cache must start absent and cannot reuse a hit",
         )
 
         cache_ops, restore_spy = self._install_cache_spy()
@@ -2735,6 +2856,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
             )
         finally:
             restore_spy()
+            isolated_cache.cleanup()
 
     # ── malformed post-materialization mount DTO ──────────────
 

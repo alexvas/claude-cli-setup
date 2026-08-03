@@ -35,7 +35,7 @@ This change depends on the direct-run projection, rendering, and installer APIs 
 
 The cache key is a canonical validated algorithm plus digest, encoded as filesystem-safe fixed components beneath a constructor-owned root such as `.docker-generated/runtime-artifacts/blobs/<algorithm>/<digest>.tgz`. Package names, versions, URLs, redirects, and caller-provided paths do not participate in path construction. Different selections with identical integrity share one blob.
 
-All cache paths pass no-symlink and containment checks. Cache directories are private to the invoking user; published blobs are regular files without group/other write access.
+All cache paths pass no-symlink and containment checks. The constructor-owned `blobs` and `locks` roots, per-algorithm directories, and temporary download directories are private to the invoking user. Their shared repository parents, `.docker-generated` and `.docker-generated/runtime-artifacts`, may retain group read/write permissions required by the rootless-Docker source workflow and are not made private by artifact materialization. Published blobs are regular files without group/other write access; restrictive permissions apply only to constructor-owned cache copies, never to repository source files.
 
 ### Publish verified blobs atomically under per-identity coordination
 

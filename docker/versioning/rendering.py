@@ -358,6 +358,22 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
             )
         all_dsts.add(p)
 
+    artifact_root = "/run/pi-cli/runtime-artifacts"
+    seen_sources: set[str] = set()
+    for mount in inputs.artifact_mounts:
+        source = os.path.realpath(mount.host_path)
+        target = os.path.normpath(mount.container_target)
+        if not os.path.isabs(mount.host_path) or source != mount.host_path:
+            raise ValueError("artifact mount source must be canonical and absolute")
+        if os.path.islink(mount.host_path) or not os.path.isfile(mount.host_path):
+            raise ValueError("artifact mount source must be a regular non-symlink file")
+        if not target.startswith(artifact_root + "/") or target != mount.container_target:
+            raise ValueError("artifact mount target must be canonical beneath fixed root")
+        if source in seen_sources or target in all_dsts or source == target:
+            raise ValueError("duplicate or aliased artifact mount")
+        seen_sources.add(source)
+        all_dsts.add(target)
+
 
 def _validate_projection_host_path(host_path: str) -> None:
     """Reject projection host paths that are forbidden or outside
@@ -523,6 +539,10 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     _emit_run_mount(args, "bind", inputs.main_project, inputs.main_project)
     for p in inputs.optional_projects:
         _emit_run_mount(args, "bind", p, p)
+    for mount in sorted(inputs.artifact_mounts, key=lambda item: item.container_target):
+        _emit_run_mount(
+            args, "bind", mount.host_path, mount.container_target, readonly=True,
+        )
 
     # Working directory
     args.extend(("--workdir", inputs.main_project))

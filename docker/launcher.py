@@ -505,6 +505,21 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             message=str(exc),
         )
 
+    # Reject malformed injected post-materialization DTOs before any effect.
+    for mount in request._artifact_mounts:
+        target = os.path.normpath(mount.container_target)
+        if (
+            target != mount.container_target
+            or not target.startswith("/run/pi-cli/runtime-artifacts/")
+            or not os.path.isabs(mount.host_path)
+            or os.path.islink(mount.host_path)
+            or not os.path.isfile(mount.host_path)
+        ):
+            return RunResult(
+                exit_kind=ExitKind.CONFIG,
+                message="Invalid runtime artifact mount",
+            )
+
     # ── Step 3: dry-run ─────────────────────────────────────
     if request.dry_run:
         import dataclasses
@@ -559,6 +574,62 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             run_args=run_args,
             display_string=display,
             projection_hash=projection_hash,
+        )
+
+    # ── Step 3b: materialize unique selected artifacts ─────
+    # Projection entries remain untouched, so packages sharing bytes retain
+    # their independent package/version/validation metadata.
+    try:
+        import docker.versioning.artifact_cache as artifact_cache
+
+        class _InjectedTransport:
+            def fetch_chunks(self, url: str):
+                assert request._artifact_fetcher is not None
+                data = request._artifact_fetcher(url)
+                if not isinstance(data, bytes):
+                    raise TypeError("artifact fetcher must return bytes")
+                yield data
+
+        transport = (_InjectedTransport() if request._artifact_fetcher
+                     else artifact_cache.HttpStreamingTransport())
+        configured_root = os.path.abspath(
+            artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
+        )
+        if os.path.islink(configured_root):
+            raise artifact_cache.ArtifactMaterializationError(
+                "containment", "runtime artifact cache root is a symlink",
+            )
+        root = os.path.realpath(configured_root)
+        selected = [
+            artifact_cache.SelectedArtifact(
+                url=entry.artifact.url,
+                integrity=entry.artifact.integrity,
+            )
+            for entry in effective.extensions.values()
+        ]
+        blobs = artifact_cache.materialize_selected_artifacts(
+            selected,
+            transport=transport,
+            filesystem=artifact_cache.LocalCacheFilesystem(),
+            lock_factory=artifact_cache.FileIdentityLockFactory(root),
+            temp_dir=artifact_cache.LocalTemporaryDirectory(),
+            cache_root=root,
+        )
+        materialized_mounts = tuple(
+            ArtifactMount(
+                host_path=blob.host_path,
+                container_target=(
+                    "/run/pi-cli/runtime-artifacts/"
+                    f"{blob.algorithm}/{blob.digest}.tgz"
+                ),
+            )
+            for blob in sorted(blobs.values(), key=lambda b: b.integrity)
+        )
+        artifact_mounts = request._artifact_mounts or materialized_mounts
+    except Exception as exc:
+        return RunResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"Failed to materialize runtime artifacts: {exc}",
         )
 
     # ── boundary validation ────────────────────────────────
@@ -632,7 +703,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 stdin_open=request.stdin_open,
                 command=request.command,
                 chown_on_start=request.chown_on_start,
-                artifact_mounts=request._artifact_mounts,
+                artifact_mounts=artifact_mounts,
             )
             run_args = render_run_vector(render_inputs)
 

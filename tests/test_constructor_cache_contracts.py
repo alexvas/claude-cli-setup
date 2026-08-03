@@ -518,14 +518,18 @@ class TestBoundaryProtocols(unittest.TestCase):
 
         required = {
             "blob_exists", "is_regular_file", "is_symlink",
-            "read_bytes", "mkdir_p", "write_temp", "publish", "remove",
+            "stat_blob", "read_bytes", "digest_file", "inspect_and_digest",
+            "ensure_secure_dir",
+            "create_temp", "append_temp", "finalize_temp", "cleanup_temp",
+            "quarantine_or_remove", "get_permissions",
+            "set_permissions", "atomic_publish",
         }
         self.assertEqual(required, self._method_names(CacheFilesystem))
 
     def test_streaming_transport_signature(self) -> None:
         from docker.versioning.artifact_cache import StreamingTransport
 
-        self.assertIn("fetch", self._method_names(StreamingTransport))
+        self.assertIn("fetch_chunks", self._method_names(StreamingTransport))
 
     def test_identity_lock_signatures(self) -> None:
         from docker.versioning.artifact_cache import IdentityLock
@@ -533,11 +537,6 @@ class TestBoundaryProtocols(unittest.TestCase):
         names = self._method_names(IdentityLock)
         self.assertIn("acquire", names)
         self.assertIn("release", names)
-
-    def test_clock_signature(self) -> None:
-        from docker.versioning.artifact_cache import Clock
-
-        self.assertIn("now", self._method_names(Clock))
 
     def test_temporary_directory_signature(self) -> None:
         from docker.versioning.artifact_cache import TemporaryDirectory
