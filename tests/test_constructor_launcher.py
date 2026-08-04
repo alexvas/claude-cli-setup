@@ -1429,7 +1429,7 @@ class TestRunTransaction(unittest.TestCase):
         )
 
         with mock.patch(
-            "docker.versioning.rendering.plan_dry_run_artifact_mounts",
+            "docker.launcher.plan_dry_run_artifact_mounts",
             side_effect=_patched_plan,
         ):
             result = self._run(req)
@@ -1632,6 +1632,588 @@ class TestRunTransaction(unittest.TestCase):
                 os.path.exists(result.projection_path),
                 "dry-run must not create projection files on disk",
             )
+
+    # ── dry-run cache hit/miss reporting ────────────────────
+
+    # ── helpers ─────────────────────────────────────────────
+
+    @staticmethod
+    def _ids_for_urls(urls: list[str]) -> list[str]:
+        """Compute sorted artifact_ids for *urls* using the
+        same deterministic derivation as the fixture."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+        return sorted(
+            _derive_artifact_id(
+                "sha512-"
+                + base64.b64encode(
+                    hashlib.sha512(
+                        TestRunTransaction._artifact_bytes(u),
+                    ).digest()
+                ).decode("ascii"),
+            )
+            for u in urls
+        )
+
+    @staticmethod
+    def _make_blob(
+        cache_root: str, url: str,
+    ) -> tuple[str, bytes]:
+        """Write a valid blob for *url* under *cache_root* and
+        return ``(artifact_id, test_bytes)``."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+        test_bytes = TestRunTransaction._artifact_bytes(url)
+        h = hashlib.sha512(test_bytes)
+        raw = base64.b64encode(h.digest()).decode("ascii")
+        integrity = f"sha512-{raw}"
+        artifact_id = _derive_artifact_id(integrity)
+        blob_path = os.path.join(cache_root, artifact_id)
+        os.makedirs(os.path.dirname(blob_path), exist_ok=True)
+        fd = os.open(
+            blob_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            mode=0o600,
+        )
+        try:
+            os.write(fd, test_bytes)
+        finally:
+            os.close(fd)
+        return artifact_id, test_bytes
+
+    # ── tests ────────────────────────────────────────────────
+
+    def test_dry_run_reports_all_misses_when_cache_empty(self) -> None:
+        """When no cache blobs exist, every unique resolved
+        artifact must appear in ``artifact_cache_misses`` and
+        none in ``artifact_cache_hits``."""
+        expected_ids = self._ids_for_urls([
+            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz",
+            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz",
+            "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
+        ])
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertEqual(
+            result.artifact_cache_hits, (),
+            "empty cache must produce zero hits",
+        )
+        self.assertEqual(
+            sorted(result.artifact_cache_misses),
+            expected_ids,
+            "every selected artifact must be a miss when cache is empty",
+        )
+
+    def test_dry_run_reports_hit_for_valid_cached_blob(self) -> None:
+        """A valid regular private blob whose bytes match the
+        declared SRI integrity is reported as a cache hit."""
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        artifact_id, _test_bytes = self._make_blob(
+            self._artifact_cache_root, url,
+        )
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertIn(
+            artifact_id, result.artifact_cache_hits,
+            "verified blob must be a cache hit",
+        )
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_misses,
+            "verified blob must not appear in misses",
+        )
+        expected_miss_ids = self._ids_for_urls([
+            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz",
+            "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
+        ])
+        self.assertEqual(
+            sorted(result.artifact_cache_misses),
+            expected_miss_ids,
+        )
+
+    def test_dry_run_reports_corrupt_blob_as_miss(self) -> None:
+        """A cache blob with bytes that do NOT match its declared
+        SRI integrity must be reported as a miss, not a hit."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        h = hashlib.sha512(self._artifact_bytes(url))
+        integrity = (
+            "sha512-"
+            + base64.b64encode(h.digest()).decode("ascii")
+        )
+        artifact_id = _derive_artifact_id(integrity)
+
+        # Write wrong bytes *with owner-only permissions* so the
+        # security gate passes but the digest comparison fails.
+        blob_path = os.path.join(
+            self._artifact_cache_root, artifact_id,
+        )
+        os.makedirs(os.path.dirname(blob_path), exist_ok=True)
+        fd = os.open(
+            blob_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            mode=0o600,
+        )
+        try:
+            os.write(fd, b"wrong bytes -- digest mismatch")
+        finally:
+            os.close(fd)
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_hits,
+            "corrupt blob must not be reported as a hit",
+        )
+        self.assertIn(
+            artifact_id, result.artifact_cache_misses,
+            "corrupt blob must be reported as a planned miss",
+        )
+
+    # ── no-follow containment: root / algorithm dir / leaf ──
+
+    def test_dry_run_symlinked_cache_root_is_miss(self) -> None:
+        """When the cache root itself is a symlink
+        (``O_NOFOLLOW`` fails), no blob is reachable and every
+        artifact is a miss."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+
+        url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
+        h = hashlib.sha512(self._artifact_bytes(url))
+        integrity = (
+            "sha512-"
+            + base64.b64encode(h.digest()).decode("ascii")
+        )
+        artifact_id = _derive_artifact_id(integrity)
+
+        # Write a valid blob at a real directory, then symlink
+        # the cache root to it so that the root itself is the
+        # symlink target.
+        real_root = os.path.join(self._tmpdir.name, "real-root")
+        self._make_blob(real_root, url)
+
+        # Remove the real cache root and replace with symlink.
+        os.makedirs(os.path.dirname(self._artifact_cache_root),
+                    exist_ok=True)
+        import shutil
+        if os.path.lexists(self._artifact_cache_root):
+            shutil.rmtree(self._artifact_cache_root)
+        os.symlink(real_root, self._artifact_cache_root)
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_hits,
+            "symlinked cache root must not yield any hit",
+        )
+        self.assertIn(
+            artifact_id, result.artifact_cache_misses,
+            "symlinked cache root must report artifacts as misses",
+        )
+
+    def test_dry_run_symlinked_algorithm_dir_external_is_miss(self) -> None:
+        """When the algorithm subdirectory is a symlink pointing
+        outside the cache root, the blob it points to is never
+        opened — the entry is a miss."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+
+        url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
+        h = hashlib.sha512(self._artifact_bytes(url))
+        integrity = (
+            "sha512-"
+            + base64.b64encode(h.digest()).decode("ascii")
+        )
+        artifact_id = _derive_artifact_id(integrity)
+
+        # Write valid bytes *outside* the cache root tree.
+        external_dir = os.path.join(self._tmpdir.name, "external")
+        external_blob = os.path.join(external_dir, artifact_id)
+        os.makedirs(os.path.dirname(external_blob), exist_ok=True)
+        fd = os.open(
+            external_blob, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            mode=0o600,
+        )
+        try:
+            os.write(fd, self._artifact_bytes(url))
+        finally:
+            os.close(fd)
+
+        # Symlink the algorithm directory to the external dir.
+        algo = artifact_id.split("/", 1)[0]
+        algo_dir = os.path.join(self._artifact_cache_root, algo)
+        os.makedirs(self._artifact_cache_root, exist_ok=True)
+        if os.path.lexists(algo_dir):
+            os.remove(algo_dir)
+        os.symlink(external_dir, algo_dir)
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_hits,
+            "symlinked algorithm dir must not yield a hit",
+        )
+        self.assertIn(
+            artifact_id, result.artifact_cache_misses,
+            "symlinked algorithm dir must be a miss",
+        )
+
+    def test_dry_run_symlinked_algorithm_dir_internal_is_miss(self) -> None:
+        """When the algorithm subdirectory is a symlink pointing
+        to another directory *inside* the cache root, O_NOFOLLOW
+        still rejects it as a miss."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+
+        url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
+        h = hashlib.sha512(self._artifact_bytes(url))
+        integrity = (
+            "sha512-"
+            + base64.b64encode(h.digest()).decode("ascii")
+        )
+        artifact_id = _derive_artifact_id(integrity)
+
+        # Create a real directory *inside* the cache root with a
+        # valid blob.
+        real_algo_dir = os.path.join(
+            self._artifact_cache_root, "real-sha512",
+        )
+        full_real_path = os.path.join(real_algo_dir,
+                                      artifact_id.split("/", 1)[1])
+        os.makedirs(os.path.dirname(full_real_path), exist_ok=True)
+        fd = os.open(
+            full_real_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            mode=0o600,
+        )
+        try:
+            os.write(fd, self._artifact_bytes(url))
+        finally:
+            os.close(fd)
+
+        # Symlink the algorithm directory to the internal real dir.
+        algo = artifact_id.split("/", 1)[0]
+        algo_dir = os.path.join(self._artifact_cache_root, algo)
+        if os.path.lexists(algo_dir):
+            os.remove(algo_dir)
+        os.symlink(real_algo_dir, algo_dir)
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_hits,
+            "internal symlinked algorithm dir must not yield a hit",
+        )
+        self.assertIn(
+            artifact_id, result.artifact_cache_misses,
+            "internal symlinked algorithm dir must be a miss",
+        )
+
+    def test_dry_run_symlinked_blob_is_miss(self) -> None:
+        """A leaf blob that itself is a symlink is rejected
+        by O_NOFOLLOW — zero bytes read, reported as a miss."""
+        import base64, hashlib
+        from docker.versioning.model import _derive_artifact_id
+
+        url = "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz"
+        h = hashlib.sha512(self._artifact_bytes(url))
+        integrity = (
+            "sha512-"
+            + base64.b64encode(h.digest()).decode("ascii")
+        )
+        artifact_id = _derive_artifact_id(integrity)
+
+        # Write a valid blob at an alternative path, then
+        # symlink the expected leaf path to it.
+        real_blob_dir = os.path.join(
+            self._artifact_cache_root, "real-blobs",
+        )
+        real_blob = os.path.join(real_blob_dir,
+                                 artifact_id.split("/", 1)[1])
+        os.makedirs(os.path.dirname(real_blob), exist_ok=True)
+        fd = os.open(
+            real_blob, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            mode=0o600,
+        )
+        try:
+            os.write(fd, self._artifact_bytes(url))
+        finally:
+            os.close(fd)
+
+        # Create the expected algorithm directory and symlink
+        # the leaf blob name to the real blob.
+        leaf_dir = os.path.join(
+            self._artifact_cache_root,
+            artifact_id.rsplit("/", 1)[0],
+        )
+        os.makedirs(leaf_dir, exist_ok=True)
+        leaf_path = os.path.join(
+            self._artifact_cache_root, artifact_id,
+        )
+        os.symlink(real_blob, leaf_path)
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_hits,
+            "symlinked blob must not be reported as a hit",
+        )
+        self.assertIn(
+            artifact_id, result.artifact_cache_misses,
+            "symlinked blob must be reported as a miss",
+        )
+
+    def test_dry_run_does_not_mutate_cache(self) -> None:
+        """Dry-run inspection SHALL NOT create, remove, rename,
+        chmod, lock, or otherwise mutate any cache directory
+        contents."""
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        self._make_blob(self._artifact_cache_root, url)
+
+        # Snapshot the cache tree before dry-run.
+        before = set()
+        for dirpath, dirnames, filenames in os.walk(
+            self._artifact_cache_root,
+        ):
+            for fn in filenames:
+                fp = os.path.join(dirpath, fn)
+                st = os.lstat(fp)
+                before.add((
+                    os.path.relpath(fp, self._artifact_cache_root),
+                    st.st_mode,
+                    st.st_mtime,
+                    st.st_size,
+                ))
+            for dn in dirnames:
+                dp = os.path.join(dirpath, dn)
+                st = os.lstat(dp)
+                before.add((
+                    os.path.relpath(dp, self._artifact_cache_root),
+                    st.st_mode,
+                    st.st_mtime,
+                    st.st_size,
+                ))
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+
+        after = set()
+        for dirpath, dirnames, filenames in os.walk(
+            self._artifact_cache_root,
+        ):
+            for fn in filenames:
+                fp = os.path.join(dirpath, fn)
+                st = os.lstat(fp)
+                after.add((
+                    os.path.relpath(fp, self._artifact_cache_root),
+                    st.st_mode,
+                    st.st_mtime,
+                    st.st_size,
+                ))
+            for dn in dirnames:
+                dp = os.path.join(dirpath, dn)
+                st = os.lstat(dp)
+                after.add((
+                    os.path.relpath(dp, self._artifact_cache_root),
+                    st.st_mode,
+                    st.st_mtime,
+                    st.st_size,
+                ))
+
+        self.assertEqual(
+            before, after,
+            "dry-run must not mutate cache (entries, modes, "
+            "mtime, or sizes changed)",
+        )
+
+    def test_dry_run_preserves_blob_atime(self) -> None:
+        """Reading a valid cache blob during dry-run inspection
+        must not update its access time (``O_NOATIME``)."""
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        artifact_id, _test_bytes = self._make_blob(
+            self._artifact_cache_root, url,
+        )
+        blob_path = os.path.join(
+            self._artifact_cache_root, artifact_id,
+        )
+
+        # Set atime to a known value in the past so we can
+        # detect any update.
+        st_before = os.stat(blob_path)
+        _past_atime = st_before.st_atime - 3600.0
+        _past_mtime = st_before.st_mtime
+        os.utime(blob_path, (_past_atime, _past_mtime))
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+
+        st_after = os.stat(blob_path)
+        self.assertAlmostEqual(
+            st_after.st_atime, _past_atime,
+            msg="dry-run must not update blob atime",
+        )
+
+    def test_dry_run_noatime_denied_is_miss(self) -> None:
+        """When ``O_NOATIME`` is denied (``PermissionError``),
+        ``inspect_verified_blob_readonly`` must return ``False``
+        — never fall back to a plain read that would update atime."""
+        from unittest import mock
+
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        artifact_id, _test_bytes = self._make_blob(
+            self._artifact_cache_root, url,
+        )
+
+        # Intercept os.open: raise PermissionError for any call
+        # that includes O_NOATIME, then delegate to the real
+        # os.open for all other calls.
+        _real_open = os.open
+        _NOATIME = getattr(os, "O_NOATIME", 0x40000)
+
+        def _guarded_open(path, flags, *args, **kwargs):
+            if flags & _NOATIME:
+                raise PermissionError(
+                    "O_NOATIME not permitted (simulated)",
+                )
+            return _real_open(path, flags, *args, **kwargs)
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        with mock.patch(
+            "docker.versioning.artifact_cache.os.open",
+            side_effect=_guarded_open,
+        ):
+            result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertNotIn(
+            artifact_id, result.artifact_cache_hits,
+            "O_NOATIME denied must not yield a hit",
+        )
+        self.assertIn(
+            artifact_id, result.artifact_cache_misses,
+            "O_NOATIME denied must report artifact as a miss",
+        )
+        # The blob on disk must still exist and be unchanged —
+        # the miss was a rejection, not a deletion.
+        blob_path = os.path.join(
+            self._artifact_cache_root, artifact_id,
+        )
+        self.assertTrue(
+            os.path.isfile(blob_path),
+            "blob must survive noatime-denied dry-run unchanged",
+        )
+
+    def test_inspect_rejects_unsupported_algorithm(self) -> None:
+        """``inspect_verified_blob_readonly`` must return
+        ``False`` for an unsupported integrity algorithm without
+        raising — even when a file happens to exist at the
+        derived path."""
+        from docker.versioning import artifact_cache as _ac
+
+        # Write a file at the path that sha999-AQID.tgz would
+        # resolve to — if the function didn't short-circuit on
+        # the algorithm it would try to hash and fail.
+        algo_dir = os.path.join(self._artifact_cache_root, "sha999")
+        os.makedirs(algo_dir, exist_ok=True)
+        blob_path = os.path.join(algo_dir, "AQID.tgz")
+        fd = os.open(
+            blob_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            mode=0o600,
+        )
+        try:
+            os.write(fd, b"some bytes")
+        finally:
+            os.close(fd)
+
+        result = _ac.inspect_verified_blob_readonly(
+            "sha999-AQID",
+            cache_root=self._artifact_cache_root,
+        )
+        self.assertFalse(
+            result,
+            "unsupported algorithm must return False",
+        )
+
+    def test_inspect_rejects_malformed_integrity(self) -> None:
+        """``inspect_verified_blob_readonly`` must return
+        ``False`` for malformed integrity strings (missing dash,
+        non-base64 digest) rather than raising."""
+        from docker.versioning import artifact_cache as _ac
+
+        for malformed in (
+            "not-an-sri",
+            "sha512",
+            "sha512-",
+            "sha512-!!!",
+            "",
+        ):
+            with self.subTest(integrity=malformed):
+                result = _ac.inspect_verified_blob_readonly(
+                    malformed,
+                    cache_root=self._artifact_cache_root,
+                )
+                self.assertFalse(
+                    result,
+                    f"malformed integrity {malformed!r} "
+                    "must return False",
+                )
 
     # ── missing boundaries ───────────────────────────────────────
 

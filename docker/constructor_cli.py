@@ -746,6 +746,8 @@ def _real_dispatcher(
                 "container_name": result.container_name,
                 "projection_hash": result.projection_hash,
                 "mode": "interactive" if interactive else "captured",
+                "artifact_cache_hits": list(result.artifact_cache_hits),
+                "artifact_cache_misses": list(result.artifact_cache_misses),
             }
             # Preserve raw execution outcome for diagnosis.
             # Under --tty Docker may merge stderr into stdout;
@@ -1194,17 +1196,38 @@ def _render_data_text(data: object) -> str:
     """Render CommandResult data for text-mode display.
 
     Dicts with a ``display_string`` key (build dry-run, doctor
-    summaries) render that string verbatim.
+    summaries, run dry-run) render that string verbatim, followed
+    by artifact cache hit/miss counts when present.
 
     Run-failure diagnostics carry a ``mode`` field:
     ``"interactive"`` means output was streamed to the terminal
     (nothing to re-render); ``"captured"`` surfaces ``stdout``
     and/or ``stderr`` with labels.
     """
-    if isinstance(data, dict) and "display_string" in data:
+    if isinstance(data, dict) and data.get("display_string"):
         ds = data["display_string"]
+        parts: list[str] = []
         if ds is not None and str(ds):
-            return str(ds)
+            parts.append(str(ds))
+        hits: list[str] = (
+            list(data.get("artifact_cache_hits") or ())
+            if isinstance(data, dict) else []
+        )
+        misses: list[str] = (
+            list(data.get("artifact_cache_misses") or ())
+            if isinstance(data, dict) else []
+        )
+        if hits:
+            parts.append(
+                f"Cache hits ({len(hits)}): "
+                + ", ".join(hits),
+            )
+        if misses:
+            parts.append(
+                f"Planned downloads ({len(misses)}): "
+                + ", ".join(misses),
+            )
+        return "\n       ".join(parts) if parts else ""
     # Run-failure diagnostics: only render captured streams.
     if isinstance(data, dict) and data.get("mode") == "interactive":
         # Output was streamed to the terminal — nothing to

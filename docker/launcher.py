@@ -20,13 +20,20 @@ performed ad-hoc by the module.
 from __future__ import annotations
 
 import enum
+import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Protocol, Mapping
 
-from docker.versioning.artifact_cache import DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
+import docker.versioning.artifact_cache as artifact_cache
 from docker.versioning.dispatch_types import ExitKind
-from docker.versioning.rendering import RunRenderInputs, plan_artifact_mounts
+from docker.versioning.model import _derive_artifact_id
+from docker.versioning.rendering import (
+    RunRenderInputs,
+    plan_artifact_mounts,
+    plan_dry_run_artifact_mounts,
+)
 from types import MappingProxyType
 
 
@@ -442,6 +449,12 @@ class RunResult:
     container_name: str | None = None
     """Allocated pi-N name (for test assertions)."""
 
+    artifact_cache_hits: tuple[str, ...] = ()
+    """Artifact IDs already present and valid in the cache (dry-run only)."""
+
+    artifact_cache_misses: tuple[str, ...] = ()
+    """Artifact IDs not yet materialized in the cache (dry-run only)."""
+
 
 def orchestrate_run(request: RunRequest) -> RunResult:
     """Execute the full run transaction.
@@ -501,12 +514,6 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # ── Step 3: dry-run ─────────────────────────────────────
     if request.dry_run:
         import dataclasses
-        import hashlib
-        import json
-
-        from docker.versioning.rendering import (
-            plan_dry_run_artifact_mounts,
-        )
 
         try:
             # Compute projection hash from the resolved effective
@@ -528,6 +535,26 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             # runtime-artifacts root.
             dry_run_mounts = \
                 plan_dry_run_artifact_mounts(selected_artifacts)
+            # Inspect the cache read-only — verify each unique
+            # blob's bytes against its declared SRI integrity
+            # using the no-follow, descriptor-relative inspection
+            # API.  Corrupt, missing, symlinked, or non-regular
+            # entries are reported as planned misses.
+            seen: set[str] = set()
+            hits: list[str] = []
+            misses: list[str] = []
+            for art in selected_artifacts:
+                if art.integrity in seen:
+                    continue
+                seen.add(art.integrity)
+                artifact_id = _derive_artifact_id(art.integrity)
+                if artifact_cache.inspect_verified_blob_readonly(
+                    art.integrity,
+                    cache_root=artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
+                ):
+                    hits.append(artifact_id)
+                else:
+                    misses.append(artifact_id)
             # Render a dummy projection for display purposes only.
             # No file is ever created.
             projection_container_path = (
@@ -563,6 +590,8 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             run_args=run_args,
             display_string=display,
             projection_hash=projection_hash,
+            artifact_cache_hits=tuple(hits),
+            artifact_cache_misses=tuple(misses),
         )
 
     # ── Step 3b: materialize unique selected artifacts ─────
@@ -571,8 +600,6 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # package/version/metadata identity.
 
     try:
-        import docker.versioning.artifact_cache as artifact_cache
-
         class _InjectedTransport:
             def fetch_chunks(self, url: str):
                 assert request._artifact_fetcher is not None

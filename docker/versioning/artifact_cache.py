@@ -379,6 +379,113 @@ def _compute_digest(data: bytes, algorithm: str) -> str:
     return base64.b64encode(h.digest()).decode("ascii")
 
 
+def inspect_verified_blob_readonly(
+    integrity: str,
+    *,
+    cache_root: str,
+) -> bool:
+    """Read-only, no-follow, descriptor-relative cache inspection.
+
+    Verifies that a content-addressed blob for *integrity* exists
+    under *cache_root*, is a regular file reached without following
+    any symlink component (root, algorithm directory, or leaf), has
+    owner-only permissions, and its bytes match the declared SRI
+    digest.
+
+    **No mutation** — the function never creates, removes, renames,
+    ``chmod``, locks, quarantines, or repairs anything on disk.
+    Every file descriptor is closed before returning.
+
+    Returns ``True`` for a valid cache hit.  Returns ``False`` for
+    missing, corrupt, symlinked, non-regular, overly-permissive, or
+    otherwise unsafe entries.  No exception escapes.
+    """
+    import hashlib
+    import stat as _stat
+
+    try:
+        algo, raw_expected, safe_digest = \
+            _sri_to_algorithm_digest(integrity)
+    except (AttributeError, ValueError):
+        return False
+
+    if algo not in _SUPPORTED_ALGORITHMS:
+        return False
+
+    blob_name = f"{safe_digest}.tgz"
+
+    # ── open cache root (O_NOFOLLOW: reject symlinked root) ──
+    root_rdonly = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_fd = os.open(cache_root, root_rdonly)
+    except OSError:
+        return False
+
+    try:
+        # ── open algorithm subdirectory ──
+        try:
+            algo_fd = os.open(algo, root_rdonly, dir_fd=root_fd)
+        except OSError:
+            return False
+        try:
+            # Verify algorithm component is really a directory.
+            try:
+                algo_st = os.fstat(algo_fd)
+            except OSError:
+                return False
+            if not _stat.S_ISDIR(algo_st.st_mode):
+                return False
+
+            # ── open blob leaf (O_NOFOLLOW + O_NOATIME) ──
+            # O_NOATIME is required to keep dry-run genuinely
+            # non-mutating.  When the flag is unavailable at the
+            # OS level or denied (PermissionError — caller does
+            # not own the file), treat the blob as unreachable.
+            blob_flags: int = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            _noatime: int = getattr(os, "O_NOATIME", 0)
+            if not _noatime:
+                return False
+            try:
+                blob_fd = os.open(
+                    blob_name, blob_flags | _noatime, dir_fd=algo_fd,
+                )
+            except PermissionError:
+                return False
+            except OSError:
+                return False
+            try:
+                try:
+                    blob_st = os.fstat(blob_fd)
+                except OSError:
+                    return False
+
+                # ── regular file only ──
+                if not _stat.S_ISREG(blob_st.st_mode):
+                    return False
+
+                # ── owner-only permissions ──
+                if blob_st.st_mode & 0o077:
+                    return False
+
+                # ── hash and compare ──
+                hasher = hashlib.new(algo)
+                while True:
+                    chunk = os.read(blob_fd, 64 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                actual_raw = base64.b64encode(
+                    hasher.digest(),
+                ).decode("ascii")
+                return actual_raw == raw_expected
+            finally:
+                os.close(blob_fd)
+        finally:
+            os.close(algo_fd)
+    finally:
+        os.close(root_fd)
+
+
 # ── cache safety validation ───────────────────────────────────────────
 
 
