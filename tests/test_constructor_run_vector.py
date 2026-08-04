@@ -31,6 +31,7 @@ def _render(*,
             stdin_open: bool = True,
             command: tuple[str, ...] = (),
             chown_on_start: str | None = None,
+            artifact_mounts: tuple = (),
             ) -> tuple[str, ...]:
     return render_run_vector(RunRenderInputs(
         image=image,
@@ -45,6 +46,7 @@ def _render(*,
         stdin_open=stdin_open,
         command=command,
         chown_on_start=chown_on_start,
+        artifact_mounts=artifact_mounts,
     ))
 
 
@@ -810,6 +812,530 @@ def _collect_env(args: tuple[str, ...]) -> dict[str, str]:
             k, _, v = raw.partition("=")
             env[k] = v
     return env
+
+
+# ── 6.2.4  Artifact-mount selection + mount planning ─────────────
+
+
+class TestArtifactMounts(unittest.TestCase):
+    """One deterministic read-only mount per unique integrity, fixed
+    container targets beneath ``/run/pi-cli/runtime-artifacts``, no
+    cache-root mounts, host_path passed through from verified blobs
+    — all exercised through the **production** ``plan_artifact_mounts``
+    boundary.
+
+    Rendering of ``--mount …,readonly`` in the Docker vector, host
+    regular-file/symlink validation, and canonical cache-source
+    verification belong to task 5.3.
+    """
+
+    # ── helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _integrity(alg: str = "sha512", seed: str = "A") -> str:
+        """Return a well-formed SRI string for the given algorithm."""
+        import base64
+        lengths = {"sha256": 32, "sha384": 48, "sha512": 64}
+        raw = (seed.encode() * lengths[alg])[:lengths[alg]]
+        return f"{alg}-{base64.b64encode(raw).decode()}"
+
+    @staticmethod
+    def _inventory(**extensions) -> "RuntimeInventory":
+        """Build a minimal RuntimeInventory from extension specs.
+
+        Each value is a dict with keys: ``pkg``, ``version``,
+        ``integrity``, ``url`` (optional), and optionally
+        ``extra_artifacts`` (a dict of version→integrity for
+        additional catalog entries).
+        """
+        from docker.versioning.inventory import (
+            NpmArtifact, NpmSource, NpmUpdate, OverridePolicy,
+            PiExtensionEntry, RuntimeInventory, RuntimeValidation,
+        )
+        from docker.versioning.constraints import parse_constraint
+
+        entries: dict[str, PiExtensionEntry] = {}
+        for name, spec in extensions.items():
+            pkg = spec["pkg"]
+            ver = spec["version"]
+            integ = spec["integrity"]
+            url = spec.get(
+                "url",
+                f"https://registry.npmjs.org/{pkg}/-/"
+                f"{pkg.rsplit('/', 1)[-1] if '/' in pkg else pkg}"
+                f"-{ver}.tgz",
+            )
+            artifacts = {ver: NpmArtifact(url=url, integrity=integ)}
+            for extra_ver, extra_integ in (
+                spec.get("extra_artifacts", {}).items()
+            ):
+                extra_url = (
+                    f"https://registry.npmjs.org/{pkg}/"
+                    f"-/{pkg.rsplit('/', 1)[-1] if '/' in pkg else pkg}"
+                    f"-{extra_ver}.tgz"
+                )
+                artifacts[extra_ver] = NpmArtifact(
+                    url=extra_url, integrity=extra_integ,
+                )
+            entries[name] = PiExtensionEntry(
+                version=ver,
+                source=NpmSource(package=pkg),
+                update=NpmUpdate(stable_only=True),
+                artifacts=artifacts,
+                validation=RuntimeValidation(metadata_file="package.json"),
+                override=OverridePolicy(
+                    constraint=parse_constraint(">=1.0.0"),
+                    allow_prerelease=True,
+                    scheme="numeric",
+                ),
+            )
+        return RuntimeInventory(pi_extensions=entries)
+
+    @staticmethod
+    def _blob_result(*, integrity: str, host_path: str = "") -> "VerifiedCacheBlob":
+        """Synthetic ``VerifiedCacheBlob`` — no filesystem access."""
+        from docker.versioning.artifact_cache import (
+            VerifiedCacheBlob, DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
+        )
+        algo, raw_b64 = integrity.split("-", 1)
+        digest = raw_b64.replace("+", "-").replace("/", "_")
+        if not host_path:
+            host_path = (
+                f"/home/dev/work/my-project/"
+                f"{DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT}/"
+                f"{algo}/{digest}.tgz"
+            )
+        return VerifiedCacheBlob(
+            algorithm=algo,
+            digest=digest,
+            integrity=integrity,
+            host_path=host_path,
+        )
+
+    @staticmethod
+    def _plan(blobs):
+        """Thin forward to the production boundary."""
+        from docker.versioning.rendering import plan_artifact_mounts
+        return plan_artifact_mounts(blobs)
+
+    # ── unique selected integrity (resolve_runtime) ──────────
+
+    def test_same_integrity_across_extensions_produces_one_selection(self):
+        from docker.versioning.effective import resolve_runtime
+        shared = self._integrity()
+        inv = self._inventory(
+            a={"pkg": "@s/a", "version": "1.0.0", "integrity": shared},
+            b={"pkg": "@s/b", "version": "2.0.0", "integrity": shared},
+        )
+        selected, _ = resolve_runtime(inv, {})
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].integrity, shared)
+
+    def test_distinct_integrities_produce_distinct_selections(self):
+        from docker.versioning.effective import resolve_runtime
+        inv = self._inventory(
+            a={"pkg": "@s/a", "version": "1.0.0",
+               "integrity": self._integrity(seed="A")},
+            b={"pkg": "@s/b", "version": "1.0.0",
+               "integrity": self._integrity(seed="B")},
+        )
+        selected, _ = resolve_runtime(inv, {})
+        integrities = {s.integrity for s in selected}
+        self.assertEqual(len(integrities), 2)
+
+    def test_unselected_artifact_version_not_in_selected_set(self):
+        from docker.versioning.effective import resolve_runtime
+        default_integ = self._integrity(seed="D")
+        alt_integ = self._integrity(seed="X")
+        inv = self._inventory(
+            ext={"pkg": "@s/ext", "version": "1.0.0",
+                 "integrity": default_integ,
+                 "extra_artifacts": {"2.0.0": alt_integ}},
+        )
+        selected, _ = resolve_runtime(inv, {})
+        integrities = {s.integrity for s in selected}
+        self.assertIn(default_integ, integrities)
+        self.assertNotIn(alt_integ, integrities)
+
+    # ── mount planning: deterministic per-integrity output ───
+
+    def test_plan_one_mount_per_unique_integrity(self):
+        """Duplicate integrities are collapsed into a single mount."""
+        shared = self._integrity()
+        mounts = self._plan([
+            self._blob_result(integrity=shared, host_path="/cache/a.tgz"),
+            self._blob_result(integrity=shared, host_path="/cache/b.tgz"),
+        ])
+        self.assertEqual(len(mounts), 1)
+
+    def test_plan_distinct_integrities_produce_distinct_mounts(self):
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(seed="A"),
+                              host_path="/cache/a.tgz"),
+            self._blob_result(integrity=self._integrity(seed="B"),
+                              host_path="/cache/b.tgz"),
+        ])
+        self.assertEqual(len(mounts), 2)
+
+    def test_plan_no_unselected_integrity_in_mounts(self):
+        """Only integrities passed to the planner appear in mounts."""
+        from docker.versioning.model import _derive_artifact_id
+
+        default_integ = self._integrity(seed="D")
+        alt_integ = self._integrity(seed="X")
+        mounts = self._plan([
+            self._blob_result(integrity=default_integ, host_path="/cache/d.tgz"),
+        ])
+        targets = {m.container_target for m in mounts}
+        alt_target = f"/run/pi-cli/runtime-artifacts/{_derive_artifact_id(alt_integ)}"
+        self.assertNotIn(alt_target, targets)
+        self.assertEqual(len(mounts), 1)
+
+    # ── mount planning: host_path pass-through ───────────────
+
+    def test_plan_passes_host_path_through_from_blob(self):
+        """The planner MUST use the blob's verified host_path, not
+        reconstruct a synthetic cache path."""
+        custom = "/custom/verified/path/to/blob.tgz"
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(),
+                              host_path=custom),
+        ])
+        self.assertEqual(mounts[0].host_path, custom)
+
+    def test_plan_host_paths_follow_default_cache_root(self):
+        """When no explicit host_path is supplied the synthetic blob
+        uses ``DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT``."""
+        from docker.versioning.artifact_cache import (
+            DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
+        )
+        blob = self._blob_result(integrity=self._integrity())
+        self.assertIn(DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT, blob.host_path)
+        mounts = self._plan([blob])
+        self.assertEqual(mounts[0].host_path, blob.host_path)
+
+    # ── mount planning: fixed container targets ──────────────
+
+    def test_plan_targets_beneath_fixed_artifact_root(self):
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(alg="sha256",
+                                                         seed="H"),
+                              host_path="/cache/h.tgz"),
+            self._blob_result(integrity=self._integrity(alg="sha512",
+                                                         seed="J"),
+                              host_path="/cache/j.tgz"),
+        ])
+        self.assertGreater(len(mounts), 0)
+        root = "/run/pi-cli/runtime-artifacts"
+        for m in mounts:
+            self.assertTrue(
+                m.container_target.startswith(root + "/"),
+                f"target {m.container_target!r} not beneath {root}",
+            )
+
+    def test_plan_targets_always_end_with_tgz(self):
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(),
+                              host_path="/cache/x.tgz"),
+        ])
+        for m in mounts:
+            self.assertTrue(
+                m.container_target.endswith(".tgz"),
+                f"target {m.container_target!r} must end with .tgz",
+            )
+
+    def test_plan_container_targets_are_unique(self):
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(seed="M"),
+                              host_path="/cache/m.tgz"),
+            self._blob_result(integrity=self._integrity(seed="N"),
+                              host_path="/cache/n.tgz"),
+        ])
+        targets = [m.container_target for m in mounts]
+        self.assertEqual(len(targets), len(set(targets)))
+
+    def test_plan_mounts_sorted_by_container_target(self):
+        """plan_artifact_mounts must return mounts sorted by
+        container_target for deterministic rendering."""
+        # Two integrities whose artifact_ids sort in reverse order.
+        mounts = self._plan([
+            self._blob_result(
+                integrity=self._integrity(alg="sha512", seed="Z"),
+                host_path="/cache/z.tgz",
+            ),
+            self._blob_result(
+                integrity=self._integrity(alg="sha256", seed="A"),
+                host_path="/cache/a.tgz",
+            ),
+        ])
+        targets = [m.container_target for m in mounts]
+        self.assertEqual(targets, sorted(targets))
+
+    def test_plan_container_root_is_not_configurable(self):
+        """The container root ``/run/pi-cli/runtime-artifacts`` is
+        a private module constant — every target must start there."""
+        from docker.versioning.rendering import _RUNTIME_ARTIFACT_ROOT
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(),
+                              host_path="/cache/x.tgz"),
+        ])
+        for m in mounts:
+            self.assertTrue(
+                m.container_target.startswith(_RUNTIME_ARTIFACT_ROOT + "/"),
+                f"{m.container_target!r} must start with "
+                f"{_RUNTIME_ARTIFACT_ROOT!r}",
+            )
+
+    # ── mount planning: no cache-root mount ──────────────────
+
+    def test_plan_no_cache_root_directory_in_targets(self):
+        mounts = self._plan([
+            self._blob_result(integrity=self._integrity(),
+                              host_path="/cache/q.tgz"),
+            self._blob_result(integrity=self._integrity(seed="Z"),
+                              host_path="/cache/z.tgz"),
+        ])
+        root = "/run/pi-cli/runtime-artifacts"
+        for m in mounts:
+            self.assertNotEqual(m.container_target, root)
+            self.assertNotEqual(m.container_target, root + "/")
+            self.assertGreater(m.container_target.count("/"), 3)
+
+    # ── mount planning: edge cases ───────────────────────────
+
+    def test_plan_empty_blobs_returns_empty_tuple(self):
+        mounts = self._plan([])
+        self.assertEqual(mounts, ())
+
+    def test_plan_is_deterministic(self):
+        blobs = [
+            self._blob_result(integrity=self._integrity(),
+                              host_path="/cache/x.tgz"),
+        ]
+        a = self._plan(blobs)
+        b = self._plan(blobs)
+        self.assertEqual(a, b)
+
+    # ── rendering edge: zero mounts / relative source ────────
+
+    def test_zero_artifact_mounts_produces_valid_output(self):
+        args = _render(artifact_mounts=())
+        self.assertEqual(args[:2], ("docker", "run"))
+        self.assertIn("--rm", args)
+
+    def test_rejects_relative_host_source(self):
+        """Artifact mount source must be an absolute path — caught
+        before any filesystem access."""
+        from docker.versioning.rendering import ArtifactMount
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                ArtifactMount(
+                    host_path="cache/sha512/blob.tgz",
+                    container_target=(
+                        "/run/pi-cli/runtime-artifacts/sha512/blob.tgz"
+                    ),
+                ),
+            ))
+        self.assertIn("canonical", str(ctx.exception).lower())
+
+
+# ── 6.2.5  Artifact mount rendering ─────────────────────────────
+
+
+class TestArtifactMountRendering(unittest.TestCase):
+    """Rendering of ``ArtifactMount`` DTOs through ``render_run_vector``:
+    each mount produces exactly one ``--mount type=bind,…,readonly``
+    argument pair, sorted by container_target, no shell execution,
+    no display-string reuse."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile, os as _os
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._blob_a = _os.path.join(cls._tmp.name, "a.tgz")
+        cls._blob_b = _os.path.join(cls._tmp.name, "b.tgz")
+        for p in (cls._blob_a, cls._blob_b):
+            with open(p, "wb") as fh:
+                fh.write(b"verified")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    @staticmethod
+    def _mount(*, host_path: str, target: str) -> "ArtifactMount":
+        from docker.versioning.rendering import ArtifactMount
+        return ArtifactMount(host_path=host_path, container_target=target)
+
+    # ── happy path ───────────────────────────────────────────
+
+    def test_one_mount_produces_one_mount_arg_pair(self):
+        """Each ArtifactMount → one ``--mount <opts>`` token pair."""
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha512/abc.tgz",
+            ),
+        ))
+        # Count --mount tokens whose destination is an artifact target.
+        art_mounts = [
+            i for i, tok in enumerate(args)
+            if tok == "--mount"
+            and "runtime-artifacts" in args[i + 1]
+        ]
+        self.assertEqual(len(art_mounts), 1)
+
+    def test_multiple_mounts_produce_multiple_arg_pairs(self):
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha256/aaa.tgz",
+            ),
+            self._mount(
+                host_path=self._blob_b,
+                target="/run/pi-cli/runtime-artifacts/sha512/bbb.tgz",
+            ),
+        ))
+        art_mounts = [
+            i for i, tok in enumerate(args)
+            if tok == "--mount"
+            and "runtime-artifacts" in args[i + 1]
+        ]
+        self.assertEqual(len(art_mounts), 2)
+
+    def test_mount_opts_is_single_string_not_shell_split(self):
+        """The options string following ``--mount`` is a single
+        comma-separated value, not tokenised by whitespace."""
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha512/abc.tgz",
+            ),
+        ))
+        # Find the --mount token for our artifact.
+        for i, tok in enumerate(args):
+            if tok == "--mount" and "runtime-artifacts" in args[i + 1]:
+                opts = args[i + 1]
+                self.assertIn("type=bind", opts)
+                self.assertIn("src=" + self._blob_a, opts)
+                self.assertIn(
+                    "dst=/run/pi-cli/runtime-artifacts/", opts,
+                )
+                self.assertIn(",readonly", opts)
+                # Must be a single string — no spaces to split on
+                # (the source/dest are absolute paths without spaces).
+                self.assertNotIn(" ", opts,
+                                 "mount options must be one token")
+                return
+        self.fail("artifact --mount not found in rendered vector")
+
+    # ── ordering ─────────────────────────────────────────────
+
+    def test_artifact_mounts_sorted_by_container_target(self):
+        """The renderer emits artifact mounts in
+        container_target order."""
+        # Insert in reverse alphabetical target order.
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha512/z.tgz",
+            ),
+            self._mount(
+                host_path=self._blob_b,
+                target="/run/pi-cli/runtime-artifacts/sha256/a.tgz",
+            ),
+        ))
+        # Collect artifact destinations in emission order.
+        seen: list[str] = []
+        for i, tok in enumerate(args):
+            if tok == "--mount" and "runtime-artifacts" in args[i + 1]:
+                for part in args[i + 1].split(","):
+                    if part.startswith("dst="):
+                        seen.append(part.split("=", 1)[1])
+        self.assertEqual(seen, sorted(seen))
+
+    # ── readonly flag ────────────────────────────────────────
+
+    def test_every_artifact_mount_has_readonly(self):
+        """Every artifact mount MUST include the ``readonly`` flag."""
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha512/first.tgz",
+            ),
+            self._mount(
+                host_path=self._blob_b,
+                target="/run/pi-cli/runtime-artifacts/sha256/second.tgz",
+            ),
+        ))
+        for i, tok in enumerate(args):
+            if tok == "--mount" and "runtime-artifacts" in args[i + 1]:
+                self.assertIn(
+                    ",readonly", args[i + 1],
+                    f"artifact mount {args[i+1]!r} missing readonly",
+                )
+
+    # ── host / target passthrough ────────────────────────────
+
+    def test_source_is_host_path(self):
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha512/x.tgz",
+            ),
+        ))
+        for i, tok in enumerate(args):
+            if tok == "--mount" and "runtime-artifacts" in args[i + 1]:
+                self.assertIn("src=" + self._blob_a, args[i + 1])
+                return
+        self.fail("artifact --mount not found")
+
+    def test_destination_is_container_target(self):
+        target = (
+            "/run/pi-cli/runtime-artifacts/sha512/"
+            "0000000000000000000000000000000000000000.tgz"
+        )
+        args = _render(artifact_mounts=(
+            self._mount(host_path=self._blob_a, target=target),
+        ))
+        for i, tok in enumerate(args):
+            if tok == "--mount" and "runtime-artifacts" in args[i + 1]:
+                self.assertIn("dst=" + target, args[i + 1])
+                return
+        self.fail("artifact --mount not found")
+
+    # ── no display-string reuse ──────────────────────────────
+
+    def test_rendered_output_is_arg_tuple(self):
+        """render_run_vector returns ``tuple[str, ...]``, never a
+        shell command string."""
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._blob_a,
+                target="/run/pi-cli/runtime-artifacts/sha512/x.tgz",
+            ),
+        ))
+        self.assertIsInstance(args, tuple)
+        self.assertTrue(all(isinstance(t, str) for t in args))
+        # Must start with "docker", "run" — not a shell string.
+        self.assertEqual(args[:2], ("docker", "run"))
+        # No shell meta-characters wrapping the whole thing.
+        self.assertNotIn("&&", args)
+        self.assertNotIn("|", args)
+
+    # ── zero mounts ──────────────────────────────────────────
+
+    def test_no_artifact_mount_args_when_empty(self):
+        """Empty artifact_mounts must not emit any
+        runtime-artifacts --mount args."""
+        args = _render(artifact_mounts=())
+        for i, tok in enumerate(args):
+            if tok == "--mount":
+                self.assertNotIn(
+                    "runtime-artifacts", args[i + 1],
+                    "empty artifact_mounts must not produce "
+                    "artifact mount arguments",
+                )
 
 
 # ── 6.6 architectural guards ──────────────────────────────────────

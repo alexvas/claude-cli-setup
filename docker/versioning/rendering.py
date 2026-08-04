@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
 from .effective import (
     EffectiveBuildProjection,
@@ -19,7 +19,6 @@ from .effective import (
 )
 from .errors import EffectiveConfigError
 
-
 # ---------------------------------------------------------------------------
 # Immutable rendering input models (Stage 6)
 # ---------------------------------------------------------------------------
@@ -27,6 +26,9 @@ from .errors import EffectiveConfigError
 # Fixed container-side destination for the host Pi home mount.
 # The container user is always ``dev`` regardless of the host user.
 _CONTAINER_PI_HOME = "/home/dev/.pi"
+
+# Fixed read-only container root for runtime artifact mounts.
+_RUNTIME_ARTIFACT_ROOT = "/run/pi-cli/runtime-artifacts"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,41 @@ class ArtifactMount:
     container_target: str
     """Canonical read-only mount target inside the container
     (e.g. ``"/run/pi-cli/runtime-artifacts/sha512/<digest>"``)."""
+
+
+def plan_artifact_mounts(
+    verified_blobs: "Iterable[VerifiedCacheBlob]",
+) -> "tuple[ArtifactMount, ...]":
+    """Build one ``ArtifactMount`` per verified materialized blob.
+
+    *host_path* is passed through directly from each blob — the
+    planner does **not** reconstruct cache paths.  *container_target*
+    is derived from the blob's integrity via ``_derive_artifact_id``,
+    always beneath the fixed ``/run/pi-cli/runtime-artifacts`` root.
+
+    Duplicate integrities are collapsed into a single mount.
+    Results are sorted by *container_target* for determinism.
+
+    This is the **production mount-planning boundary** — every
+    ``ArtifactMount`` consumed by the rendering and launcher
+    stages MUST originate here.  No filesystem access; pure
+    string computation.
+    """
+    from .model import _derive_artifact_id
+
+    seen: set[str] = set()
+    mounts: list[ArtifactMount] = []
+    for blob in verified_blobs:
+        if blob.integrity in seen:
+            continue
+        seen.add(blob.integrity)
+        artifact_id = _derive_artifact_id(blob.integrity)
+        mounts.append(ArtifactMount(
+            host_path=blob.host_path,
+            container_target=f"{_RUNTIME_ARTIFACT_ROOT}/{artifact_id}",
+        ))
+    mounts.sort(key=lambda m: m.container_target)
+    return tuple(mounts)
 
 
 @dataclass(frozen=True)

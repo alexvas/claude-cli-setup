@@ -43,7 +43,7 @@ class ExecutionMode(enum.Enum):
     INTERACTIVE = "interactive"
 
 from docker.versioning.dispatch_types import ExitKind
-from docker.versioning.rendering import ArtifactMount, RunRenderInputs
+from docker.versioning.rendering import ArtifactMount, RunRenderInputs, plan_artifact_mounts
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -609,16 +609,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             temp_dir=artifact_cache.LocalTemporaryDirectory(),
             cache_root=root,
         )
-        materialized_mounts = tuple(
-            ArtifactMount(
-                host_path=blob.host_path,
-                container_target=(
-                    "/run/pi-cli/runtime-artifacts/"
-                    f"{blob.algorithm}/{blob.digest}.tgz"
-                ),
-            )
-            for blob in sorted(blobs.values(), key=lambda b: b.integrity)
-        )
+        materialized_mounts = plan_artifact_mounts(blobs.values())
         artifact_mounts = request._artifact_mounts or materialized_mounts
     except Exception as exc:
         return RunResult(
