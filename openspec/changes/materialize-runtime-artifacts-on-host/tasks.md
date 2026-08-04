@@ -22,7 +22,7 @@
 ## 4. Narrow the Runtime Projection
 
 - [x] 4.1 Add failing DTO tests replacing downloadable URL fields with canonical mounted-artifact identity while preserving package, exact version, integrity, and safe metadata validation.
-- [ ] 4.2 Add failing closed-schema tests rejecting URL, host cache root/path, absolute or traversal artifact paths, source/update/override metadata, unselected artifacts, and build fields.
+- [x] 4.2 Add failing closed-schema tests rejecting URL, host cache root/path, absolute or traversal artifact paths, source/update/override metadata, unselected artifacts, and build fields.
 - [ ] 4.3 Update pure runtime resolution to return separate host materialization selections and container-safe projection entries from the same reviewed exact artifact selection.
 - [ ] 4.4 Update atomic per-launch projection serialization/validation and compatibility tests for deterministic ordering, duplicate content identities, private lifecycle, and fixed mounted-artifact root semantics.
 
