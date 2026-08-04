@@ -3515,6 +3515,169 @@ class TestOrchestrationOrdering(unittest.TestCase):
             "materializer must receive exactly the resolved set",
         )
 
+    # ── materialization failure blocks downstream ────────────
+
+    def test_materialization_failure_stops_before_projection(
+        self,
+    ) -> None:
+        """When materialization raises, no downstream events
+        (projection, gateway, Docker, cleanup) fire."""
+        from unittest import mock
+
+        def _failing_materialize(
+            selected,
+            *,
+            transport,
+            filesystem,
+            lock_factory,
+            temp_dir,
+            cache_root,
+        ):
+            self._event_log.append("materialize")
+            from docker.versioning.artifact_cache import (
+                ArtifactMaterializationError,
+            )
+            raise ArtifactMaterializationError("transport", "boom")
+
+        executor = _LoggedExecutor(self._event_log, returncode=0)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+
+        with mock.patch(
+            "docker.versioning.effective.resolve_runtime",
+            side_effect=self._plan_patch(),
+        ), mock.patch(
+            "docker.versioning.artifact_cache.materialize_selected_artifacts",
+            side_effect=_failing_materialize,
+        ), mock.patch(
+            "docker.versioning.rendering.render_run_vector",
+            side_effect=self._gateway_render_patch(),
+        ):
+            result = self._run(req)
+
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertIn("boom", result.message or "")
+        # validate_and_plan fires first; materialize fires and
+        # raises — nothing after.  The gateway patch is installed
+        # but must never be called.
+        self.assertEqual(
+            self._event_log,
+            ["validate_and_plan", "materialize"],
+        )
+
+    # ── Docker failure: projection still cleaned up ──────────
+
+    def test_docker_nonzero_cleans_projection(self) -> None:
+        """When Docker exits non-zero, ``projection_cleanup``
+        still fires after ``docker_execute``."""
+        from unittest import mock
+
+        executor = _LoggedExecutor(self._event_log, returncode=1)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+
+        with mock.patch(
+            "docker.versioning.effective.resolve_runtime",
+            side_effect=self._plan_patch(),
+        ), mock.patch(
+            "docker.versioning.artifact_cache.materialize_selected_artifacts",
+            side_effect=self._materialize_patch(),
+        ), mock.patch(
+            "docker.versioning.rendering.render_run_vector",
+            side_effect=self._gateway_render_patch(),
+        ):
+            result = self._run(req)
+
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertEqual(
+            self._event_log,
+            self._REQUIRED_ORDER,
+            "projection_cleanup must fire even on Docker failure",
+        )
+
+    def test_docker_raises_cleans_projection(self) -> None:
+        """When the executor raises an exception,
+        ``projection_cleanup`` still fires."""
+        from unittest import mock
+
+        class _RaisingExecutor:
+            def __init__(self, log):
+                self._log = log
+                self.calls: list[tuple[str, ...]] = []
+
+            def run(self, argv, *, interactive=False):
+                self._log.append("docker_execute")
+                raise OSError("docker not found")
+
+        executor = _RaisingExecutor(self._event_log)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+
+        with mock.patch(
+            "docker.versioning.effective.resolve_runtime",
+            side_effect=self._plan_patch(),
+        ), mock.patch(
+            "docker.versioning.artifact_cache.materialize_selected_artifacts",
+            side_effect=self._materialize_patch(),
+        ), mock.patch(
+            "docker.versioning.rendering.render_run_vector",
+            side_effect=self._gateway_render_patch(),
+        ):
+            result = self._run(req)
+
+        self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
+        self.assertIn("docker not found", result.message or "")
+        self.assertEqual(
+            self._event_log,
+            self._REQUIRED_ORDER,
+            "projection_cleanup must fire even when executor raises",
+        )
+
+    # ── later failure preserves shared verified blobs ───────
+
+    def test_later_failure_preserves_verified_blobs(self) -> None:
+        """When Docker fails (non-zero exit), the verified cache
+        blobs must remain on disk — a failed launch does not
+        delete shared cache entries."""
+        from unittest import mock
+
+        executor = _LoggedExecutor(self._event_log, returncode=1)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+
+        with mock.patch(
+            "docker.versioning.effective.resolve_runtime",
+            side_effect=self._plan_patch(),
+        ), mock.patch(
+            "docker.versioning.artifact_cache.materialize_selected_artifacts",
+            side_effect=self._materialize_patch(),
+        ), mock.patch(
+            "docker.versioning.rendering.render_run_vector",
+            side_effect=self._gateway_render_patch(),
+        ):
+            self._run(req)
+
+        # After the run, every blob that was materialized must
+        # still exist as a regular file.
+        for art in self._materialized_selected:
+            from docker.versioning.model import _derive_artifact_id
+            blob_path = os.path.join(
+                self._artifact_cache_root,
+                _derive_artifact_id(art.integrity),
+            )
+            self.assertTrue(
+                os.path.isfile(blob_path),
+                f"blob must survive launch failure: {blob_path}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

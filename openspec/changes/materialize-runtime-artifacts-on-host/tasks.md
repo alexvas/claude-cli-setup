@@ -36,7 +36,7 @@
 ## 6. Integrate Run Materialization Transaction
 
 - [x] 6.1 Add failing orchestration tests for the order: validate and plan → inspect/materialize all selected blobs → publish private projection → perform gateway operations → execute Docker → clean private projection.
-- [ ] 6.2 Add failure-order tests proving materialization failure prevents projection publication, gateway persistence/repair, and Docker execution, and later failures do not delete shared verified blobs.
+- [x] 6.2 Add failure-order tests proving materialization failure prevents projection publication, gateway persistence/repair, and Docker execution, and later failures do not delete shared verified blobs.
 - [ ] 6.3 Implement host materialization and verified mount injection in the internal run transaction with structured results and no prompts or presentation imports.
 - [ ] 6.4 Implement dry-run as read-only cache inspection and deterministic planning only: report hits/misses and complete mounts without download, lock/publication, projection creation, gateway mutation, package execution, or Docker.
 - [ ] 6.5 Add cache-hit offline tests proving a launch performs no extension artifact network request, plus cache-miss transport failure tests proving actionable pre-Docker failure.
