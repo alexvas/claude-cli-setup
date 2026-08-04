@@ -17,7 +17,7 @@
 - [x] 3.2 Add failing concurrency tests proving same-identity launches coordinate publication, recheck after lock acquisition, never expose partial files, and converge on one verified blob.
 - [x] 3.3 Add failing corruption tests for symlinks, directories, special files, digest mismatch, truncated blobs, unsafe roots, and failed repair without Docker execution.
 - [x] 3.4 Implement private same-filesystem temporary downloads, installer-owned host integrity verification, atomic publication, published-file permissions, revalidation, and unconditional temporary/lock cleanup on success, failure, cancellation, `KeyboardInterrupt`, and `SystemExit`.
-- [ ] 3.5 Add tests and implementation for deduplicating multiple selected entries with the same integrity identity while preserving each package's projected identity/version metadata.
+- [x] 3.5 Add tests and implementation for deduplicating multiple selected entries with the same integrity identity while preserving each package's projected identity/version metadata.
 
 ## 4. Narrow the Runtime Projection
 

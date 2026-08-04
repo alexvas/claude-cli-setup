@@ -1768,6 +1768,147 @@ class TestRunTransaction(unittest.TestCase):
                 os.unlink(real_host_path)
 
 
+    # ── artifact deduplication preserves package metadata ─────
+
+    def test_shared_integrity_preserves_distinct_package_metadata_and_produces_one_mount(self) -> None:
+        """Two packages sharing one integrity materialize once and
+        produce one Docker mount, yet both projection entries retain
+        their distinct package, version, and validation metadata."""
+        import base64
+        import hashlib
+        import re
+
+        # Add a second extension with its own valid npm URL.  We
+        # then assign both entries the same integrity (derived from
+        # pi-read's bytes) and override the fetcher to return those
+        # bytes for both URLs.
+        pi_shared_url = (
+            "https://registry.npmjs.org/@arcanemachine/pi-shared/"
+            "-/pi-shared-1.0.0.tgz"
+        )
+        shared_section = (
+            '\n'
+            '[runtime.pi-extensions.pi-shared]\n'
+            'version = "1.0.0"\n'
+            '[runtime.pi-extensions.pi-shared.source]\n'
+            'type = "npm"\n'
+            'package = "@arcanemachine/pi-shared"\n'
+            '[runtime.pi-extensions.pi-shared.artifacts."1.0.0"]\n'
+            f'url = "{pi_shared_url}"\n'
+            'integrity = "sha512-placeholder"\n'
+            '[runtime.pi-extensions.pi-shared.validation]\n'
+            'metadata_file = "shared-package.json"\n'
+            '[runtime.pi-extensions.pi-shared.update]\n'
+            'provider = "npm"\n'
+            'stable_only = true\n'
+            '[runtime.pi-extensions.pi-shared.override]\n'
+            'constraint = ">=1.0.0"\n'
+            'allow_prerelease = false\n'
+            'scheme = "numeric"\n'
+        )
+        with open(self._inventory_path, "a") as fh:
+            fh.write(shared_section)
+
+        # Recompute integrities.  The placeholder is replaced as
+        # usual, but then we overwrite pi-shared's integrity with
+        # the same value as pi-read's so both share one identity.
+        with open(self._inventory_path) as fh:
+            content = fh.read()
+
+        def _replace_integrity(match: re.Match[str]) -> str:
+            url = match.group(1)
+            digest = base64.b64encode(
+                hashlib.sha512(self._artifact_bytes(url)).digest()
+            ).decode("ascii")
+            return f'url = "{url}"\nintegrity = "sha512-{digest}"'
+
+        content = re.sub(
+            r'url = "([^"]+)"\nintegrity = "[^"]+"',
+            _replace_integrity,
+            content,
+        )
+
+        # Extract pi-read's integrity and assign it to pi-shared.
+        pi_read_url = (
+            "https://registry.npmjs.org/@arcanemachine/pi-read/"
+            "-/pi-read-0.2.0.tgz"
+        )
+        shared_integrity_digest = base64.b64encode(
+            hashlib.sha512(self._artifact_bytes(pi_read_url)).digest()
+        ).decode("ascii")
+        shared_integrity = f"sha512-{shared_integrity_digest}"
+        content = content.replace(
+            f'url = "{pi_shared_url}"\nintegrity = "sha512-'
+            + base64.b64encode(
+                hashlib.sha512(self._artifact_bytes(pi_shared_url)).digest()
+            ).decode("ascii")
+            + '"',
+            f'url = "{pi_shared_url}"\nintegrity = "{shared_integrity}"',
+        )
+        with open(self._inventory_path, "w") as fh:
+            fh.write(content)
+
+        # Shared bytes for the two entries that share integrity;
+        # all other fetches use the original artifact bytes.
+        _orig_fetch = self._artifact_bytes
+        shared_bytes = self._artifact_bytes(pi_read_url)
+
+        def _shared_fetcher(url: str) -> bytes:
+            if url in (pi_read_url, pi_shared_url):
+                return shared_bytes
+            return _orig_fetch(url)
+
+        factory = RecordingProjectionFactory()
+        req = self._request(
+            _create_projection=factory,
+            _artifact_fetcher=_shared_fetcher,
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS,
+                         f"unexpected {result.exit_kind}: {result.message}")
+
+        # ── projection metadata ────────────────────────────
+        self.assertEqual(len(factory.calls), 1)
+        recorded_proj = factory.calls[0][0]
+        ext = getattr(recorded_proj, "extensions", {})
+        self.assertIn("pi-read", ext)
+        self.assertIn("pi-shared", ext)
+        pi_read_entry = ext["pi-read"]
+        pi_shared_entry = ext["pi-shared"]
+        self.assertEqual(pi_read_entry.package, "@arcanemachine/pi-read")
+        self.assertEqual(pi_shared_entry.package, "@arcanemachine/pi-shared")
+        self.assertEqual(pi_read_entry.version, "0.2.0")
+        self.assertEqual(pi_shared_entry.version, "1.0.0")
+        self.assertEqual(pi_read_entry.metadata_file, "package.json")
+        self.assertEqual(pi_shared_entry.metadata_file, "shared-package.json")
+        self.assertEqual(
+            pi_read_entry.artifact.integrity,
+            pi_shared_entry.artifact.integrity,
+            "both entries must share the same integrity",
+        )
+
+        # ── one Docker mount for the shared blob ────────────
+        # Mounts appear as "--mount" followed by
+        # "type=bind,src=...,dst=/run/pi-cli/runtime-artifacts/...,readonly"
+        # in consecutive argv entries.
+        artifact_mount_targets = [
+            a for a in result.run_args
+            if a.startswith("type=bind,")
+            and "/runtime-artifacts/" in a
+        ]
+        # pi-codex-usage + pi-proxy + one shared blob = 3 total
+        self.assertEqual(len(artifact_mount_targets), 3, artifact_mount_targets)
+        # The shared blob's mount is referenced once (not duplicated).
+        shared_digest = shared_integrity_digest.replace("+", "-").replace("/", "_")
+        shared_mounts = [
+            a for a in artifact_mount_targets if shared_digest in a
+        ]
+        self.assertEqual(len(shared_mounts), 1, shared_mounts)
+        self.assertIn("readonly", shared_mounts[0])
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 11.3 - Docker-backed boundaries (ProcessRunner injection)
 # ═══════════════════════════════════════════════════════════════════

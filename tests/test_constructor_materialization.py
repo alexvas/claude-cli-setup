@@ -1421,55 +1421,6 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
                          "cached copy must be 0o400")
         self.assertEqual(os.stat(cache_root).st_mode & 0o777, 0o700,
                          "cache root is 0o700")
-    def test_shared_blob_keeps_both_projection_entries_and_one_mount(self) -> None:
-        from docker.versioning.model import (
-            EffectivePiExtensionEntry,
-            EffectiveRuntimeProjection,
-            NpmArtifact,
-        )
-
-        data = _make_tarball_bytes()
-        integrity = _make_integrity_for(data)
-        projection = EffectiveRuntimeProjection(extensions={
-            "first": EffectivePiExtensionEntry(
-                package="@scope/first", version="1.2.3",
-                artifact=NpmArtifact(
-                    "https://registry.npmjs.org/@scope/first/-/first-1.2.3.tgz",
-                    integrity,
-                ),
-                metadata_file="package.json",
-            ),
-            "second": EffectivePiExtensionEntry(
-                package="@scope/second", version="9.8.7",
-                artifact=NpmArtifact(
-                    "https://registry.npmjs.org/@scope/second/-/second-9.8.7.tgz",
-                    integrity,
-                ),
-                metadata_file="nested/package.json",
-            ),
-        })
-        first_url = "https://registry.npmjs.org/@scope/first/-/first-1.2.3.tgz"
-        transport = _FakeTransport({first_url: data})
-        fs = _FakeFilesystem()
-        results = self._materialize(
-            [SelectedArtifact(e.artifact.url, e.artifact.integrity)
-             for e in projection.extensions.values()],
-            transport=transport,
-            filesystem=fs,
-        )
-
-        self.assertEqual(transport.calls, [first_url])
-        self.assertEqual(len(results), 1)
-        self.assertEqual(len(fs.published), 1)
-        self.assertEqual(len(tuple(results.values())), 1)  # one mount source
-        self.assertEqual(
-            [(e.package, e.version, e.metadata_file, e.artifact.integrity)
-             for e in projection.extensions.values()],
-            [
-                ("@scope/first", "1.2.3", "package.json", integrity),
-                ("@scope/second", "9.8.7", "nested/package.json", integrity),
-            ],
-        )
 
 
 class TestConcurrencyCoordination(_MaterializationTestCase):
@@ -2284,6 +2235,140 @@ class TestCorruptionRecovery(_MaterializationTestCase):
                     else:
                         os.unlink(full)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Task 3.5 — Projection Metadata Preservation
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestProjectionMetadataPreservation(_MaterializationTestCase):
+    """Shared-integrity deduplication while each package retains its
+    own projection entry with independent package, version, and
+    validation metadata."""
+
+    # ── cache-hit deduplication ───────────────────────────────
+
+    def test_cache_hit_shared_integrity_zero_network(self) -> None:
+        """GREEN — two entries sharing integrity with a pre-cached
+        blob perform zero transport requests."""
+        data = _make_tarball_bytes()
+        integrity = _make_integrity_for(data)
+
+        # Pre-populate the cache.
+        self._materialize(
+            [SelectedArtifact("https://x.test/first.tgz", integrity)],
+            transport=_FakeTransport({"https://x.test/first.tgz": data}),
+            filesystem=LocalCacheFilesystem(),
+        )
+
+        # Second materialization: two entries, both already cached.
+        transport = _FakeTransport({
+            "https://x.test/first.tgz": data,
+            "https://x.test/second.tgz": data,
+        })
+        result = self._materialize(
+            [
+                SelectedArtifact("https://x.test/first.tgz", integrity),
+                SelectedArtifact("https://x.test/second.tgz", integrity),
+            ],
+            transport=transport,
+            filesystem=LocalCacheFilesystem(),
+        )
+
+        self.assertEqual(len(transport.calls), 0)
+        self.assertEqual(len(result), 1)
+        blob = result[integrity]
+        self.assertTrue(os.path.isfile(blob.host_path))
+
+    # ── differing URLs, same integrity ─────────────────────────
+
+    def test_differing_urls_same_integrity_uses_first_url(self) -> None:
+        """GREEN — two entries with the same integrity but different
+        URLs use the first entry's URL for the download."""
+        data = _make_tarball_bytes()
+        integrity = _make_integrity_for(data)
+
+        transport = _FakeTransport({"https://x.test/first.tgz": data})
+        result = self._materialize(
+            [
+                SelectedArtifact("https://x.test/first.tgz", integrity),
+                SelectedArtifact("https://x.test/second.tgz", integrity),
+            ],
+            transport=transport,
+            filesystem=LocalCacheFilesystem(),
+        )
+
+        # Only the first URL is fetched.
+        self.assertEqual(transport.calls, ["https://x.test/first.tgz"])
+        self.assertEqual(len(result), 1)
+
+    # ── failure propagation ────────────────────────────────────
+
+    def test_shared_integrity_transport_failure_fails_all(self) -> None:
+        """GREEN — when a shared-integrity download fails, all
+        entries referencing that integrity fail before any
+        publication or Docker execution."""
+        integrity = _make_integrity_for(b"never-downloaded")
+
+        class _FailingTransport:
+            calls: list[str]
+            def __init__(self) -> None: self.calls = []
+            def fetch_chunks(self, url: str):
+                self.calls.append(url)
+                raise ArtifactMaterializationError(
+                    reason="transport", detail="injected failure",
+                )
+
+        transport = _FailingTransport()
+        fs = _FakeFilesystem()
+
+        with self.assertRaises(ArtifactMaterializationError) as ctx:
+            self._materialize(
+                [
+                    SelectedArtifact("https://x.test/a.tgz", integrity),
+                    SelectedArtifact("https://x.test/b.tgz", integrity),
+                ],
+                transport=transport,
+                filesystem=fs,
+            )
+
+        self.assertEqual(ctx.exception.reason, "transport")
+        # Only one fetch attempt — deduplication prevented a second call.
+        self.assertEqual(len(transport.calls), 1)
+        # Nothing was published.
+        self.assertEqual(len(fs.published), 0)
+
+    def test_shared_integrity_integrity_mismatch_cleans_up(self) -> None:
+        """GREEN — an integrity mismatch for a shared identity leaves
+        no published blob, no temp state, and releases the lock."""
+        data = _make_tarball_bytes()
+        wrong_integrity = "sha512-" + base64.b64encode(
+            hashlib.sha512(b"wrong-data").digest(),
+        ).decode("ascii")
+
+        transport = _FakeTransport({"https://x.test/a.tgz": data})
+        factory = _FakeLockFactory()
+        fs = _FakeFilesystem()
+
+        with self.assertRaises(ArtifactMaterializationError) as ctx:
+            materialize_selected_artifacts(
+                [
+                    SelectedArtifact("https://x.test/a.tgz", wrong_integrity),
+                    SelectedArtifact("https://x.test/b.tgz", wrong_integrity),
+                ],
+                transport=transport,
+                filesystem=fs,
+                lock_factory=factory,
+                temp_dir=_FakeTempDir(),
+                cache_root=self._cache_root,
+            )
+
+        self.assertEqual(ctx.exception.reason, "integrity")
+        self.assertEqual(len(fs.published), 0)
+        # Lock was acquired and released.
+        lock = factory.locks.get(wrong_integrity)
+        self.assertIsNotNone(lock)
+        self.assertIn(wrong_integrity, lock.released)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Task 3.4 — Interruption Safety
