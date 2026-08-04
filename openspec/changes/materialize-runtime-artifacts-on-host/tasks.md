@@ -30,7 +30,7 @@
 
 - [x] 5.1 Add failing pure-rendering tests for one deterministic read-only file mount per unique selected integrity, absolute validated host sources, fixed unique container targets, and no cache-root/unselected mounts.
 - [x] 5.2 Extend immutable run render inputs with verified artifact mount DTOs and render argument tuples without shell execution or display-string reuse.
-- [ ] 5.3 Add collision and safety tests for duplicate targets, source/target aliasing, writable mounts, directory mounts, traversal, symlinks, missing blobs, and non-regular files before Docker execution.
+- [x] 5.3 Add collision and safety tests for duplicate targets, source/target aliasing, writable mounts, directory mounts, traversal, symlinks, missing blobs, and non-regular files before Docker execution.
 - [ ] 5.4 Update command display tests so shell-escaped dry-run output includes projected artifact mounts without exposing reviewed URLs or unrelated cache contents.
 
 ## 6. Integrate Run Materialization Transaction

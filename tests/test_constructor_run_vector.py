@@ -1338,6 +1338,295 @@ class TestArtifactMountRendering(unittest.TestCase):
                 )
 
 
+# ── 6.2.6  Artifact mount collision & safety ───────────────────
+
+
+class TestArtifactMountCollisions(unittest.TestCase):
+    """Pre-Docker safety validation: duplicate targets, source/target
+    aliasing, directory mounts, traversal, symlinks, missing blobs,
+    non-regular files — all rejected by ``_validate_run_inputs``
+    before ``render_run_vector`` produces argument tuples."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile, os as _os
+        cls._tmp = tempfile.TemporaryDirectory()
+        d = cls._tmp.name
+        # Regular files for valid mounts
+        cls._reg_a = _os.path.join(d, "a.tgz")
+        cls._reg_b = _os.path.join(d, "b.tgz")
+        for p in (cls._reg_a, cls._reg_b):
+            with open(p, "wb") as fh:
+                fh.write(b"verified")
+        # Directory
+        cls._dir = _os.path.join(d, "dir")
+        _os.mkdir(cls._dir)
+        # Symlink to a regular file
+        cls._link = _os.path.join(d, "link.tgz")
+        _os.symlink(cls._reg_a, cls._link)
+        # Missing path (never created)
+        cls._missing = _os.path.join(d, "missing.tgz")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    @staticmethod
+    def _mount(*, host_path: str, target: str) -> "ArtifactMount":
+        from docker.versioning.rendering import ArtifactMount
+        return ArtifactMount(host_path=host_path, container_target=target)
+
+    _ART_ROOT = "/run/pi-cli/runtime-artifacts"
+
+    def _target(self, basename: str = "sha512/abc.tgz") -> str:
+        return f"{self._ART_ROOT}/{basename}"
+
+    # ── duplicate targets ────────────────────────────────────
+
+    def test_rejects_duplicate_container_target(self):
+        target = self._target("sha512/dup.tgz")
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(host_path=self._reg_a, target=target),
+                self._mount(host_path=self._reg_b, target=target),
+            ))
+        self.assertIn("duplicate or aliased", str(ctx.exception).lower())
+
+    # ── duplicate sources ────────────────────────────────────
+
+    def test_rejects_duplicate_host_source(self):
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=self._reg_a,
+                    target=self._target("sha512/t1.tgz"),
+                ),
+                self._mount(
+                    host_path=self._reg_a,
+                    target=self._target("sha256/t2.tgz"),
+                ),
+            ))
+        self.assertIn("duplicate or aliased", str(ctx.exception).lower())
+
+    # ── source/target aliasing (reaches "duplicate or aliased") ─
+
+    def test_rejects_source_equals_target_aliasing(self):
+        """When realpath(source) == target and both are valid
+        artifact-root paths, the duplicate/aliased check fires.
+        Mocked so realpath returns host_path unchanged."""
+        from unittest.mock import patch
+        target = self._target("sha512/aliased.tgz")
+        with patch("os.path.realpath", side_effect=lambda p: p), \
+             patch("os.path.isfile", return_value=True), \
+             patch("os.path.islink", return_value=False):
+            with self.assertRaises(ValueError) as ctx:
+                _render(artifact_mounts=(
+                    self._mount(host_path=target, target=target),
+                ))
+            self.assertIn("duplicate or aliased",
+                          str(ctx.exception).lower())
+
+    def test_rejects_artifact_target_collision_with_project(self):
+        """When main_project is set to a valid artifact-root path,
+        an artifact mount with that same target hits the
+        duplicate-destination check."""
+        target = self._target("sha512/collision.tgz")
+        with self.assertRaises(ValueError) as ctx:
+            _render(
+                main_project=target,
+                artifact_mounts=(
+                    self._mount(host_path=self._reg_a, target=target),
+                ),
+            )
+        self.assertIn("duplicate or aliased",
+                      str(ctx.exception).lower())
+
+    def test_rejects_target_collision_with_pi_home(self):
+        """Artifact target outside the fixed root is caught by the
+        canonical-root check before collision is considered."""
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=self._reg_a,
+                    target="/home/dev/.pi",
+                ),
+            ))
+        self.assertIn("canonical beneath fixed root",
+                      str(ctx.exception))
+
+    def test_rejects_target_collision_with_projection(self):
+        proj_target = "/run/pi-cli/docker-constructor.runtime.toml"
+        with self.assertRaises(ValueError) as ctx:
+            _render(
+                projection_container_path=proj_target,
+                artifact_mounts=(
+                    self._mount(host_path=self._reg_a, target=proj_target),
+                ),
+            )
+        self.assertIn("canonical beneath fixed root",
+                      str(ctx.exception))
+
+    # ── directory mounts ─────────────────────────────────────
+
+    def test_rejects_directory_as_mount_source(self):
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=self._dir,
+                    target=self._target("sha512/dir.tgz"),
+                ),
+            ))
+        self.assertIn("regular non-symlink file", str(ctx.exception).lower())
+
+    # ── traversal ────────────────────────────────────────────
+
+    def test_rejects_traversal_in_source(self):
+        """A source with ``..`` whose realpath differs from the
+        literal string is rejected as non-canonical."""
+        import os as _os
+        dirname = _os.path.dirname(self._reg_a)
+        basename = _os.path.basename(self._reg_a)
+        parent = _os.path.basename(dirname)
+        traversal = _os.path.join(dirname, "..", parent, basename)
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=traversal,
+                    target=self._target("sha512/trav.tgz"),
+                ),
+            ))
+        self.assertIn("canonical and absolute", str(ctx.exception))
+
+    def test_rejects_traversal_in_container_target(self):
+        target = self._ART_ROOT + "/sha512/../../../etc/passwd"
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(host_path=self._reg_a, target=target),
+            ))
+        self.assertIn(
+            "canonical beneath fixed root", str(ctx.exception),
+        )
+
+    # ── symlinks ─────────────────────────────────────────────
+
+    def test_rejects_symlink_as_mount_source(self):
+        """Symlinks are rejected by the os.path.islink guard,
+        which now runs before realpath."""
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=self._link,
+                    target=self._target("sha512/link.tgz"),
+                ),
+            ))
+        self.assertIn("regular non-symlink file",
+                      str(ctx.exception).lower())
+
+    # ── missing blobs ────────────────────────────────────────
+
+    def test_rejects_missing_source_file(self):
+        """A host_path that does not exist on the filesystem must
+        be rejected with the defined regular-file message."""
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=self._missing,
+                    target=self._target("sha512/missing.tgz"),
+                ),
+            ))
+        self.assertIn("regular non-symlink file",
+                      str(ctx.exception).lower())
+
+    # ── non-regular files (FIFO) ─────────────────────────────
+
+    def test_rejects_fifo_as_mount_source(self):
+        import os as _os, tempfile
+        fifo_path = _os.path.join(self._tmp.name, "fifo")
+        _os.mkfifo(fifo_path)
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(
+                    host_path=fifo_path,
+                    target=self._target("sha512/fifo.tgz"),
+                ),
+            ))
+        self.assertIn("regular non-symlink file", str(ctx.exception).lower())
+
+    # ── non-canonical target ─────────────────────────────────
+
+    def test_rejects_non_canonical_target(self):
+        """Target with double-slash or trailing dot is rejected."""
+        target = self._ART_ROOT + "//sha512/abc.tgz"
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(host_path=self._reg_a, target=target),
+            ))
+        self.assertIn(
+            "canonical beneath fixed root", str(ctx.exception),
+        )
+
+    # ── target outside fixed root ────────────────────────────
+
+    def test_rejects_target_outside_artifact_root(self):
+        target = "/var/tmp/not-under-runtime-artifacts.tgz"
+        with self.assertRaises(ValueError) as ctx:
+            _render(artifact_mounts=(
+                self._mount(host_path=self._reg_a, target=target),
+            ))
+        self.assertIn(
+            "canonical beneath fixed root", str(ctx.exception),
+        )
+
+    # ── happy path (sanity) ──────────────────────────────────
+
+    def test_valid_mounts_pass_validation(self):
+        """Two distinct, regular-file, non-symlink mounts with
+        valid targets must not raise."""
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._reg_a,
+                target=self._target("sha512/a.tgz"),
+            ),
+            self._mount(
+                host_path=self._reg_b,
+                target=self._target("sha256/b.tgz"),
+            ),
+        ))
+        self.assertIsInstance(args, tuple)
+
+    # ── writable mount safety ────────────────────────────────
+
+    def test_artifact_mounts_always_readonly_never_writable(self):
+        """Every artifact mount in the rendered vector MUST carry
+        the ``readonly`` flag and MUST NOT expose the default
+        ``rw`` mode.  There is no DTO field to request writable
+        artifact mounts — the renderer always forces readonly."""
+        args = _render(artifact_mounts=(
+            self._mount(
+                host_path=self._reg_a,
+                target=self._target("sha512/ro.tgz"),
+            ),
+            self._mount(
+                host_path=self._reg_b,
+                target=self._target("sha256/ro.tgz"),
+            ),
+        ))
+        for i, tok in enumerate(args):
+            if tok == "--mount" and "runtime-artifacts" in args[i + 1]:
+                opts = args[i + 1]
+                self.assertIn(",readonly", opts,
+                              f"artifact mount must have readonly: {opts!r}")
+                # "rw" must not appear unless it is part of "readonly"
+                # (i.e.  "readonly" itself contains no "rw" substring).
+                # Docker default is rw, and no artifact mount may rely
+                # on that default.
+                before_readonly = opts.split(",readonly")[0]
+                self.assertNotIn(
+                    ",rw", before_readonly + ",",
+                    f"artifact mount must not have rw mode: {opts!r}",
+                )
+
+
 # ── 6.6 architectural guards ──────────────────────────────────────
 
 class TestArchitecturalGuards(unittest.TestCase):

@@ -398,12 +398,30 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
     artifact_root = "/run/pi-cli/runtime-artifacts"
     seen_sources: set[str] = set()
     for mount in inputs.artifact_mounts:
-        source = os.path.realpath(mount.host_path)
+        # Reject missing, symlink, or non-regular *before* realpath so
+        # the defined error message surfaces even for missing blobs.
+        if not os.path.isabs(mount.host_path):
+            raise ValueError(
+                "artifact mount source must be canonical and absolute"
+            )
+        if not os.path.isfile(mount.host_path) or os.path.islink(mount.host_path):
+            raise ValueError(
+                "artifact mount source must be a regular non-symlink file"
+            )
+
+        source: str
+        try:
+            source = os.path.realpath(mount.host_path)
+        except OSError:
+            raise ValueError(
+                "artifact mount source must be a regular non-symlink file"
+            )
+        if source != mount.host_path:
+            raise ValueError(
+                "artifact mount source must be canonical and absolute"
+            )
+
         target = os.path.normpath(mount.container_target)
-        if not os.path.isabs(mount.host_path) or source != mount.host_path:
-            raise ValueError("artifact mount source must be canonical and absolute")
-        if os.path.islink(mount.host_path) or not os.path.isfile(mount.host_path):
-            raise ValueError("artifact mount source must be a regular non-symlink file")
         if not target.startswith(artifact_root + "/") or target != mount.container_target:
             raise ValueError("artifact mount target must be canonical beneath fixed root")
         if source in seen_sources or target in all_dsts or source == target:
