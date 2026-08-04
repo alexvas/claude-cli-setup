@@ -26,7 +26,7 @@ from typing import Protocol, Mapping
 
 from docker.versioning.artifact_cache import DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
 from docker.versioning.dispatch_types import ExitKind
-from docker.versioning.rendering import ArtifactMount, RunRenderInputs, plan_artifact_mounts
+from docker.versioning.rendering import RunRenderInputs, plan_artifact_mounts
 from types import MappingProxyType
 
 
@@ -407,12 +407,6 @@ class RunRequest:
     download transport; a test double returns controlled
     bytes so digest-mismatch paths are network-independent."""
 
-    _artifact_mounts: tuple[ArtifactMount, ...] = ()
-    """Injected post-materialization mount specifications.
-    Defaults to an empty tuple (no artifact mounts).
-    Exposed as a testing boundary for mount-target
-    validation guards."""
-
     def __post_init__(self) -> None:
         if not isinstance(self.overrides, MappingProxyType):
             object.__setattr__(self, "overrides", MappingProxyType(
@@ -506,23 +500,6 @@ def orchestrate_run(request: RunRequest) -> RunResult:
 
     # ── Step 3: dry-run ─────────────────────────────────────
     if request.dry_run:
-        # Dry-run MUST NOT access the filesystem — reject
-        # injected mounts only structurally (target canonical
-        # form via _validate_run_inputs + validate_artifact_
-        # sources=False).
-        for mount in request._artifact_mounts:
-            target = os.path.normpath(mount.container_target)
-            if (
-                target != mount.container_target
-                or not target.startswith(
-                    "/run/pi-cli/runtime-artifacts/"
-                )
-            ):
-                return RunResult(
-                    exit_kind=ExitKind.CONFIG,
-                    message="Invalid runtime artifact mount",
-                )
-
         import dataclasses
         import hashlib
         import json
@@ -549,7 +526,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             # materialization — host paths are deterministic cache
             # locations, container targets are fixed beneath the
             # runtime-artifacts root.
-            dry_run_mounts = request._artifact_mounts or \
+            dry_run_mounts = \
                 plan_dry_run_artifact_mounts(selected_artifacts)
             # Render a dummy projection for display purposes only.
             # No file is ever created.
@@ -593,22 +570,6 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # integrity.  Each entry in the projection retains its independent
     # package/version/metadata identity.
 
-    # Reject malformed injected post-materialization DTOs with
-    # filesystem checks before any downstream effects.
-    for mount in request._artifact_mounts:
-        target = os.path.normpath(mount.container_target)
-        if (
-            target != mount.container_target
-            or not target.startswith("/run/pi-cli/runtime-artifacts/")
-            or not os.path.isabs(mount.host_path)
-            or os.path.islink(mount.host_path)
-            or not os.path.isfile(mount.host_path)
-        ):
-            return RunResult(
-                exit_kind=ExitKind.CONFIG,
-                message="Invalid runtime artifact mount",
-            )
-
     try:
         import docker.versioning.artifact_cache as artifact_cache
 
@@ -638,8 +599,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             temp_dir=artifact_cache.LocalTemporaryDirectory(),
             cache_root=root,
         )
-        materialized_mounts = plan_artifact_mounts(blobs.values())
-        artifact_mounts = request._artifact_mounts or materialized_mounts
+        artifact_mounts = plan_artifact_mounts(blobs.values())
     except Exception as exc:
         return RunResult(
             exit_kind=ExitKind.OPERATIONAL,

@@ -1407,6 +1407,7 @@ class TestRunTransaction(unittest.TestCase):
         ``render_command_display``), so the display string must
         single-quote artifact mount options containing spaces or ``$``.
         Round-trip through ``shlex.split`` must recover the arg vector."""
+        from unittest import mock
         from docker.versioning.rendering import ArtifactMount
         injected = (
             ArtifactMount(
@@ -1416,14 +1417,22 @@ class TestRunTransaction(unittest.TestCase):
                 ),
             ),
         )
+
+        def _patched_plan(selected) -> tuple[ArtifactMount, ...]:
+            return injected
+
         req = self._request(
             dry_run=True,
-            _artifact_mounts=injected,
             executor=_BombExecutor(),
             inspector=_BombInspector(),
             _create_projection=_BombProjectionFactory(),
         )
-        result = self._run(req)
+
+        with mock.patch(
+            "docker.versioning.rendering.plan_dry_run_artifact_mounts",
+            side_effect=_patched_plan,
+        ):
+            result = self._run(req)
         self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
         display = result.display_string or ""
         # Must contain the quoted mount option.
@@ -3127,53 +3136,6 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         finally:
             restore_spy()
             isolated_cache.cleanup()
-
-    # ── malformed post-materialization mount DTO ──────────────
-
-    def test_malformed_mount_target_fails_before_projection_and_execution(
-        self,
-    ) -> None:
-        """RED — a mount DTO carrying a traversal segment
-        (``../../../etc/passwd``), an absolute target outside
-        ``/run/pi-cli/runtime-artifacts``, or a non-canonical
-        path must be rejected **before** projection
-        publication, cache mutation, gateway rendering, and
-        Docker execution.
-
-        A canonical base64-derived mount target from a valid
-        SRI is inherently safe.  Unsafe targets only arise
-        from a malformed DTO crossing the post-materialization
-        boundary — the orchestrator must validate every
-        :class:`ArtifactMount` before the projection factory
-        is invoked."""
-        from docker.versioning.rendering import ArtifactMount
-
-        cache_ops, restore = self._install_cache_spy()
-        try:
-            # Use a real temporary blob so the only rejectable
-            # property is the traversal target.
-            real_blob = os.path.join(self._tmpdir.name, "real-blob.tgz")
-            with open(real_blob, "wb") as fh:
-                fh.write(b"real-bytes")
-
-            req = self._request(
-                _artifact_mounts=(
-                    ArtifactMount(
-                        host_path=real_blob,
-                        container_target="../../../etc/passwd",
-                    ),
-                ),
-                executor=self._spy_executor(self._stages),
-                inspector=FakeContainerNameInspector(set()),
-                _create_projection=self._spy_factory(self._stages),
-            )
-            result = self._run(req)
-            # RED: the orchestrator does not validate mount
-            # targets — the traversal is accepted, projection is
-            # created, and the executor runs.
-            self._assert_no_effects(result, cache_ops)
-        finally:
-            restore()
 
 
 # ═══════════════════════════════════════════════════════════════
