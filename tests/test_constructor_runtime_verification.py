@@ -126,10 +126,8 @@ def _projection_to_data(projection: EffectiveRuntimeProjection) -> dict:
             name: {
                 "package": ext.package,
                 "version": ext.version,
-                "artifact": {
-                    "url": ext.artifact.url,
-                    "integrity": ext.artifact.integrity,
-                },
+                "artifact_id": ext.artifact_id,
+                "integrity": ext.integrity,
                 "metadata_file": ext.metadata_file,
             }
             for name, ext in sorted(projection.extensions.items())
@@ -354,6 +352,18 @@ def _alternate_runtime_handle(suffix: str = ".toml") -> _RecordingProjectionFact
 class TestRuntimeProjectionIdentity(unittest.TestCase):
     """verify_runtime checks that the container-side runtime projection
     identity matches the host-generated one."""
+
+    def test_projection_data_helper_uses_flat_format(self) -> None:
+        """_projection_to_data must produce artifact_id + integrity
+        as top-level strings, not a nested artifact table."""
+        data = _projection_to_data(_canonical_runtime_projection())
+        self.assertIn("extensions", data)
+        for _, entry in data["extensions"].items():
+            self.assertIsInstance(entry.get("artifact_id"), str)
+            self.assertIsInstance(entry.get("integrity"), str)
+            self.assertNotIn("artifact", entry,
+                             "legacy 'artifact' table must not appear")
+            self.assertNotIn("url", entry)
 
     def test_identity_matches(self) -> None:
         handle = _fresh_runtime_handle()

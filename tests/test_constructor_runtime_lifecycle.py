@@ -528,7 +528,15 @@ class TestRuntimeLifecycle(unittest.TestCase):
         self.assertTrue(os.path.isfile(path))
         import tomllib
         with open(path, "rb") as fh:
-            tomllib.load(fh)
+            parsed = tomllib.load(fh)
+        # All expected fields are present in flat format.
+        for name, ext in proj.extensions.items():
+            entry = parsed["extensions"][name]
+            self.assertEqual(entry["package"], ext.package)
+            self.assertEqual(entry["version"], ext.version)
+            self.assertEqual(entry["artifact_id"], ext.artifact_id)
+            self.assertEqual(entry["integrity"], ext.integrity)
+            self.assertEqual(entry["metadata_file"], ext.metadata_file)
 
     def test_roundtrip_special_characters_in_values(self):
         """Values containing TOML-significant characters must
@@ -540,7 +548,8 @@ class TestRuntimeLifecycle(unittest.TestCase):
         ver = "2.0.0-beta.1"
         # Valid sha384 integrity (48 bytes of 'a')
         integrity = "sha384-" + "a" * 64
-        artifact_id = "sha384/" + ("a" * 64).replace("+", "-").replace("/", "_") + ".tgz"
+        # artifact_id replaces +→- and /→_ only in the base64 payload.
+        artifact_id = "sha384/" + "a" * 64 + ".tgz"
         ext = EffectivePiExtensionEntry(
             package=pkg,
             version=ver,
@@ -566,6 +575,12 @@ class TestRuntimeLifecycle(unittest.TestCase):
             parsed["extensions"]["ext"]["metadata_file"],
             "nested/path/package.json",
         )
+        self.assertEqual(
+            parsed["extensions"]["ext"]["artifact_id"], artifact_id,
+        )
+        self.assertEqual(
+            parsed["extensions"]["ext"]["integrity"], integrity,
+        )
 
     def test_roundtrip_corrupt_toml_rejected(self):
         """If the generated TOML cannot be parsed back, tomllib's
@@ -585,6 +600,175 @@ class TestRuntimeLifecycle(unittest.TestCase):
             os.path.isfile(target),
             "destination must not exist after TOML round-trip failure",
         )
+
+    def test_roundtrip_flat_artifact_fields_preserved(self):
+        """The flat artifact_id + integrity format must survive
+        the TOML roundtrip without nesting."""
+        _, proj = resolve_runtime(_runtime(), {})
+        path, _ = create_runtime_projection(
+            proj, host_path=os.path.join(self._tmp, "flat.toml")
+        )
+        import tomllib
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+        for name, ext in proj.extensions.items():
+            entry = parsed["extensions"][name]
+            # Flat keys, not a nested artifact table.
+            self.assertIsInstance(
+                entry.get("artifact_id"), str,
+                f"{name}: artifact_id missing or not a string",
+            )
+            self.assertIsInstance(
+                entry.get("integrity"), str,
+                f"{name}: integrity missing or not a string",
+            )
+            # No legacy nested artifact key.
+            self.assertNotIn(
+                "artifact", entry,
+                f"{name}: legacy 'artifact' table must not be present",
+            )
+            # artifact_id must agree with integrity.
+            self.assertEqual(
+                entry["artifact_id"], ext.artifact_id,
+                f"{name}: artifact_id does not match DTO",
+            )
+            self.assertEqual(
+                entry["integrity"], ext.integrity,
+                f"{name}: integrity does not match DTO",
+            )
+
+    def test_serialized_extension_keys_sorted_deterministically(self):
+        """Serialized extension keys must be sorted alphabetically
+        regardless of DTO insertion order."""
+        from docker.versioning.model import EffectivePiExtensionEntry, \
+            EffectiveRuntimeProjection
+
+        integrity = "sha512-" + "A" * 86 + "=="
+        aid = "sha512/" + "A" * 86 + "==.tgz"
+        ext = EffectivePiExtensionEntry(
+            package="p", version="1.0.0",
+            artifact_id=aid, integrity=integrity,
+            metadata_file="package.json",
+        )
+        # Insert in non-alphabetical order.
+        proj = EffectiveRuntimeProjection(
+            extensions={"z-ext": ext, "a-ext": ext},
+        )
+        path, _ = create_runtime_projection(
+            proj, host_path=os.path.join(self._tmp, "sorted.toml")
+        )
+        import tomllib
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+        keys = list(parsed["extensions"])
+        self.assertEqual(keys, sorted(keys),
+                         "extension keys must be sorted alphabetically")
+
+    def test_duplicate_integrity_preserves_distinct_metadata(self):
+        """When two extensions share the same integrity, each
+        retains its own package/version/metadata in the serialized
+        output."""
+        from docker.versioning.model import EffectivePiExtensionEntry, \
+            EffectiveRuntimeProjection
+
+        integrity = "sha512-" + "A" * 86 + "=="
+        aid = "sha512/" + "A" * 86 + "==.tgz"
+        ext_a = EffectivePiExtensionEntry(
+            package="@scope/a", version="1.0.0",
+            artifact_id=aid, integrity=integrity,
+            metadata_file="package.json",
+        )
+        ext_b = EffectivePiExtensionEntry(
+            package="@scope/b", version="2.0.0",
+            artifact_id=aid, integrity=integrity,
+            metadata_file="other.json",
+        )
+        proj = EffectiveRuntimeProjection(
+            extensions={"a": ext_a, "b": ext_b},
+        )
+        path, _ = create_runtime_projection(
+            proj, host_path=os.path.join(
+                self._tmp, "dup_integrity.toml"
+            )
+        )
+        import tomllib
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+        self.assertEqual(
+            parsed["extensions"]["a"]["package"], "@scope/a"
+        )
+        self.assertEqual(
+            parsed["extensions"]["a"]["version"], "1.0.0"
+        )
+        self.assertEqual(
+            parsed["extensions"]["a"]["metadata_file"], "package.json"
+        )
+        self.assertEqual(
+            parsed["extensions"]["b"]["package"], "@scope/b"
+        )
+        self.assertEqual(
+            parsed["extensions"]["b"]["version"], "2.0.0"
+        )
+        self.assertEqual(
+            parsed["extensions"]["b"]["metadata_file"], "other.json"
+        )
+        # Both share the same artifact_id and integrity.
+        self.assertEqual(
+            parsed["extensions"]["a"]["artifact_id"], aid
+        )
+        self.assertEqual(
+            parsed["extensions"]["b"]["artifact_id"], aid
+        )
+        self.assertEqual(
+            parsed["extensions"]["a"]["integrity"], integrity
+        )
+        self.assertEqual(
+            parsed["extensions"]["b"]["integrity"], integrity
+        )
+
+    # ── fixed mounted-artifact root semantics ──────────────
+
+    def test_artifact_id_must_be_relative_no_absolute_root(self):
+        """Serialized artifact_id values are relative paths that
+        resolve beneath /run/pi-cli/runtime-artifacts on the
+        container side.  They must not embed an absolute root or
+        an alternative mount prefix."""
+        _, proj = resolve_runtime(_runtime(), {})
+        path, _ = create_runtime_projection(
+            proj, host_path=os.path.join(self._tmp, "root_semantics.toml")
+        )
+        import tomllib
+        with open(path, "rb") as fh:
+            parsed = tomllib.load(fh)
+        for name, entry in parsed["extensions"].items():
+            aid = entry["artifact_id"]
+            # Must be a relative path: <algorithm>/<digest>.tgz
+            self.assertFalse(
+                aid.startswith("/"),
+                f"{name}: artifact_id {aid!r} must not be absolute",
+            )
+            self.assertNotIn(
+                "..", aid,
+                f"{name}: artifact_id {aid!r} must not contain traversal",
+            )
+            # Canonical form: exactly two segments, ends with .tgz
+            segments = aid.split("/")
+            self.assertEqual(
+                len(segments), 2,
+                f"{name}: artifact_id {aid!r} must have exactly two "
+                f"segments (algorithm/digest.tgz)",
+            )
+            self.assertTrue(
+                aid.endswith(".tgz"),
+                f"{name}: artifact_id {aid!r} must end with .tgz",
+            )
+            # Algorithm prefix must be a recognised SRI algorithm.
+            self.assertIn(
+                segments[0], ("sha256", "sha384", "sha512"),
+                f"{name}: artifact_id {aid!r} has unknown algorithm",
+            )
+
+    # ── default path generation ────────────────────────────
 
     def test_default_path_never_pre_creates_empty_file(self):
         """Default path generation must not pre-create an empty file
