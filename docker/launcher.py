@@ -505,26 +505,32 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             message=str(exc),
         )
 
-    # Reject malformed injected post-materialization DTOs before any effect.
-    for mount in request._artifact_mounts:
-        target = os.path.normpath(mount.container_target)
-        if (
-            target != mount.container_target
-            or not target.startswith("/run/pi-cli/runtime-artifacts/")
-            or not os.path.isabs(mount.host_path)
-            or os.path.islink(mount.host_path)
-            or not os.path.isfile(mount.host_path)
-        ):
-            return RunResult(
-                exit_kind=ExitKind.CONFIG,
-                message="Invalid runtime artifact mount",
-            )
-
     # ── Step 3: dry-run ─────────────────────────────────────
     if request.dry_run:
+        # Dry-run MUST NOT access the filesystem — reject
+        # injected mounts only structurally (target canonical
+        # form via _validate_run_inputs + validate_artifact_
+        # sources=False).
+        for mount in request._artifact_mounts:
+            target = os.path.normpath(mount.container_target)
+            if (
+                target != mount.container_target
+                or not target.startswith(
+                    "/run/pi-cli/runtime-artifacts/"
+                )
+            ):
+                return RunResult(
+                    exit_kind=ExitKind.CONFIG,
+                    message="Invalid runtime artifact mount",
+                )
+
         import dataclasses
         import hashlib
         import json
+
+        from docker.versioning.rendering import (
+            plan_dry_run_artifact_mounts,
+        )
 
         try:
             # Compute projection hash from the resolved effective
@@ -540,6 +546,12 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                     proj_raw, sort_keys=True, default=str,
                 ).encode("utf-8")
             ).hexdigest()
+            # Plan artifact mounts from the resolved selection without
+            # materialization — host paths are deterministic cache
+            # locations, container targets are fixed beneath the
+            # runtime-artifacts root.
+            dry_run_mounts = request._artifact_mounts or \
+                plan_dry_run_artifact_mounts(selected_artifacts)
             # Render a dummy projection for display purposes only.
             # No file is ever created.
             projection_container_path = (
@@ -560,7 +572,8 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 stdin_open=request.stdin_open,
                 command=request.command,
                 chown_on_start=request.chown_on_start,
-                artifact_mounts=request._artifact_mounts,
+                artifact_mounts=dry_run_mounts,
+                validate_artifact_sources=False,
             )
             run_args = render_run_vector(render_inputs)
             display = shlex.join(run_args)
@@ -580,6 +593,23 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # selected_artifacts from resolve_runtime already deduplicates by
     # integrity.  Each entry in the projection retains its independent
     # package/version/metadata identity.
+
+    # Reject malformed injected post-materialization DTOs with
+    # filesystem checks before any downstream effects.
+    for mount in request._artifact_mounts:
+        target = os.path.normpath(mount.container_target)
+        if (
+            target != mount.container_target
+            or not target.startswith("/run/pi-cli/runtime-artifacts/")
+            or not os.path.isabs(mount.host_path)
+            or os.path.islink(mount.host_path)
+            or not os.path.isfile(mount.host_path)
+        ):
+            return RunResult(
+                exit_kind=ExitKind.CONFIG,
+                message="Invalid runtime artifact mount",
+            )
+
     try:
         import docker.versioning.artifact_cache as artifact_cache
 

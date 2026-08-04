@@ -1327,7 +1327,8 @@ class TestRunTransaction(unittest.TestCase):
         result = self._run(req)
         self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
         self.assertIsNotNone(result.display_string)
-        self.assertIn("docker run", result.display_string or "")
+        display = result.display_string or ""
+        self.assertIn("docker run", display)
 
     def test_dry_run_does_not_invoke_executor(self) -> None:
         req = self._request(
@@ -1349,6 +1350,135 @@ class TestRunTransaction(unittest.TestCase):
         )
         result = self._run(req)
         self.assertTrue(len(result.run_args) > 0)
+
+    def test_dry_run_includes_artifact_mounts(self) -> None:
+        """Dry-run display and run_args must include artifact mount
+        ``--mount … read  read`` arguments with fixed container targets
+        beneath ``/run/pi-cli/runtime-artifacts``."""
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        # Check the display string.
+        display = result.display_string or ""
+        self.assertIn("--mount type=bind", display)
+        self.assertIn("/run/pi-cli/runtime-artifacts/", display)
+        self.assertIn(",readonly", display)
+        # Check the argument vector.
+        args = result.run_args
+        art_mounts = [
+            i for i, tok in enumerate(args)
+            if tok == "--mount"
+            and "runtime-artifacts" in args[i + 1]
+        ]
+        self.assertGreater(
+            len(art_mounts), 0,
+            "dry-run arg vector must contain at least one "
+            "artifact --mount argument",
+        )
+        for idx in art_mounts:
+            opts = args[idx + 1]
+            self.assertIn("type=bind", opts)
+            self.assertIn(",readonly", opts)
+            self.assertIn(
+                "dst=/run/pi-cli/runtime-artifacts/", opts,
+            )
+
+    def test_dry_run_display_excludes_reviewed_urls(self) -> None:
+        """The dry-run display string MUST NOT expose registry URLs
+        or artifact download endpoints."""
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        display = result.display_string or ""
+        self.assertNotIn("registry.npmjs.org", display)
+        self.assertNotIn("https://", display)
+
+    def test_dry_run_display_is_shell_escaped(self) -> None:
+        """``orchestrate_run`` calls ``shlex.join`` directly (not
+        ``render_command_display``), so the display string must
+        single-quote artifact mount options containing spaces or ``$``.
+        Round-trip through ``shlex.split`` must recover the arg vector."""
+        from docker.versioning.rendering import ArtifactMount
+        injected = (
+            ArtifactMount(
+                host_path="/home/alice/my projects/cache/sha512/abc.tgz",
+                container_target=(
+                    "/run/pi-cli/runtime-artifacts/sha512/abc.tgz"
+                ),
+            ),
+        )
+        req = self._request(
+            dry_run=True,
+            _artifact_mounts=injected,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        display = result.display_string or ""
+        # Must contain the quoted mount option.
+        self.assertIn(
+            "'type=bind,src=/home/alice/my projects/", display,
+            "mount option with space must be single-quoted",
+        )
+        # Round-trip: shlex.split the display must recover the run_args.
+        import shlex
+        self.assertEqual(
+            shlex.split(display), list(result.run_args),
+            "display must round-trip through shlex.split",
+        )
+
+    def test_dry_run_excludes_unselected_catalog_artifact(self) -> None:
+        """The dry-run display and run_args must include artifact
+        mounts for *selected* artifacts only — unselected catalog
+        variants (e.g. an alternate version) MUST NOT appear."""
+        from docker.versioning.model import _derive_artifact_id
+        import base64, hashlib
+        # Compute the unselected 0.3.0 artifact_id directly.
+        unselected_url = (
+            "https://registry.npmjs.org/@arcanemachine/pi-read/"
+            "-/pi-read-0.3.0.tgz"
+        )
+        unselected_integrity = "sha512-" + base64.b64encode(
+            hashlib.sha512(self._artifact_bytes(unselected_url)).digest(),
+        ).decode("ascii")
+        unselected_artifact_id = _derive_artifact_id(unselected_integrity)
+        unselected_target = (
+            f"/run/pi-cli/runtime-artifacts/{unselected_artifact_id}"
+        )
+
+        req = self._request(
+            dry_run=True,
+            executor=_BombExecutor(),
+            inspector=_BombInspector(),
+            _create_projection=_BombProjectionFactory(),
+        )
+        result = self._run(req)
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        display = result.display_string or ""
+
+        # Selected artifact(s) must be present.
+        self.assertIn("--mount type=bind", display)
+        self.assertIn("/run/pi-cli/runtime-artifacts/", display)
+
+        # The *unselected* 0.3.0 variant must NOT leak into the
+        # display or arg vector.
+        self.assertNotIn(unselected_target, display)
+        self.assertNotIn(
+            unselected_target,
+            " ".join(result.run_args),
+        )
 
     # ── Docker failure ───────────────────────────────────────────
 

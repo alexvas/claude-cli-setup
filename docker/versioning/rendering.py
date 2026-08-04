@@ -220,6 +220,12 @@ class RunRenderInputs:
     (dry-run or pre-materialization error).  Every mount target
     is validated for canonical form before rendering."""
 
+    validate_artifact_sources: bool = True
+    """When ``False`` (dry-run), filesystem checks on
+    ``host_path`` are skipped; only target canonical form and
+    destination collisions are validated.  Defaults to ``True``
+    to enforce regular-file/symlink checks before Docker execution."""
+
 
 # ── platform helpers ────────────────────────────────────────────────
 
@@ -398,28 +404,31 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
     artifact_root = "/run/pi-cli/runtime-artifacts"
     seen_sources: set[str] = set()
     for mount in inputs.artifact_mounts:
-        # Reject missing, symlink, or non-regular *before* realpath so
-        # the defined error message surfaces even for missing blobs.
-        if not os.path.isabs(mount.host_path):
-            raise ValueError(
-                "artifact mount source must be canonical and absolute"
-            )
-        if not os.path.isfile(mount.host_path) or os.path.islink(mount.host_path):
-            raise ValueError(
-                "artifact mount source must be a regular non-symlink file"
-            )
-
-        source: str
-        try:
-            source = os.path.realpath(mount.host_path)
-        except OSError:
-            raise ValueError(
-                "artifact mount source must be a regular non-symlink file"
-            )
-        if source != mount.host_path:
-            raise ValueError(
-                "artifact mount source must be canonical and absolute"
-            )
+        if inputs.validate_artifact_sources:
+            # Reject missing, symlink, or non-regular *before* realpath so
+            # the defined error message surfaces even for missing blobs.
+            if not os.path.isabs(mount.host_path):
+                raise ValueError(
+                    "artifact mount source must be canonical and absolute"
+                )
+            if not os.path.isfile(mount.host_path) or os.path.islink(mount.host_path):
+                raise ValueError(
+                    "artifact mount source must be a regular non-symlink file"
+                )
+            source: str
+            try:
+                source = os.path.realpath(mount.host_path)
+            except OSError:
+                raise ValueError(
+                    "artifact mount source must be a regular non-symlink file"
+                )
+            if source != mount.host_path:
+                raise ValueError(
+                    "artifact mount source must be canonical and absolute"
+                )
+        else:
+            # Dry-run: no filesystem access — use absolute path directly.
+            source = os.path.abspath(mount.host_path)
 
         target = os.path.normpath(mount.container_target)
         if not target.startswith(artifact_root + "/") or target != mount.container_target:
@@ -428,6 +437,40 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
             raise ValueError("duplicate or aliased artifact mount")
         seen_sources.add(source)
         all_dsts.add(target)
+
+
+def plan_dry_run_artifact_mounts(
+    selected_artifacts: "Iterable[SelectedArtifact]",
+) -> "tuple[ArtifactMount, ...]":
+    """Build artifact mounts for dry-run display from resolution output.
+
+    Derives *host_path* from ``DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT``
+    (the deterministic cache location) and *container_target* from
+    ``_RUNTIME_ARTIFACT_ROOT``.  No filesystem access — the blobs may
+    not exist yet.  Duplicate integrities are collapsed; results are
+    sorted by *container_target*.
+    """
+    from . import artifact_cache
+    from .model import _derive_artifact_id
+
+    seen: set[str] = set()
+    mounts: list[ArtifactMount] = []
+    for art in selected_artifacts:
+        if art.integrity in seen:
+            continue
+        seen.add(art.integrity)
+        artifact_id = _derive_artifact_id(art.integrity)
+        mounts.append(ArtifactMount(
+            host_path=os.path.abspath(
+                os.path.join(
+                    artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
+                    artifact_id,
+                )
+            ),
+            container_target=f"{_RUNTIME_ARTIFACT_ROOT}/{artifact_id}",
+        ))
+    mounts.sort(key=lambda m: m.container_target)
+    return tuple(mounts)
 
 
 def _validate_projection_host_path(host_path: str) -> None:

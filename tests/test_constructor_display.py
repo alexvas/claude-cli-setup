@@ -152,3 +152,58 @@ class TestReturnsStringNotEligibleForSubprocess(unittest.TestCase):
         self.assertNotIsInstance(display, (list, tuple))
         # The display is NOT the same as the execution tuple.
         self.assertNotEqual(display, argv)
+
+
+class TestArtifactMountDisplay(unittest.TestCase):
+    """Artifact mount ``--mount`` options with spaces or shell
+    metacharacters in host paths are safely single-quoted by
+    ``shlex.join`` so a copy-pasted dry-run line never triggers
+    unintended expansion or command injection."""
+
+    def test_spaces_in_host_path_quoted(self):
+        argv = (
+            "docker", "run", "--rm",
+            "--mount",
+            "type=bind,src=/home/alice/my projects/.pi-cache/a.tgz,"
+            "dst=/run/pi-cli/runtime-artifacts/sha512/abc.tgz,readonly",
+            "pi-cli-pi:latest",
+        )
+        display = render_command_display(argv)
+        # The display must single-quote the mount options string
+        # because src contains a space.
+        self.assertIn(
+            "'type=bind,src=/home/alice/my projects/", display,
+            "mount option containing spaces must be quoted",
+        )
+        # Round-trip check.
+        self.assertEqual(shlex.split(display), list(argv))
+
+    def test_dollar_in_path_quoted(self):
+        argv = (
+            "docker", "run", "--mount",
+            "type=bind,src=/home/alice/$PROJ/cache/a.tgz,"
+            "dst=/run/pi-cli/runtime-artifacts/sha512/abc.tgz,readonly",
+            "pi-cli-pi:latest",
+        )
+        display = render_command_display(argv)
+        # $PROJ must be single-quoted so a shell never expands it.
+        self.assertIn("'type=bind,src=/home/alice/$PROJ/", display)
+        self.assertEqual(shlex.split(display), list(argv))
+
+    def test_multiple_artifact_mounts_with_spaces(self):
+        argv = (
+            "docker", "run",
+            "--mount",
+            "type=bind,src=/home/alice/my cache/a.tgz,"
+            "dst=/run/pi-cli/runtime-artifacts/sha512/a.tgz,readonly",
+            "--mount",
+            "type=bind,src=/home/alice/my cache/b.tgz,"
+            "dst=/run/pi-cli/runtime-artifacts/sha256/b.tgz,readonly",
+            "pi-cli-pi:latest",
+        )
+        display = render_command_display(argv)
+        # Both mount options must be individually quoted.
+        parts = shlex.split(display)
+        self.assertEqual(parts, list(argv))
+        # Count quoted mount options.
+        self.assertEqual(display.count("'type=bind,src="), 2)
