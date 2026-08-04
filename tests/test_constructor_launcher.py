@@ -43,7 +43,6 @@ from docker.launcher import (
 from docker.versioning.rendering import RunRenderInputs, render_run_vector
 from docker.versioning.dispatch_types import ExitKind
 
-
 # ═══════════════════════════════════════════════════════════════════
 # Shared test doubles
 # ═══════════════════════════════════════════════════════════════════
@@ -3175,6 +3174,346 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
             self._assert_no_effects(result, cache_ops)
         finally:
             restore()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Orchestration order tests — Task 6.1
+# ═══════════════════════════════════════════════════════════════
+
+
+class _LoggedHandle:
+    """Context manager that records enter/exit in a shared event log."""
+
+    def __init__(self, path: str, content_hash: str,
+                 log: list[str]) -> None:
+        self._path = path
+        self._hash = content_hash
+        self._log = log
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def content_hash(self) -> str:
+        return self._hash
+
+    def __enter__(self) -> "_LoggedHandle":
+        self._log.append("projection_publish")
+        os.makedirs(os.path.dirname(self._path), exist_ok=True)
+        with open(self._path, "w") as fh:
+            fh.write("fake-projection")
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        self._log.append("projection_cleanup")
+        if os.path.exists(self._path):
+            os.remove(self._path)
+        return False
+
+
+class _LoggedProjectionFactory:
+    """Factory that returns :class:`_LoggedHandle` instances wired
+    to a shared event log."""
+
+    def __init__(self, log: list[str]) -> None:
+        self._log = log
+        self.calls: list[tuple[object, str]] = []
+        self.handles: list[_LoggedHandle] = []
+
+    def __call__(
+        self,
+        projection: object,
+        *,
+        parent_dir: str,
+    ) -> _LoggedHandle:
+        import hashlib
+        import json
+        raw_proj: dict[str, object] = {
+            "extensions": {
+                name: __import__("dataclasses").asdict(entry)
+                for name, entry in getattr(
+                    projection, "extensions", {},
+                ).items()
+            }
+        }
+        raw = json.dumps(raw_proj, sort_keys=True, default=str)
+        content_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        path = os.path.join(parent_dir, "proj.toml")
+        h = _LoggedHandle(path, content_hash, self._log)
+        self.calls.append((projection, parent_dir))
+        self.handles.append(h)
+        return h
+
+
+class _LoggedExecutor:
+    """Executor that records ``"docker_execute"`` in a shared
+    event log."""
+
+    def __init__(self, log: list[str], *, returncode: int = 0) -> None:
+        self._log = log
+        self.returncode = returncode
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, argv: tuple[str, ...], *,
+            interactive: bool = False) -> ProcessResult:
+        self._log.append("docker_execute")
+        self.calls.append(argv)
+        return ProcessResult(
+            argv=argv,
+            return_code=self.returncode,
+            stdout="ok" if self.returncode == 0 else "",
+            stderr="" if self.returncode == 0 else "failed",
+        )
+
+
+class TestOrchestrationOrdering(unittest.TestCase):
+    """Orchestration event order:
+
+    validate-and-plan → materialize → projection_publish →
+    gateway_rendered → docker_execute → projection_cleanup.
+
+    Every boundary records events in a single shared ``list[str]``.
+    No production injection — all faking is done via
+    ``unittest.mock.patch`` on the existing production boundaries.
+    """
+
+    _REQUIRED_ORDER = [
+        "validate_and_plan",
+        "materialize",
+        "projection_publish",
+        "gateway_rendered",
+        "docker_execute",
+        "projection_cleanup",
+    ]
+
+    def setUp(self) -> None:
+        import tempfile
+        self._lock_leak_before = _shared_lock_leak_snapshot()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        import docker.versioning.artifact_cache as artifact_cache
+        from unittest import mock
+        self._artifact_cache_root = os.path.join(
+            self._tmpdir.name, "runtime-artifacts", "blobs",
+        )
+        self._cache_root_patch = mock.patch.object(
+            artifact_cache,
+            "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
+            self._artifact_cache_root,
+        )
+        self._cache_root_patch.start()
+        self._repo_cache_snapshot = _repo_cache_file_set()
+        self._proj_parent = os.path.join(
+            self._tmpdir.name, ".docker-generated", "runtime",
+        )
+        self._inventory_path = self._make_fixture_toml()
+        self._event_log: list[str] = []
+
+    def _make_fixture_toml(self) -> str:
+        """Copy the real ``docker-constructor.toml`` with
+        deterministic artifact integrities."""
+        import base64
+        import hashlib
+        import re
+        import shutil
+        real = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..",
+                         "docker-constructor.toml"),
+        )
+        fixture = os.path.join(self._tmpdir.name, "fixture.toml")
+        shutil.copy2(real, fixture)
+        with open(fixture) as fh:
+            content = fh.read()
+
+        def replace_integrity(match: re.Match[str]) -> str:
+            url = match.group(1)
+            digest = base64.b64encode(
+                hashlib.sha512(
+                    ("order-fixture:" + url).encode("utf-8")
+                ).digest()
+            ).decode("ascii")
+            return f'url = "{url}"\nintegrity = "sha512-{digest}"'
+
+        content = re.sub(
+            r'url = "([^"]+)"\nintegrity = "[^"]+"',
+            replace_integrity,
+            content,
+        )
+        with open(fixture, "w") as fh:
+            fh.write(content)
+        return fixture
+
+    def tearDown(self) -> None:
+        self._cache_root_patch.stop()
+        self._tmpdir.cleanup()
+        _ = _assert_repo_cache_unchanged(self._repo_cache_snapshot)
+        _assert_no_shared_lock_created(self._lock_leak_before)
+
+    @staticmethod
+    def _artifact_bytes(url: str) -> bytes:
+        return ("order-fixture:" + url).encode("utf-8")
+
+    def _request(self, **overrides: object) -> RunRequest:
+        from docker.launcher import ProjectSelection
+        kwargs: dict[str, object] = {
+            "inventory_path": self._inventory_path,
+            "image": "pi-cli-pi:latest",
+            "selection": ProjectSelection(main_project="/work/p1"),
+            "pi_home_host": "/home/alice/.pi",
+            "projection_parent_dir": self._proj_parent,
+            "_create_projection": _LoggedProjectionFactory(self._event_log),
+            "_artifact_fetcher": self._artifact_bytes,
+        }
+        kwargs.update(overrides)
+        return RunRequest(**kwargs)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _run(req: RunRequest) -> RunResult:
+        from docker.launcher import orchestrate_run
+        return orchestrate_run(req)
+
+    @staticmethod
+    def _fake_blobs_for(
+        selected: list[SelectedArtifact],
+        cache_root: str,
+    ) -> dict[str, VerifiedCacheBlob]:
+        """Build a fake ``VerifiedCacheBlob`` dict from *selected*
+        artifacts, creating actual files so validation passes."""
+        from docker.versioning.artifact_cache import (
+            VerifiedCacheBlob,
+        )
+        from docker.versioning.model import _derive_artifact_id
+        result: dict[str, VerifiedCacheBlob] = {}
+        for art in selected:
+            if art.integrity in result:
+                continue
+            artifact_id = _derive_artifact_id(art.integrity)
+            algorithm = art.integrity.split("-", 1)[0]
+            digest = artifact_id.rsplit("/", 1)[1].replace(".tgz", "")
+            host_path = os.path.join(cache_root, artifact_id)
+            os.makedirs(os.path.dirname(host_path), exist_ok=True)
+            with open(host_path, "wb") as fh:
+                fh.write(b"fake-verified-blob")
+            result[art.integrity] = VerifiedCacheBlob(
+                algorithm=algorithm,
+                digest=digest,
+                integrity=art.integrity,
+                host_path=host_path,
+            )
+        return result
+
+    # ── helpers for patching boundaries ──────────────────────
+
+    def _plan_patch(self) -> object:
+        """Return a side-effect that records ``"validate_and_plan"``
+        then delegates to the real ``resolve_runtime``."""
+        from docker.versioning.effective import resolve_runtime as _real
+
+        def _plan_wrapper(
+            runtime,
+            overrides,
+        ):
+            self._event_log.append("validate_and_plan")
+            return _real(runtime, overrides)
+
+        return _plan_wrapper
+
+    def _materialize_patch(self) -> object:
+        """Return a side-effect that records ``"materialize"``
+        then returns fake verified blobs.  Captures the selected
+        list so the test can assert all artifacts are present."""
+
+        self._materialized_selected: list[SelectedArtifact] = []
+
+        def _mat(
+            selected,
+            *,
+            transport,
+            filesystem,
+            lock_factory,
+            temp_dir,
+            cache_root,
+        ):
+            self._event_log.append("materialize")
+            self._materialized_selected[:] = selected
+            return self._fake_blobs_for(selected, cache_root)
+
+        return _mat
+
+    def _gateway_render_patch(self) -> object:
+        """Return a side-effect that delegates to the real
+        ``render_run_vector``, verifies the result contains the
+        gateway mapping, then records ``"gateway_rendered"``."""
+        from docker.versioning.rendering import render_run_vector as _real
+
+        def _gateway(inputs):
+            rv = _real(inputs)
+            self.assertIn("--add-host", rv)
+            self.assertIn("host.docker.internal:host-gateway", rv)
+            self._event_log.append("gateway_rendered")
+            return rv
+
+        return _gateway
+
+    # ── happy-path order ──────────────────────────────────────
+
+    def test_event_order(self) -> None:
+        """Events MUST occur in the exact required sequence:
+        validate-and-plan → materialize → projection_publish →
+        gateway_rendered → docker_execute → projection_cleanup."""
+        from unittest import mock
+
+        executor = _LoggedExecutor(self._event_log, returncode=0)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+
+        with mock.patch(
+            "docker.versioning.effective.resolve_runtime",
+            side_effect=self._plan_patch(),
+        ), mock.patch(
+            "docker.versioning.artifact_cache.materialize_selected_artifacts",
+            side_effect=self._materialize_patch(),
+        ), mock.patch(
+            "docker.versioning.rendering.render_run_vector",
+            side_effect=self._gateway_render_patch(),
+        ):
+            result = self._run(req)
+
+        self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
+        self.assertEqual(
+            self._event_log,
+            self._REQUIRED_ORDER,
+            "events must occur in the required order",
+        )
+        # The materializer must receive exactly the resolved set
+        # — all three fixture artifacts, not just the first.
+        import base64
+        import hashlib
+        from docker.versioning.artifact_cache import SelectedArtifact
+        _fixture_urls = [
+            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz",
+            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz",
+            "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
+        ]
+        expected = [
+            SelectedArtifact(
+                url=u,
+                integrity="sha512-"
+                + base64.b64encode(
+                    hashlib.sha512(
+                        ("order-fixture:" + u).encode("utf-8")
+                    ).digest()
+                ).decode("ascii"),
+            )
+            for u in _fixture_urls
+        ]
+        self.assertEqual(
+            sorted(self._materialized_selected, key=lambda a: a.url),
+            sorted(expected, key=lambda a: a.url),
+            "materializer must receive exactly the resolved set",
+        )
 
 
 if __name__ == "__main__":

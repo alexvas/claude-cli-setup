@@ -24,7 +24,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Protocol, Mapping
 
-from docker.versioning.artifact_cache import DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT  # noqa: F401 — re-export
+from docker.versioning.artifact_cache import DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
+from docker.versioning.dispatch_types import ExitKind
+from docker.versioning.rendering import ArtifactMount, RunRenderInputs, plan_artifact_mounts
 from types import MappingProxyType
 
 
@@ -41,9 +43,6 @@ class ExecutionMode(enum.Enum):
     based on ``tty`` and ``stdin_open``."""
     CAPTURED = "captured"
     INTERACTIVE = "interactive"
-
-from docker.versioning.dispatch_types import ExitKind
-from docker.versioning.rendering import ArtifactMount, RunRenderInputs, plan_artifact_mounts
 
 
 # ═══════════════════════════════════════════════════════════════════
