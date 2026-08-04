@@ -265,7 +265,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     # ── content identity ───────────────────────────────────────────
 
     def test_create_returns_content_hash(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         path, chash = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "hash.toml")
         )
@@ -273,7 +273,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         self.assertEqual(len(chash), 64)  # SHA-256 hex
 
     def test_content_hash_is_stable(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         _, h1 = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "stable1.toml")
         )
@@ -283,9 +283,9 @@ class TestRuntimeLifecycle(unittest.TestCase):
         self.assertEqual(h1, h2)
 
     def test_content_hash_differs_for_different_content(self):
-        proj_a = resolve_runtime(_runtime(), {})
+        _, proj_a = resolve_runtime(_runtime(), {})
         # Override to a version that differs from default.
-        proj_b = resolve_runtime(
+        _, proj_b = resolve_runtime(
             _runtime(),
             {"runtime.pi-extensions.pi-tool.version": "1.0.0"},
         )
@@ -296,8 +296,8 @@ class TestRuntimeLifecycle(unittest.TestCase):
                 "pi-read": _entry(pkg="@example/pi-read", version="1.0.0"),
             },
         )
-        proj_x = resolve_runtime(inv, {})
-        proj_y = resolve_runtime(
+        _, proj_x = resolve_runtime(inv, {})
+        _, proj_y = resolve_runtime(
             inv,
             {"runtime.pi-extensions.pi-read.version": "1.0.0"},
         )
@@ -316,14 +316,14 @@ class TestRuntimeLifecycle(unittest.TestCase):
                 "pi-read": _entry(pkg="@other/pi-read", version="1.0.0"),
             },
         )
-        proj_z = resolve_runtime(inv2, {})
+        _, proj_z = resolve_runtime(inv2, {})
         _, hz = create_runtime_projection(
             proj_z, host_path=os.path.join(self._tmp, "diff.toml")
         )
         self.assertNotEqual(hx, hz)
 
     def test_content_hash_matches_file_content(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         path, chash = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "verify.toml")
         )
@@ -349,8 +349,8 @@ class TestRuntimeLifecycle(unittest.TestCase):
                 "first": _entry(pkg=pkg, version="1.0.0"),
             },
         )
-        proj_a = resolve_runtime(inv_a, {})
-        proj_b = resolve_runtime(inv_b, {})
+        _, proj_a = resolve_runtime(inv_a, {})
+        _, proj_b = resolve_runtime(inv_b, {})
         _, h_a = create_runtime_projection(
             proj_a, host_path=os.path.join(self._tmp, "reorder_a.toml")
         )
@@ -363,18 +363,17 @@ class TestRuntimeLifecycle(unittest.TestCase):
         """Projection DTOs with different extension insertion order
         must produce identical content hashes."""
         from docker.versioning.model import EffectivePiExtensionEntry, \
-            EffectiveRuntimeProjection, NpmArtifact
+            EffectiveRuntimeProjection
 
         pkg = "@example/dto-sorted"
-        art = NpmArtifact(
-            url=f"https://registry.npmjs.org/{pkg}/-/dto-sorted-1.0.0.tgz",
-            integrity="sha512-" + "A" * 86 + "==",
-        )
+        integrity = "sha512-" + "A" * 86 + "=="
+        artifact_id = "sha512/" + ("A" * 86 + "==").replace("+", "-").replace("/", "_") + ".tgz"
 
         ext = EffectivePiExtensionEntry(
             package=pkg,
             version="1.0.0",
-            artifact=art,
+            artifact_id=artifact_id,
+            integrity=integrity,
             metadata_file="package.json",
         )
 
@@ -395,7 +394,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     # ── atomic write ───────────────────────────────────────────────
 
     def test_create_writes_readable_toml(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         path, _ = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "runtime.toml")
         )
@@ -407,7 +406,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         self.assertIn("1.0.0", content)
 
     def test_create_returns_canonical_path(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "canonical.toml")
         path, _ = create_runtime_projection(proj, host_path=target)
         self.assertEqual(path, target)
@@ -415,7 +414,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_destination_never_empty(self):
         """The destination file must never appear empty — atomic rename
         ensures it is complete or absent."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "nonempty.toml")
         _, _ = create_runtime_projection(proj, host_path=target)
         self.assertTrue(os.path.isfile(target))
@@ -426,7 +425,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         the destination must never appear."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "fail.toml")
 
         def _failing_fsync(fd):
@@ -455,7 +454,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         """When link fails, the temporary file must be removed."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "linkfail.toml")
 
         def _failing_link(src, dst):
@@ -484,7 +483,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_destination_collision_rejected(self):
         """Writing to an existing destination must fail with
         EffectiveConfigError (no-clobber)."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "collision.toml")
         # Pre-create the destination file.
         with open(target, "w") as fh:
@@ -506,7 +505,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
             pkg = f"@example/{name}"
             exts[name] = _entry(pkg=pkg, version="1.0.0")
         inv = RuntimeInventory(pi_extensions=exts)
-        proj = resolve_runtime(inv, {})
+        _, proj = resolve_runtime(inv, {})
         target = os.path.join(self._tmp, "large.toml")
         path, _ = create_runtime_projection(proj, host_path=target)
         self.assertTrue(os.path.isfile(path))
@@ -521,7 +520,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_roundtrip_success_on_valid_projection(self):
         """A valid projection must survive the TOML round-trip:
         serialize → parse → re-validate."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         path, _ = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "rt_valid.toml")
         )
@@ -535,18 +534,18 @@ class TestRuntimeLifecycle(unittest.TestCase):
         """Values containing TOML-significant characters must
         round-trip without corruption."""
         from docker.versioning.model import EffectivePiExtensionEntry, \
-            EffectiveRuntimeProjection, NpmArtifact
+            EffectiveRuntimeProjection
 
         pkg = "@scope/pkg"
         ver = "2.0.0-beta.1"
-        art = NpmArtifact(
-            url=f"https://registry.npmjs.org/{pkg}/-/pkg-{ver}.tgz",
-            integrity="sha384-" + "a" * 64,
-        )
+        # Valid sha384 integrity (48 bytes of 'a')
+        integrity = "sha384-" + "a" * 64
+        artifact_id = "sha384/" + ("a" * 64).replace("+", "-").replace("/", "_") + ".tgz"
         ext = EffectivePiExtensionEntry(
             package=pkg,
             version=ver,
-            artifact=art,
+            artifact_id=artifact_id,
+            integrity=integrity,
             metadata_file="nested/path/package.json",
         )
         proj = EffectiveRuntimeProjection(extensions={"ext": ext})
@@ -571,7 +570,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_roundtrip_corrupt_toml_rejected(self):
         """If the generated TOML cannot be parsed back, tomllib's
         TOMLDecodeError must be surfaced as EffectiveConfigError."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "corrupt.toml")
 
         with mock.patch(
@@ -590,7 +589,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_default_path_never_pre_creates_empty_file(self):
         """Default path generation must not pre-create an empty file
         — it must use a non-existent name."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         # Use default path (no host_path argument).
         path, _ = create_runtime_projection(proj)
         try:
@@ -601,7 +600,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
 
     def test_default_path_is_unique_each_time(self):
         """Two default-path projections must get different files."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         p1, _ = create_runtime_projection(proj)
         p2, _ = create_runtime_projection(proj)
         try:
@@ -626,7 +625,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     # ── concurrent isolation ───────────────────────────────────────
 
     def test_two_projections_use_different_paths(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         p1, _ = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "first.toml")
         )
@@ -638,8 +637,8 @@ class TestRuntimeLifecycle(unittest.TestCase):
         self.assertTrue(os.path.isfile(p2))
 
     def test_concurrent_overrides_do_not_clobber(self):
-        proj_a = resolve_runtime(_runtime(), {})
-        proj_b = resolve_runtime(
+        _, proj_a = resolve_runtime(_runtime(), {})
+        _, proj_b = resolve_runtime(
             _runtime(),
             {"runtime.pi-extensions.pi-read.version": "1.0.0"},
         )
@@ -657,7 +656,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_isolated_default_paths_do_not_clash(self):
         """Two projections without explicit host_path must receive
         unique private paths under .docker-generated/runtime/."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         p1, _ = create_runtime_projection(proj)
         p2, _ = create_runtime_projection(proj)
         try:
@@ -671,7 +670,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     # ── restricted cleanup ─────────────────────────────────────────
 
     def test_cleanup_removes_file(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         path, _ = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "rm.toml")
         )
@@ -706,7 +705,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
 
     def test_context_manager_cleans_file_on_success(self):
         """File must be removed after a successful with-block exit."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "scoped_ok.toml")
         with create_runtime_projection(proj, host_path=target) as h:
             self.assertTrue(os.path.isfile(h.path))
@@ -717,7 +716,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_context_manager_cleans_file_on_exception(self):
         """File must be removed after an exception inside the
         with-block — and the exception must propagate."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "scoped_exc.toml")
         with self.assertRaises(RuntimeError):
             with create_runtime_projection(proj, host_path=target) as h:
@@ -728,7 +727,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
 
     def test_handle_discard_keeps_file(self):
         """Calling discard() inside the context must skip cleanup."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "keep.toml")
         with create_runtime_projection(proj, host_path=target) as h:
             h.discard()
@@ -739,7 +738,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_handle_only_removes_own_file(self):
         """Two handles must not interfere — each removes only its
         own file, never the other's."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         t1 = os.path.join(self._tmp, "one.toml")
         t2 = os.path.join(self._tmp, "two.toml")
         h1 = create_runtime_projection(proj, host_path=t1)
@@ -760,7 +759,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_context_manager_does_not_suppress_exception(self):
         """The handle must not suppress exceptions — they propagate
         after cleanup."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "propagate.toml")
         try:
             with create_runtime_projection(proj, host_path=target):
@@ -774,7 +773,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_unpacking_compat(self):
         """Legacy tuple-unpacking ``path, hash = ...`` must still
         work for backward compatibility."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "compat.toml")
         path, chash = create_runtime_projection(proj, host_path=target)
         self.assertIsInstance(path, str)
@@ -788,7 +787,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         global os module."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "injected.toml")
 
         calls = []
@@ -818,7 +817,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         filesystem access."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         store: dict[str, bytes] = {}
         fake = _make_fake_fs(store, runtime_dir=self._tmp)
         h = create_runtime_projection(
@@ -841,7 +840,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         EffectiveConfigError."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "collide.toml")
         store: dict[str, bytes] = {target: b"preexisting"}
         fake = _make_fake_fs(store, runtime_dir=self._tmp)
@@ -855,7 +854,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         without touching the destination."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "fsyncfail.toml")
         store: dict[str, bytes] = {}
 
@@ -872,7 +871,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         """Failing link must not leave a partial destination."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "linkfail.toml")
         store: dict[str, bytes] = {}
 
@@ -891,7 +890,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         their own files."""
         from docker.versioning.effective import Filesystem
 
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         t1 = os.path.join(self._tmp, "keep1.toml")
         t2 = os.path.join(self._tmp, "keep2.toml")
         store: dict[str, bytes] = {}
@@ -909,7 +908,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     def test_fake_fs_has_no_host_io(self):
         """The fake filesystem must never call real os I/O
         functions (open, write, fsync, mkstemp, close)."""
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "noio.toml")
         store: dict[str, bytes] = {}
         fake = _make_fake_fs(store, runtime_dir=self._tmp)
@@ -935,7 +934,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
     # ── projection does not leak source metadata ───────────────────
 
     def test_projection_does_not_contain_source_metadata(self):
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         path, _ = create_runtime_projection(
             proj, host_path=os.path.join(self._tmp, "no-source.toml")
         )
@@ -952,7 +951,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
         non-owner users — container-remapped UIDs cannot read files
         locked at owner-only 0600."""
         import stat
-        proj = resolve_runtime(_runtime(), {})
+        _, proj = resolve_runtime(_runtime(), {})
         target = os.path.join(self._tmp, "world-readable.toml")
         path, _ = create_runtime_projection(proj, host_path=target)
         mode = os.stat(path).st_mode & 0o777
@@ -990,6 +989,9 @@ class TestSerializedProjectionValidator(unittest.TestCase):
     before it is written to disk."""
 
     _GOOD_INTEGRITY = "sha512-" + "A" * 86 + "=="
+    _GOOD_ARTIFACT_ID = (
+        "sha512/" + ("A" * 86 + "==").replace("+", "-").replace("/", "_") + ".tgz"
+    )
 
     def _valid_data(self, **overrides) -> dict:
         data = {
@@ -997,13 +999,8 @@ class TestSerializedProjectionValidator(unittest.TestCase):
                 "pi-read": {
                     "package": "@example/pi-read",
                     "version": "1.0.0",
-                    "artifact": {
-                        "url": (
-                            "https://registry.npmjs.org/@example/pi-read"
-                            "/-/pi-read-1.0.0.tgz"
-                        ),
-                        "integrity": self._GOOD_INTEGRITY,
-                    },
+                    "artifact_id": self._GOOD_ARTIFACT_ID,
+                    "integrity": self._GOOD_INTEGRITY,
                     "metadata_file": "package.json",
                 },
             },
@@ -1089,15 +1086,17 @@ class TestSerializedProjectionValidator(unittest.TestCase):
             _validate_serialized_projection(data)
         self.assertIn("'artifacts'", str(ctx.exception))
 
-    # ── unknown artifact keys ──────────────────────────────────
+    # ── unknown extension keys ─────────────────────────────────
 
-    def test_rejects_unknown_artifact_key(self):
+    def test_rejects_old_artifact_key(self):
+        """The old nested 'artifact' table is rejected as an unknown
+        extension key."""
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["sha256"] = "abc"
+        data["extensions"]["pi-read"]["artifact"] = {"url": "https://x", "integrity": self._GOOD_INTEGRITY}
         with self.assertRaises(EffectiveConfigError) as ctx:
             _validate_serialized_projection(data)
-        self.assertIn("'sha256'", str(ctx.exception))
+        self.assertIn("'artifact'", str(ctx.exception))
 
     # ── empty string fields ────────────────────────────────────
 
@@ -1126,31 +1125,45 @@ class TestSerializedProjectionValidator(unittest.TestCase):
     def test_accepts_sha256_integrity(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             self._GOOD_SHA256
+        )
+        # artifact_id must agree with the new integrity
+        data["extensions"]["pi-read"]["artifact_id"] = (
+            "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=.tgz"
         )
         _validate_serialized_projection(data)  # does not raise
 
     def test_accepts_sha384_integrity(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             self._GOOD_SHA384
+        )
+        data["extensions"]["pi-read"]["artifact_id"] = (
+            "sha384/"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            ".tgz"
         )
         _validate_serialized_projection(data)  # does not raise
 
     def test_accepts_sha512_integrity(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             self._GOOD_SHA512
+        )
+        data["extensions"]["pi-read"]["artifact_id"] = (
+            "sha512/"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==.tgz"
         )
         _validate_serialized_projection(data)  # does not raise
 
     def test_rejects_unsupported_algorithm(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             "sha1-" + "A" * 27 + "="
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
@@ -1160,7 +1173,7 @@ class TestSerializedProjectionValidator(unittest.TestCase):
     def test_rejects_missing_separator(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             "sha512AAAA"
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
@@ -1170,7 +1183,7 @@ class TestSerializedProjectionValidator(unittest.TestCase):
     def test_rejects_invalid_base64_payload(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             "sha512-" + "!" * 86 + "=="
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
@@ -1183,7 +1196,7 @@ class TestSerializedProjectionValidator(unittest.TestCase):
         # Encode 33 bytes instead of 32 — wrong length for sha256.
         bad = base64.b64encode(b"A" * 33).decode()
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             f"sha256-{bad}"
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
@@ -1196,7 +1209,7 @@ class TestSerializedProjectionValidator(unittest.TestCase):
         import base64
         bad = base64.b64encode(b"B" * 47).decode()
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             f"sha384-{bad}"
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
@@ -1208,7 +1221,7 @@ class TestSerializedProjectionValidator(unittest.TestCase):
         import base64
         bad = base64.b64encode(b"C" * 63).decode()
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["integrity"] = (
+        data["extensions"]["pi-read"]["integrity"] = (
             f"sha512-{bad}"
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
@@ -1243,25 +1256,27 @@ class TestSerializedProjectionValidator(unittest.TestCase):
             _validate_serialized_projection(data)
         self.assertIn("non-empty string", str(ctx.exception))
 
-    # ── npm tarball URL validation ─────────────────────────────
+    # ── artifact_id safety ────────────────────────────────────
 
-    def test_rejects_non_https_url(self):
+    def test_rejects_traversal_in_artifact_id(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["url"] = (
-            "http://registry.npmjs.org/@example/pi-read/-/pi-read-1.0.0.tgz"
+        data["extensions"]["pi-read"]["artifact_id"] = (
+            "sha512/../../etc/shadow.tgz"
         )
         with self.assertRaises(EffectiveConfigError) as ctx:
             _validate_serialized_projection(data)
-        self.assertIn("url", str(ctx.exception))
+        self.assertIn("invalid segments", str(ctx.exception))
 
-    def test_rejects_url_with_query(self):
+    def test_rejects_absolute_artifact_id(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
-        data["extensions"]["pi-read"]["artifact"]["url"] += "?token=x"
+        data["extensions"]["pi-read"]["artifact_id"] = (
+            "/sha512/abc.tgz"
+        )
         with self.assertRaises(EffectiveConfigError) as ctx:
             _validate_serialized_projection(data)
-        self.assertIn("url", str(ctx.exception))
+        self.assertIn("absolute path", str(ctx.exception))
 
 
 def _rmtree_safe(path: str) -> None:

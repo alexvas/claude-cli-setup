@@ -65,35 +65,39 @@ class TestRuntimeResolver(unittest.TestCase):
     # ── default resolution ──────────────────────────────────────────
 
     def test_default_version_used_when_no_overrides(self):
-        p = resolve_runtime(_runtime(), {})
+        _, p = resolve_runtime(_runtime(), {})
         self.assertEqual(p.extensions["pi-read"].version, "1.0.0")
         self.assertEqual(p.extensions["pi-read"].package, "@example/pi-read")
-        self.assertIn("@example/pi-read", p.extensions["pi-read"].artifact.url)
+        self.assertTrue(
+            p.extensions["pi-read"].artifact_id.startswith("sha512/"),
+            "artifact_id must be derived from integrity",
+        )
+        self.assertEqual(p.extensions["pi-read"].integrity, _INT)
 
     def test_preserves_package_identity(self):
-        p = resolve_runtime(_runtime(), {})
+        _, p = resolve_runtime(_runtime(), {})
         self.assertEqual(p.extensions["pi-read"].package, "@example/pi-read")
 
     def test_preserves_metadata_file(self):
-        p = resolve_runtime(_runtime(), {})
+        _, p = resolve_runtime(_runtime(), {})
         self.assertEqual(p.extensions["pi-read"].metadata_file, "package.json")
 
     # ── override application ────────────────────────────────────────
 
     def test_override_selects_matching_artifact(self):
-        p = resolve_runtime(
+        _, p = resolve_runtime(
             _runtime(),
             {"runtime.pi-extensions.pi-read.version": "1.2.0"},
         )
         self.assertEqual(p.extensions["pi-read"].version, "1.2.0")
-        self.assertIn("pi-read-1.2.0.tgz", p.extensions["pi-read"].artifact.url)
+        self.assertEqual(p.extensions["pi-read"].integrity, _INT)
 
     def test_inherits_integrity_from_matching_artifact(self):
-        p = resolve_runtime(
+        _, p = resolve_runtime(
             _runtime(),
             {"runtime.pi-extensions.pi-read.version": "1.2.0"},
         )
-        self.assertEqual(p.extensions["pi-read"].artifact.integrity, _INT)
+        self.assertEqual(p.extensions["pi-read"].integrity, _INT)
 
     # ── override validation errors ──────────────────────────────────
 
@@ -181,18 +185,18 @@ class TestRuntimeResolver(unittest.TestCase):
     # ── projection structure ────────────────────────────────────────
 
     def test_projection_is_effective_runtime_type(self):
-        p = resolve_runtime(_runtime(), {})
+        _, p = resolve_runtime(_runtime(), {})
         self.assertIsInstance(p, EffectiveRuntimeProjection)
 
     def test_projection_extensions_are_immutable(self):
-        p = resolve_runtime(_runtime(), {})
+        _, p = resolve_runtime(_runtime(), {})
         with self.assertRaises(TypeError):
             p.extensions["pi-read"] = p.extensions["pi-read"]  # type: ignore[index]
 
     # ── multiple extensions ─────────────────────────────────────────
 
     def test_multiple_extensions_ordered(self):
-        p = resolve_runtime(
+        _, p = resolve_runtime(
             _runtime(
                 pi_extensions={
                     "z-ext": _entry(pkg="z"),
@@ -204,7 +208,7 @@ class TestRuntimeResolver(unittest.TestCase):
         self.assertEqual(set(p.extensions.keys()), {"z-ext", "a-ext"})
 
     def test_override_only_affects_target_extension(self):
-        p = resolve_runtime(
+        _, p = resolve_runtime(
             _runtime(
                 pi_extensions={
                     "first": _entry(
@@ -236,7 +240,7 @@ class TestRuntimeResolver(unittest.TestCase):
         """The override policy's constraint field is a ``Constraint``
         object (not a raw string) from the canonical inventory parser.
         ``_validate_runtime_override`` must use it directly."""
-        p = resolve_runtime(
+        _, p = resolve_runtime(
             _runtime(
                 pi_extensions={
                     "pi-read": _entry(

@@ -34,6 +34,7 @@ from .model import (
     PythonEntry,
     RuntimeInventory,
 )
+from .artifact_cache import SelectedArtifact
 from .semver import SemverError, validate as _validate_semver
 
 # ---------------------------------------------------------------------------
@@ -406,13 +407,24 @@ _RUNTIME_OVERRIDE_SUFFIX = ".version"
 def resolve_runtime(
     runtime: RuntimeInventory,
     overrides: Mapping[str, str],
-) -> EffectiveRuntimeProjection:
-    """Resolve the effective runtime projection from reviewed runtime inventory.
+) -> tuple[list[SelectedArtifact], EffectiveRuntimeProjection]:
+    """Resolve the effective runtime projection from reviewed runtime
+    inventory.
 
-    Applies validated overrides and returns a frozen projection containing
-    only the fields required for container-side installation.  No build
-    entries, update/override policy, source metadata, or unselected
-    artifacts appear in the projection.
+    Returns a pair of:
+
+    * **host materialization selections** — one
+      :class:`SelectedArtifact` per unique selected integrity,
+      carrying the exact reviewed URL and SRI integrity for
+      download, verification, and caching.
+    * **container-safe projection** — :class:`EffectiveRuntimeProjection`
+      containing only the fields required for container-side
+      installation (package identity, version, canonical
+      ``artifact_id``, ``integrity``, and ``metadata_file``).
+
+    Applies validated overrides.  No build entries, update/override
+    policy, source metadata, or unselected artifacts appear in the
+    projection.
 
     Raises:
         UnsupportedOverrideError: override path not recognised.
@@ -420,6 +432,7 @@ def resolve_runtime(
         EffectiveConfigError: override version has no matching artifact.
     """
     extensions: dict[str, EffectivePiExtensionEntry] = {}
+    selected: dict[str, SelectedArtifact] = {}
 
     for path in overrides:
         _validate_runtime_override_path(path, runtime)
@@ -442,17 +455,37 @@ def resolve_runtime(
 
         artifact = entry.artifacts[effective_version]
 
+        # Deduplicate by integrity: one SelectedArtifact per unique
+        # integrity, even when multiple extensions share it.
+        key = artifact.integrity
+        if key not in selected:
+            selected[key] = SelectedArtifact(
+                url=artifact.url,
+                integrity=artifact.integrity,
+            )
+
+        from .model import _derive_artifact_id
+        artifact_id = _derive_artifact_id(artifact.integrity)
+
         extensions[name] = EffectivePiExtensionEntry(
             package=entry.source.package,
             version=effective_version,
-            artifact=NpmArtifact(url=artifact.url, integrity=artifact.integrity),
+            artifact_id=artifact_id,
+            integrity=artifact.integrity,
             metadata_file=entry.validation.metadata_file,
         )
 
-    # Deterministic ordering — insertion order from the inventory's
-    # TOML layout must not affect the projection identity.
+    # Deterministic ordering — insertion order of the inventory's
+    # TOML layout must not affect ordering.
     extensions = {k: extensions[k] for k in sorted(extensions)}
-    return EffectiveRuntimeProjection(extensions=extensions)
+    selected_list = [
+        selected[k]
+        for k in sorted(selected)
+    ]
+    return (
+        selected_list,
+        EffectiveRuntimeProjection(extensions=extensions),
+    )
 
 
 def _validate_runtime_override_path(path: str, runtime: RuntimeInventory) -> None:
@@ -611,10 +644,8 @@ _SERIALIZED_TOP_KEYS = frozenset({"extensions"})
 
 # Allowed per-extension keys.
 _SERIALIZED_EXT_KEYS = frozenset({
-    "package", "version", "artifact", "metadata_file"})
-
-# Allowed keys inside each extension's artifact dict.
-_SERIALIZED_ARTIFACT_KEYS = frozenset({"url", "integrity"})
+    "package", "version", "artifact_id", "integrity", "metadata_file",
+})
 
 # Allowed SRI integrity algorithms and their digest byte-lengths.
 # From the W3C Subresource Integrity spec: sha256 (32 B), sha384
@@ -679,7 +710,8 @@ def _validate_serialized_projection(data: object) -> None:
             )
 
         # ── required string fields ────────────────────────────
-        for key in ("package", "version", "metadata_file"):
+        for key in ("package", "version", "artifact_id", "integrity",
+                     "metadata_file"):
             val = ext_val.get(key)
             if not isinstance(val, str) or not val:
                 raise EffectiveConfigError(
@@ -693,46 +725,28 @@ def _validate_serialized_projection(data: object) -> None:
             prefix=f"extensions.{ext_name}",
         )
 
-        # ── artifact ──────────────────────────────────────────
-        artifact = ext_val.get("artifact")
-        if not isinstance(artifact, dict):
-            raise EffectiveConfigError(
-                f"extensions.{ext_name}.artifact: must be a table"
-            )
-
-        unknown = set(artifact) - _SERIALIZED_ARTIFACT_KEYS
-        if unknown:
-            raise EffectiveConfigError(
-                f"extensions.{ext_name}.artifact: unknown key(s) "
-                f"{sorted(unknown)!r}"
-            )
-
-        for akey in ("url", "integrity"):
-            aval = artifact.get(akey)
-            if not isinstance(aval, str) or not aval:
-                raise EffectiveConfigError(
-                    f"extensions.{ext_name}.artifact.{akey}: "
-                    f"must be a non-empty string"
-                )
+        # ── artifact_id safety ────────────────────────────────
+        _validate_artifact_id(
+            ext_val["artifact_id"],
+            prefix=f"extensions.{ext_name}",
+        )
 
         # ── integrity: SRI validation ────────────────────────
         _validate_integrity(
-            artifact["integrity"],
-            prefix=f"extensions.{ext_name}.artifact",
+            ext_val["integrity"],
+            prefix=f"extensions.{ext_name}",
         )
 
-        # ── npm tarball URL must match package + version ───────
-        from .model import _validate_npm_tarball_url
-        try:
-            _validate_npm_tarball_url(
-                artifact["url"],
-                ext_val["package"],
-                ext_val["version"],
-            )
-        except ValueError as exc:
+        # ── artifact_id must agree with integrity ─────────────
+        from .model import _derive_artifact_id
+        expected_id = _derive_artifact_id(ext_val["integrity"])
+        if ext_val["artifact_id"] != expected_id:
             raise EffectiveConfigError(
-                f"extensions.{ext_name}.artifact.url: {exc}"
-            ) from exc
+                f"extensions.{ext_name}.artifact_id: "
+                f"{ext_val['artifact_id']!r} does not match the "
+                f"canonical identity {expected_id!r} derived from "
+                f"integrity"
+            )
 
 
 def _validate_integrity(integrity: str, *, prefix: str) -> None:
@@ -791,6 +805,28 @@ def _validate_metadata_file(value: str, *, prefix: str) -> None:
     if not value.strip():
         raise EffectiveConfigError(
             f"{prefix}.metadata_file: must be non-empty"
+        )
+
+
+def _validate_artifact_id(value: str, *, prefix: str) -> None:
+    """Validate that *value* is a safe canonical artifact_id path.
+
+    Must be a non-empty relative path consisting of
+    ``<algorithm>/<urlsafe-base64>.tgz``.  No absolute paths,
+    traversal (``..``), or empty segments are allowed.
+    """
+    if not value:
+        raise EffectiveConfigError(
+            f"{prefix}.artifact_id: must be a non-empty relative path"
+        )
+    if value.startswith("/"):
+        raise EffectiveConfigError(
+            f"{prefix}.artifact_id: absolute path {value!r} not allowed"
+        )
+    segments = value.split("/")
+    if ".." in segments or "" in segments:
+        raise EffectiveConfigError(
+            f"{prefix}.artifact_id: {value!r} contains invalid segments"
         )
 
 
@@ -972,9 +1008,11 @@ def create_runtime_projection(
     # Trigger __post_init__ validation (closed-DTO enforcement).
     # Already validated during construction, but this guards against
     # misuse where a bare dict was cast to the type.
-    EffectiveRuntimeProjection(**{k: v for k, v in projection.__dict__.items()
-                                  if k != "extensions"},
-                              extensions=dict(projection.extensions))
+    EffectiveRuntimeProjection(
+        **{k: v for k, v in projection.__dict__.items()
+           if k != "extensions"},
+        extensions=dict(projection.extensions),
+    )
 
     # ── build canonical plain-data representation ────────────────
     import io
@@ -984,10 +1022,8 @@ def create_runtime_projection(
             name: {
                 "package": ext.package,
                 "version": ext.version,
-                "artifact": {
-                    "url": ext.artifact.url,
-                    "integrity": ext.artifact.integrity,
-                },
+                "artifact_id": ext.artifact_id,
+                "integrity": ext.integrity,
                 "metadata_file": ext.metadata_file,
             }
             for name, ext in sorted(

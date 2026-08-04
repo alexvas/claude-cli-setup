@@ -106,10 +106,11 @@ def _canonical_runtime_projection(
     overrides: Mapping[str, str] | None = None,
 ) -> EffectiveRuntimeProjection:
     """Return the test canonical effective runtime projection."""
-    return resolve_runtime(
+    _, proj = resolve_runtime(
         _canonical_runtime_inventory(),
         overrides or {},
     )
+    return proj
 
 
 def _canonical_runtime_projection_dict() -> dict:
@@ -330,7 +331,8 @@ def _alternate_inventory() -> RuntimeInventory:
 def _alternate_runtime_projection(
     overrides: Mapping[str, str] | None = None,
 ) -> EffectiveRuntimeProjection:
-    return resolve_runtime(_alternate_inventory(), overrides or {})
+    _, proj = resolve_runtime(_alternate_inventory(), overrides or {})
+    return proj
 
 
 def _alternate_runtime_handle(suffix: str = ".toml") -> _RecordingProjectionFactory:

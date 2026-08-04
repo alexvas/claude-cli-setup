@@ -1884,8 +1884,8 @@ class TestRunTransaction(unittest.TestCase):
         self.assertEqual(pi_read_entry.metadata_file, "package.json")
         self.assertEqual(pi_shared_entry.metadata_file, "shared-package.json")
         self.assertEqual(
-            pi_read_entry.artifact.integrity,
-            pi_shared_entry.artifact.integrity,
+            pi_read_entry.integrity,
+            pi_shared_entry.integrity,
             "both entries must share the same integrity",
         )
 

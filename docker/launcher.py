@@ -490,7 +490,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
 
     # ── Step 2: apply overrides ──────────────────────────────
     try:
-        effective = resolve_runtime(
+        selected_artifacts, effective = resolve_runtime(
             inventory.runtime,
             request.overrides,
         )
@@ -577,8 +577,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         )
 
     # ── Step 3b: materialize unique selected artifacts ─────
-    # Projection entries remain untouched, so packages sharing bytes retain
-    # their independent package/version/validation metadata.
+    # selected_artifacts from resolve_runtime already deduplicates by
+    # integrity.  Each entry in the projection retains its independent
+    # package/version/metadata identity.
     try:
         import docker.versioning.artifact_cache as artifact_cache
 
@@ -600,15 +601,8 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 "containment", "runtime artifact cache root is a symlink",
             )
         root = os.path.realpath(configured_root)
-        selected = [
-            artifact_cache.SelectedArtifact(
-                url=entry.artifact.url,
-                integrity=entry.artifact.integrity,
-            )
-            for entry in effective.extensions.values()
-        ]
         blobs = artifact_cache.materialize_selected_artifacts(
-            selected,
+            selected_artifacts,
             transport=transport,
             filesystem=artifact_cache.LocalCacheFilesystem(),
             lock_factory=artifact_cache.FileIdentityLockFactory(root),

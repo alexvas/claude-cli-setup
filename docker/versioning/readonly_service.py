@@ -170,7 +170,7 @@ def _handle_show(
             data["build"] = to_plain_data(build_proj)
 
         if scope in ("runtime", "all"):
-            runtime_proj = resolve_runtime(
+            _, runtime_proj = resolve_runtime(
                 inventory.runtime, runtime_overrides,
             )
             data["runtime"] = to_plain_data(runtime_proj)

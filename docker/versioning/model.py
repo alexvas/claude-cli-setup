@@ -11,6 +11,7 @@ All containers exposed after validation are immutable:
 """
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -287,7 +288,8 @@ def _validate_runtime_projection(projection: object) -> None:
         # EffectivePiExtensionEntry fields:
         "package": str,
         "version": str,
-        "artifact": NpmArtifact,
+        "artifact_id": str,
+        "integrity": str,
         "metadata_file": str,
     }
     disallowed = [
@@ -441,17 +443,109 @@ class EffectivePiExtensionEntry:
     """Single Pi extension entry in the effective runtime projection.
 
     Contains only the fields required for container-side installation:
-    package identity, effective version, the selected artifact with
-    integrity, and validation metadata.  No source, update, override,
-    or unselected artifacts are included.
+    package identity, effective version, canonical mounted-artifact
+    identity, SRI integrity, and metadata_file path.  No source,
+    update, override, unselected artifacts, or downloadable URLs
+    are included.
+
+    The *artifact_id* is a relative path of the form
+    ``<algorithm>/<urlsafe-base64>.tgz`` derived from the *integrity*
+    SRI string.  The two fields MUST agree: the algorithm prefix
+    and decoded digest bytes must match.
     """
     package: str
     version: str
-    artifact: NpmArtifact
+    artifact_id: str
+    integrity: str
     metadata_file: str
 
     def __post_init__(self) -> None:
-        _validate_npm_tarball_url(self.artifact.url, self.package, self.version)
+        # 1. Validate metadata_file is safe (carried forward from
+        #    the old RuntimeValidation check).
+        _require_safe_metadata_path("EffectivePiExtensionEntry",
+                                    self.metadata_file)
+
+        # 2. Validate artifact_id: must be a safe relative path.
+        _require_safe_artifact_id("EffectivePiExtensionEntry",
+                                  self.artifact_id)
+
+        # 3. Validate integrity is a well-formed SRI string.
+        _require_well_formed_integrity("EffectivePiExtensionEntry",
+                                       self.integrity)
+
+        # 4. Derive the canonical artifact_id from the integrity and
+        #    verify they agree.
+        expected_id = _derive_artifact_id(self.integrity)
+        if self.artifact_id != expected_id:
+            raise ValueError(
+                f"EffectivePiExtensionEntry: artifact_id {self.artifact_id!r} "
+                f"does not match the canonical identity {expected_id!r} "
+                f"derived from integrity {self.integrity!r}"
+            )
+
+
+# ── helpers for EffectivePiExtensionEntry.__post_init__ ──────────────
+
+# Allowed SRI integrity algorithms and their digest byte-lengths.
+# From the W3C Subresource Integrity spec.
+_SRI_ALGORITHMS: dict[str, int] = {
+    "sha256": 32,
+    "sha384": 48,
+    "sha512": 64,
+}
+
+
+def _require_well_formed_integrity(source: str, value: str) -> None:
+    """Reject integrity strings that are not valid SRI."""
+    if "-" not in value:
+        raise ValueError(
+            f"{source}.integrity: {value!r} is not a valid SRI string "
+            f"(missing '-' separator)"
+        )
+    algo, b64 = value.split("-", 1)
+    if algo not in _SRI_ALGORITHMS:
+        raise ValueError(
+            f"{source}.integrity: unknown algorithm {algo!r}"
+        )
+    expected_len = _SRI_ALGORITHMS[algo]
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception as exc:
+        raise ValueError(
+            f"{source}.integrity: invalid base64 payload: {exc}"
+        ) from None
+    if len(raw) != expected_len:
+        raise ValueError(
+            f"{source}.integrity: expected {expected_len} bytes "
+            f"for {algo}, got {len(raw)}"
+        )
+
+
+def _require_safe_artifact_id(source: str, value: str) -> None:
+    """Reject artifact_id values that contain absolute paths,
+    traversal, leading slash, or empty segments."""
+    if not value or value.startswith("/"):
+        raise ValueError(
+            f"{source}.artifact_id: {value!r} must be a non-empty "
+            f"relative path (must not start with '/')"
+        )
+    segments = value.split("/")
+    if ".." in segments or "" in segments:
+        raise ValueError(
+            f"{source}.artifact_id: {value!r} contains path traversal "
+            f"or empty segments"
+        )
+
+
+def _derive_artifact_id(integrity: str) -> str:
+    """Derive the canonical artifact_id from an SRI integrity string.
+
+    The result is ``<algorithm>/<urlsafe-base64>.tgz`` where
+    ``urlsafe-base64`` replaces ``+`` with ``-`` and ``/`` with ``_``.
+    """
+    algo, b64 = integrity.split("-", 1)
+    safe = b64.replace("+", "-").replace("/", "_")
+    return f"{algo}/{safe}.tgz"
 
 
 @dataclass(frozen=True)
