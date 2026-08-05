@@ -23,7 +23,140 @@ import hmac
 import os
 import stat
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Mounted artifact lookup (host-side, read-only)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Single fixed root for content-addressed artifact blobs materialized on
+# the host.  The installer SHALL NOT accept any other root — no env var,
+# no constructor argument, no projection field.
+_MOUNTED_ARTIFACT_ROOT: str = "/run/pi-cli/runtime-artifacts"
+
+
+def _mounted_artifact_path(artifact_id: str) -> str:
+    """Return the absolute host path for *artifact_id* under the
+    single fixed :data:`_MOUNTED_ARTIFACT_ROOT`.
+
+    The result is ``<root>/<artifact_id>``.  *artifact_id* MUST
+    be a relative, non-traversal path matching the canonical
+    ``<algo>/<digest>.tgz`` form.  Any violation — absolute path,
+    ``..`` component, empty string — raises :class:`ProjectionError`
+    before touching the filesystem.
+    """
+    if not artifact_id:
+        raise ProjectionError("artifact_id must not be empty")
+    if os.path.isabs(artifact_id):
+        raise ProjectionError(
+            f"artifact_id must be relative, got {artifact_id!r}",
+        )
+    # Reject ".." as a path component (normalised or not).
+    parts = artifact_id.split(os.sep)
+    if ".." in parts:
+        raise ProjectionError(
+            f"artifact_id must not contain '..': {artifact_id!r}",
+        )
+    # Reject a leading ".." without a separator ("../etc").
+    if artifact_id.startswith(".."):
+        raise ProjectionError(
+            f"artifact_id must not start with '..': {artifact_id!r}",
+        )
+    return os.path.join(_MOUNTED_ARTIFACT_ROOT, artifact_id)
+
+
+@runtime_checkable
+class MountedBlobReader(Protocol):
+    """Read-only, verified access to a materialized artifact blob.
+
+    Implementations SHALL: derive the blob path from the single
+    fixed root, open the file with ``O_NOFOLLOW``, verify the
+    integrity digest against the streamed bytes, and return the
+    complete blob contents as :class:`bytes`.  Any failure —
+    missing blob, symlink, wrong permissions, digest mismatch —
+    SHALL raise :class:`InstallError`.
+    """
+
+    def open_verified(
+        self, *, artifact_id: str, integrity: str,
+    ) -> bytes:
+        """Open, verify, and return the blob identified by
+        *artifact_id* and *integrity*.
+
+        The caller SHALL NOT supply a root — the implementation
+        uses :data:`_MOUNTED_ARTIFACT_ROOT` exclusively.
+        """
+        ...
+
+
+class _MountInspection(Protocol):
+    """Inspect whether a path resides on a read-only filesystem
+    mount (bind-mount or otherwise).  Checking only Unix permission
+    bits on the blob is insufficient — a ``0o600`` file on a
+    writable mount can still be mutated by its owner."""
+
+    def is_read_only_mount(self, path: str) -> bool:
+        """Return ``True`` if *path* is on a read-only mount."""
+        ...
+
+
+class _StatvfsMountInspection:
+    """Production mount inspection using :func:`os.statvfs`.
+
+    Checks ``ST_RDONLY`` in the filesystem flags for the mount
+    containing *path*."""
+
+    def is_read_only_mount(self, path: str) -> bool:
+        try:
+            flags = os.statvfs(path).f_flag
+        except OSError:
+            return False
+        return bool(flags & os.ST_RDONLY)
+
+
+class RuntimeArtifactReader:
+    """Production :class:`MountedBlobReader` that reads
+    materialized blobs from :data:`_MOUNTED_ARTIFACT_ROOT`.
+
+    Accepts an optional *mount_inspection* boundary for testing;
+    the production default uses :class:`_StatvfsMountInspection`.
+    """
+
+    def __init__(
+        self,
+        *,
+        mount_inspection: _MountInspection | None = None,
+    ) -> None:
+        self._mount_inspection: _MountInspection = (
+            mount_inspection or _StatvfsMountInspection()
+        )
+
+    def open_verified(
+        self, *, artifact_id: str, integrity: str,
+    ) -> bytes:
+        """Open, verify, and return the blob at the fixed root.
+
+        Order of checks (task 7.3):
+
+        1. Derive and validate *artifact_id* → path.
+        2. Reject identity/integrity mismatch.
+        3. **Reject writable mount** — the blob path MUST reside
+           on a read-only filesystem, not just have restrictive
+           permission bits.
+        4. Open with ``O_NOFOLLOW``, verify regular file +
+           owner-only permissions, stream through SRI digest,
+           compare, return exact bytes.
+        """
+        _path = _mounted_artifact_path(artifact_id)
+        # identity agreement will go here (task 7.2 / 7.3)
+        # mount check will go here:
+        #   if not self._mount_inspection.is_read_only_mount(_path):
+        #       raise InstallError("artifact mount is not read-only")
+        raise NotImplementedError(
+            "RuntimeArtifactReader.open_verified — "
+            "production implementation pending (task 7.3)"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════

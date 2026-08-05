@@ -25,12 +25,15 @@ import inspect
 import json
 import os
 import shutil
+import stat
 import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest import mock
+
+import docker
 
 from docker.runtime_installer import (
     ArtifactDownloader,
@@ -45,11 +48,17 @@ from docker.runtime_installer import (
     MetadataReader,
     MetadataValidationError,
     MountChecker,
+    MountedBlobReader,
     PackageInstaller,
     PrivilegeContext,
     ProjectionEntry,
     ProjectionError,
+    RuntimeArtifactReader,
     TempWorkspace,
+    _mounted_artifact_path,
+    _MOUNTED_ARTIFACT_ROOT,
+    _MountInspection,
+    _StatvfsMountInspection,
     exit_code_for,
     install_extensions,
     read_projection,
@@ -3885,7 +3894,11 @@ class _FakePackageInstaller(_CallRecorder, PackageInstaller):
     def install(self, *, package: str, artifact_bytes: bytes) -> None:
         self._call_log.append("install")
         self.call_count += 1
-        self._last_call = {"package": package, "artifact_bytes_len": len(artifact_bytes)}
+        self._last_call = {
+            "package": package,
+            "artifact_bytes": artifact_bytes,
+            "artifact_bytes_len": len(artifact_bytes),
+        }
         if self._failure:
             raise self._failure
         if self._metadata is not None and package not in self._metadata._installed:
@@ -4381,6 +4394,863 @@ class TestArchitectureHostURLBoundary(unittest.TestCase):
         self.assertFalse(
             hasattr(mod, "real_download"),
             "real_download factory must not exist in the production module",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Mounted-artifact installer contract (failing tests)
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── MountedBlobReader protocol imported from production ─────────
+
+
+# ── Fake MountedBlobReader ────────────────────────────────────────
+
+class _FakeMountedBlobReader(_CallRecorder, MountedBlobReader):
+    """Configurable fake that enforces identity agreement and
+    returns verified bytes (or raises :class:`InstallError` to
+    simulate blob-level failures).
+
+    The fake delegates path derivation to the production
+    :func:`_mounted_artifact_path` — the root is not injectable.
+
+    By default the reader validates that *artifact_id* equals the
+    canonical derivation from *integrity* — a mismatched ID raises
+    :class:`ProjectionError`.  Call :meth:`_disable_id_check` to
+    suppress this (for tests that need to simulate a corrupt
+    projection).
+    """
+
+    def __init__(self) -> None:
+        _CallRecorder.__init__(self)
+        self._bytes: bytes = _dummy_bytes
+        self._fail_with: InstallError | None = None
+        self._calls: list[dict[str, object]] = []
+        self._validate_id: bool = True
+
+    def open_verified(
+        self, *, artifact_id: str, integrity: str,
+    ) -> bytes:
+        self._call_log.append("blob_reader.open_verified")
+
+        # ── identity agreement ───────────────────────────────
+        if self._validate_id:
+            expected_id = _derived_artifact_id(integrity)
+            if artifact_id != expected_id:
+                raise ProjectionError(
+                    f"artifact_id {artifact_id!r} does not match "
+                    f"integrity {integrity!r} (expected "
+                    f"{expected_id!r})",
+                )
+
+        self._calls.append({
+            "artifact_id": artifact_id,
+            "integrity": integrity,
+        })
+        if self._fail_with is not None:
+            raise self._fail_with
+        return self._bytes
+
+    def _set_bytes(self, value: bytes) -> None:
+        self._bytes = value
+
+    def _set_failure(self, exc: InstallError) -> None:
+        self._fail_with = exc
+
+    def _disable_id_check(self) -> None:
+        """Allow id/integrity mismatch to proceed (for tests
+        that simulate a corrupt projection)."""
+        self._validate_id = False
+
+
+# ── InstallContext wired with MountedBlobReader ───────────────────
+
+class _MountedInstallContext(InstallContext):
+    """InstallContext that carries :class:`MountedBlobReader`
+    instead of download / workspace boundaries."""
+
+    def __init__(
+        self,
+        mount_check: _FakeMountChecker,
+        blob_reader: _FakeMountedBlobReader,
+        installer: _FakePackageInstaller,
+        metadata: _FakeMetadataReader,
+        privilege: _FakePrivilegeContext,
+    ) -> None:
+        object.__setattr__(self, "mount_check", mount_check)
+        object.__setattr__(self, "blob_reader", blob_reader)
+        object.__setattr__(self, "installer", installer)
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "privilege", privilege)
+        self._call_log: list[str] = []
+
+
+def _make_mounted_context() -> _MountedInstallContext:
+    meta = _FakeMetadataReader()
+    ctx = _MountedInstallContext(
+        mount_check=_FakeMountChecker(),
+        blob_reader=_FakeMountedBlobReader(),
+        installer=_FakePackageInstaller(metadata=meta),
+        metadata=meta,
+        privilege=_FakePrivilegeContext(),
+    )
+    shared = ctx._call_log
+    for attr in ("mount_check", "blob_reader", "installer",
+                 "metadata", "privilege"):
+        obj = getattr(ctx, attr)
+        if hasattr(obj, "_call_log"):
+            obj._call_log = shared
+    return ctx
+
+
+def _derived_artifact_id(integrity: str) -> str:
+    """Derive the canonical ``<algo>/<digest>.tgz`` path from a
+    ``shaNNN-<base64>`` integrity string."""
+    import base64
+    algo, b64 = integrity.split("-", 1)
+    safe = b64.replace("+", "-").replace("/", "_")
+    return f"{algo}/{safe}.tgz"
+
+
+# ── Test orchestrator: calls install_extensions after faking out ─
+#    the download path into a mounted-blob-read path.                ─
+
+class _MountedInstallTestBase:
+    """Shared setup for tests that exercise the installer through
+    a mounted-artifact reader rather than a downloader."""
+
+    ctx: _MountedInstallContext
+
+    def setUp(self) -> None:  # type: ignore[override]
+        self.ctx = _make_mounted_context()
+
+    def _integ_for(self, content: bytes,
+                   *, algo: str = "sha256") -> str:
+        h = hashlib.new(algo, content)
+        return f"{algo}-" + base64.b64encode(h.digest()).decode("ascii")
+
+    def _install(
+        self,
+        *,
+        entries: list[dict[str, str]] | None = None,
+        pi_home: str = "/mnt/pi",
+        dry_run: bool = False,
+    ) -> InstallResult:
+        """Build :class:`ProjectionEntry` instances (with the
+        *artifact_id* / *artifact_integrity* fields required by
+        the new DTO), wire them into :func:`install_extensions`,
+        and return the result.
+
+        This function will raise :exc:`TypeError` until
+        :class:`ProjectionEntry` drops *artifact_url* and gains
+        *artifact_id* (task 7.2).
+        """
+        proj_entries = [
+            ProjectionEntry(
+                package=e["package"],
+                version=e["version"],
+                artifact_id=e["artifact_id"],
+                artifact_integrity=e["integrity"],
+                metadata_file=e.get("metadata_file", "package.json"),
+            )
+            for e in (entries or [])
+        ]
+        return install_extensions(
+            self.ctx, entries=proj_entries, pi_home=pi_home,
+            dry_run=dry_run,  # type: ignore[call-arg]
+        )
+
+    def _entry(self, *,
+               package: str = "p",
+               version: str = "1.0.0",
+               content: bytes = _dummy_bytes,
+               ) -> dict[str, str]:
+        return {
+            "package": package,
+            "version": version,
+            "artifact_id": _derived_artifact_id(
+                self._integ_for(content),
+            ),
+            "integrity": self._integ_for(content),
+            "metadata_file": "package.json",
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Mounted-blob validation: the reader (not the OS) rejects
+#        symlinks, dirs, writable files, and empty / corrupt blobs
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMountedBlobValidation(_MountedInstallTestBase, unittest.TestCase):
+    """The installer must receive its verified bytes through
+    :class:`MountedBlobReader`.  When the reader raises
+    :class:`InstallError`, the installer must surface that failure
+    and must NOT call :class:`PackageInstaller.install`."""
+
+    # ── valid blob ────────────────────────────────────────────
+
+    def test_valid_blob_proceeds_to_install(self) -> None:
+        content = b"good blob\n"
+        integ = self._integ_for(content)
+        self.ctx.blob_reader._set_bytes(content)  # type: ignore[attr-defined]
+        result = self._install(entries=[{
+            "package": "p", "version": "1.0.0",
+            "artifact_id": _derived_artifact_id(integ),
+            "integrity": integ,
+        }])
+        self.assertEqual(1, len(result.results))
+        self.assertEqual(
+            InstallStatus.INSTALLED,
+            result.results[0].status,
+            "valid blob must result in INSTALLED",
+        )
+        # Package installer was called with verified bytes.
+        last = self.ctx.installer._last_call  # type: ignore[attr-defined]
+        self.assertEqual("p", last.get("package"))
+        self.assertIn("artifact_bytes_len", last)
+
+    # ── symlink rejection ─────────────────────────────────────
+
+    def test_symlinked_blob_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("artifact is a symlink"),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn(
+            "install", self.ctx._call_log,
+            "PackageInstaller.install must not be called "
+            "when the blob reader rejects a symlink",
+        )
+
+    # ── non-regular file rejection ────────────────────────────
+
+    def test_non_regular_blob_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("artifact is not a regular file"),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn(
+            "install", self.ctx._call_log,
+            "directory / FIFO / device must not reach install",
+        )
+
+    # ── overly-permissive rejection ───────────────────────────
+
+    def test_writable_blob_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("artifact has group/world write bits"),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn("install", self.ctx._call_log)
+
+    # ── empty blob rejection ──────────────────────────────────
+
+    def test_empty_blob_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("artifact is empty"),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn("install", self.ctx._call_log)
+
+    # ── integrity mismatch ────────────────────────────────────
+
+    def test_corrupt_bytes_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            IntegrityError(
+                "digest mismatch",
+                algorithm="sha256",
+                expected="deadbeef", actual="cafebabe",
+            ),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn(
+            "install", self.ctx._call_log,
+            "integrity mismatch must abort before package execution",
+        )
+
+    # ── missing blob ──────────────────────────────────────────
+
+    def test_missing_blob_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("no blob found for artifact"),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn("install", self.ctx._call_log)
+
+    # ── missing algorithm directory ───────────────────────────
+
+    def test_missing_algorithm_dir_rejected(self) -> None:
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("algorithm directory sha512/ not found"),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertEqual(
+            InstallStatus.FAILED,
+            result.results[0].status,
+        )
+        self.assertNotIn("install", self.ctx._call_log)
+
+    # ── failure detail is surfaced ────────────────────────────
+
+    def test_failure_detail_surfaces_reader_message(self) -> None:
+        msg = "blob at sha512/abc.tgz is a symlink"
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError(msg),
+        )
+        result = self._install(entries=[self._entry()])
+        self.assertIsNotNone(result.results[0].detail)
+        self.assertIn(msg, result.results[0].detail or "")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Exact-byte verification ordering
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMountedArtifactByteVerificationOrder(
+    _MountedInstallTestBase, unittest.TestCase,
+):
+    """Integrity verification must happen through a single open
+    descriptor — open → hash → compare — before any bytes reach
+    :class:`PackageInstaller.install`."""
+
+    def test_blob_opened_before_install(self) -> None:
+        """The blob reader's ``open_verified`` call must appear
+        in the call log before ``install``."""
+        content = b"ordered byte stream\n"
+        self.ctx.blob_reader._set_bytes(content)  # type: ignore[attr-defined]
+        integ = self._integ_for(content)
+        self._install(entries=[{
+            "package": "p", "version": "1.0.0",
+            "artifact_id": _derived_artifact_id(integ),
+            "integrity": integ,
+        }])
+        log = self.ctx._call_log
+        open_idx = log.index("blob_reader.open_verified")
+        inst_idx = log.index("install")
+        self.assertLess(
+            open_idx, inst_idx,
+            "open_verified must precede install",
+        )
+
+    def test_verified_bytes_not_fetched_twice(self) -> None:
+        """When the blob reader succeeds, the installer must
+        reuse the exact verified bytes — not call the reader
+        again."""
+        content = b"one read\n"
+        self.ctx.blob_reader._set_bytes(content)  # type: ignore[attr-defined]
+        integ = self._integ_for(content)
+        self._install(entries=[{
+            "package": "p", "version": "1.0.0",
+            "artifact_id": _derived_artifact_id(integ),
+            "integrity": integ,
+        }])
+        self.assertEqual(
+            1,
+            self.ctx._call_log.count("blob_reader.open_verified"),
+            "bytes must be opened and verified exactly once per extension",
+        )
+
+    def test_install_receives_exact_verified_bytes(self) -> None:
+        content = b"specific verified payload\n"
+        self.ctx.blob_reader._set_bytes(content)  # type: ignore[attr-defined]
+        integ = self._integ_for(content)
+        self._install(entries=[{
+            "package": "p", "version": "1.0.0",
+            "artifact_id": _derived_artifact_id(integ),
+            "integrity": integ,
+        }])
+        last = self.ctx.installer._last_call  # type: ignore[attr-defined]
+        self.assertEqual(
+            content,
+            last.get("artifact_bytes"),
+            "install must receive the exact verified bytes — "
+            "same-length different content is a TOCTOU gap",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fixed-root lookup + identity/integrity agreement
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMountedArtifactIdentityAgreement(
+    _MountedInstallTestBase, unittest.TestCase,
+):
+    """The production reader MUST use :data:`_MOUNTED_ARTIFACT_ROOT`
+    as the single fixed root with no injection points.  The
+    *artifact_id* MUST agree with the canonical derivation from
+    *integrity* — a mismatched pair means the projection was
+    tampered with."""
+
+    # ── production path derivation ──────────────────────────
+
+    def test_production_path_uses_fixed_root(self) -> None:
+        """``_mounted_artifact_path(artifact_id)`` returns
+        ``/run/pi-cli/runtime-artifacts/<artifact_id>``."""
+        result = _mounted_artifact_path("sha256/abc.tgz")
+        self.assertEqual(
+            "/run/pi-cli/runtime-artifacts/sha256/abc.tgz",
+            result,
+        )
+
+    def test_production_path_rejects_traversal_in_id(self) -> None:
+        """*artifact_id* with ``..`` or absolute path MUST
+        raise :class:`ProjectionError` before any join."""
+        for bad_id in (
+            "sha256/../../../etc/passwd.tgz",
+            "../etc/passwd",
+            "sha256/x/../../etc/passwd.tgz",
+        ):
+            with self.subTest(artifact_id=bad_id):
+                with self.assertRaises(ProjectionError):
+                    _mounted_artifact_path(bad_id)
+
+    def test_production_path_rejects_absolute_id(self) -> None:
+        """An absolute *artifact_id* is a path injection
+        attempt — must be rejected."""
+        with self.assertRaises(ProjectionError):
+            _mounted_artifact_path("/etc/passwd")
+
+    def test_production_path_rejects_empty_id(self) -> None:
+        """An empty *artifact_id* must be rejected — an empty
+        join produces the root directory itself."""
+        with self.assertRaises(ProjectionError):
+            _mounted_artifact_path("")
+
+    # ── production reader has no root injection ──────────────
+
+    def test_production_reader_has_no_root_parameter(self) -> None:
+        """``RuntimeArtifactReader`` accepts an optional
+        *mount_inspection* boundary but SHALL NOT accept any
+        form of root override."""
+        # mount_inspection is an injectable boundary for testing.
+        reader = RuntimeArtifactReader(
+            mount_inspection=_StatvfsMountInspection(),
+        )
+        self.assertIsInstance(reader, MountedBlobReader)
+        # Passing an artifact root must still be rejected.
+        with self.assertRaises(TypeError):
+            RuntimeArtifactReader(artifact_root="/tmp/x")  # type: ignore[call-arg]
+
+    def test_production_reader_has_no_root_property(self) -> None:
+        """The reader exposes no attribute that could be
+        patched to redirect the root at runtime."""
+        reader = RuntimeArtifactReader()
+        self.assertFalse(
+            hasattr(reader, "_root"),
+            "no private _root attribute to monkey-patch",
+        )
+        self.assertFalse(
+            hasattr(reader, "artifact_root"),
+            "no public artifact_root attribute",
+        )
+
+    def test_production_reader_not_redirectable_by_env(self) -> None:
+        """The root is a module-level string literal, not read
+        from an environment variable."""
+        import docker.runtime_installer as _prod
+        source = inspect.getsource(_prod)
+        self.assertNotIn(
+            "environ", source,
+            "production module must not read environment "
+            "variables for the artifact root",
+        )
+        self.assertNotIn(
+            "getenv", source,
+            "production module must not call getenv/os.getenv",
+        )
+
+    # ── identity agreement (through fake, exercises protocol) ─
+
+    def test_artifact_id_agrees_with_integrity(self) -> None:
+        """When artifact_id matches the canonical derivation
+        from integrity, the reader proceeds to return bytes."""
+        content = b"matching\n"
+        self.ctx.blob_reader._set_bytes(content)  # type: ignore[attr-defined]
+        integ = self._integ_for(content)
+        expected_id = _derived_artifact_id(integ)
+        result = self._install(entries=[{
+            "package": "p", "version": "1.0.0",
+            "artifact_id": expected_id,
+            "integrity": integ,
+        }])
+        self.assertEqual(
+            InstallStatus.INSTALLED, result.results[0].status,
+        )
+        self.assertIn(
+            "install", self.ctx._call_log,
+            "matching id/integrity must reach PackageInstaller",
+        )
+
+    def test_artifact_id_mismatch_rejected(self) -> None:
+        """When artifact_id differs from the derivation, the
+        reader raises ProjectionError — install is never called."""
+        content = b"mismatch test\n"
+        self.ctx.blob_reader._set_bytes(content)  # type: ignore[attr-defined]
+        integ = self._integ_for(content)
+        wrong_id = "sha512/nope.tgz"
+        result = self._install(entries=[{
+            "package": "p", "version": "1.0.0",
+            "artifact_id": wrong_id,
+            "integrity": integ,
+        }])
+        self.assertEqual(
+            InstallStatus.FAILED, result.results[0].status,
+            "mismatched artifact_id must be FAILED",
+        )
+        self.assertIn(
+            "artifact_id",
+            result.results[0].detail or "",
+            "detail must mention the artifact_id mismatch",
+        )
+        self.assertNotIn(
+            "install", self.ctx._call_log,
+            "PackageInstaller must not receive bytes from a "
+            "mismatched identity",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Production RuntimeArtifactReader — filesystem safety & SRI
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestRuntimeArtifactReader(unittest.TestCase):
+    """Direct tests against the production :class:`RuntimeArtifactReader`.
+
+    Each test creates real filesystem fixtures inside a temporary
+    directory and patches ``_MOUNTED_ARTIFACT_ROOT`` so the reader
+    resolves blobs from the fixture.  The tests exercise every
+    safety and correctness property required of the production
+    reader — missing / symlinked / non-regular / writable / empty /
+    corrupt-blob rejection, identity agreement, and successful
+    verified-byte return.
+
+    These tests SHALL NOT use the fake reader or
+    :func:`install_extensions` — they call
+    :meth:`RuntimeArtifactReader.open_verified` directly.
+    """
+
+    _tmp: str
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="test-runtime-artifacts-")
+        mock.patch.object(
+            docker.runtime_installer,
+            "_MOUNTED_ARTIFACT_ROOT",
+            self._tmp,
+        ).start()
+
+    def tearDown(self) -> None:
+        mock.patch.stopall()
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    # ── helpers ──────────────────────────────────────────────
+
+    def _integ_for(self, content: bytes,
+                   *, algo: str = "sha256") -> str:
+        h = hashlib.new(algo, content)
+        return f"{algo}-" + base64.b64encode(h.digest()).decode("ascii")
+
+    def _write_blob(
+        self,
+        artifact_id: str,
+        content: bytes,
+        mode: int = 0o600,
+    ) -> str:
+        """Create a blob at ``<tmp>/<artifact_id>`` and return
+        its full path."""
+        path = os.path.join(self._tmp, artifact_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, mode)
+        try:
+            os.write(fd, content)
+        finally:
+            os.close(fd)
+        return path
+
+    def _make_symlink_blob(
+        self, artifact_id: str, target: str,
+    ) -> str:
+        """Create a symlink at ``<tmp>/<artifact_id>`` pointing
+        to *target*."""
+        path = os.path.join(self._tmp, artifact_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.symlink(target, path)
+        return path
+
+    def _reader(self) -> RuntimeArtifactReader:
+        """Return a reader that passes the mount check (read-only
+        mount inspection fake) so tests exercise their specific
+        property, not the mount guard."""
+        return RuntimeArtifactReader(
+            mount_inspection=_FakeMountInspection(read_only=True),
+        )
+
+    # ── valid blob ───────────────────────────────────────────
+
+    def test_valid_blob_returns_verified_bytes(self) -> None:
+        content = b"production verified payload\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, content)
+        reader = self._reader()
+        result = reader.open_verified(
+            artifact_id=art_id, integrity=integ,
+        )
+        self.assertEqual(content, result)
+        self.assertIsInstance(result, bytes)
+
+    # ── missing blob ─────────────────────────────────────────
+
+    def test_missing_blob_raises(self) -> None:
+        integ = self._integ_for(b"never written")
+        art_id = _derived_artifact_id(integ)
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── symlinked blob ───────────────────────────────────────
+
+    def test_symlinked_blob_raises(self) -> None:
+        content = b"real content\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        real_path = self._write_blob("real.tgz", content)
+        self._make_symlink_blob(art_id, real_path)
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── non-regular blob (directory) ─────────────────────────
+
+    def test_directory_blob_raises(self) -> None:
+        integ = self._integ_for(b"dir instead of file")
+        art_id = _derived_artifact_id(integ)
+        dir_path = os.path.join(self._tmp, art_id)
+        os.makedirs(dir_path, exist_ok=True)
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── group/world-writable blob ────────────────────────────
+
+    def test_group_writable_blob_raises(self) -> None:
+        content = b"group writable\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, content, mode=0o660)
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    def test_world_writable_blob_raises(self) -> None:
+        content = b"world writable\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, content, mode=0o666)
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── empty blob ───────────────────────────────────────────
+
+    def test_empty_blob_raises(self) -> None:
+        integ = self._integ_for(b"")
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, b"")
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── digest mismatch (corrupt blob) ───────────────────────
+
+    def test_digest_mismatch_raises(self) -> None:
+        written_content = b"what was written\n"
+        claimed_content = b"what integrity claims\n"
+        integ = self._integ_for(claimed_content)
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, written_content)
+        reader = self._reader()
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── identity/integrity mismatch ──────────────────────────
+
+    def test_identity_mismatch_raises(self) -> None:
+        content = b"matching content\n"
+        integ = self._integ_for(content)
+        wrong_id = "sha512/unrelated.tgz"
+        self._write_blob(wrong_id, content)
+        reader = self._reader()
+        with self.assertRaises(ProjectionError):
+            reader.open_verified(
+                artifact_id=wrong_id, integrity=integ,
+            )
+
+
+# ── Fake MountInspection for mount-safety tests ─────────────────
+
+class _FakeMountInspection:
+    """Configurable mount-inspection boundary for testing
+    mount read-only enforcement without requiring root to
+    create actual bind mounts."""
+
+    def __init__(self, *, read_only: bool) -> None:
+        self._read_only = read_only
+        self._calls: list[str] = []
+
+    def is_read_only_mount(self, path: str) -> bool:
+        self._calls.append(path)
+        return self._read_only
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# RuntimeArtifactReader — mount read-only enforcement
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestRuntimeArtifactReaderMountSafety(unittest.TestCase):
+    """Beyond permission bits: the blob MUST reside on a read-only
+    filesystem mount.  A ``0o600`` regular file on a writable mount
+    can still be mutated by its owner — only a read-only mount
+    (e.g. a bind-mount with ``ro``) prevents post-materialization
+    tampering.
+
+    These tests inject a :class:`_FakeMountInspection` boundary
+    into :class:`RuntimeArtifactReader` to control mount status
+    without requiring ``mount(8)`` privileges.
+    """
+
+    _tmp: str
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="test-mount-safety-")
+        mock.patch.object(
+            docker.runtime_installer,
+            "_MOUNTED_ARTIFACT_ROOT",
+            self._tmp,
+        ).start()
+
+    def tearDown(self) -> None:
+        mock.patch.stopall()
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _write_blob(
+        self, artifact_id: str, content: bytes,
+        mode: int = 0o600,
+    ) -> str:
+        path = os.path.join(self._tmp, artifact_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, mode)
+        try:
+            os.write(fd, content)
+        finally:
+            os.close(fd)
+        return path
+
+    def _integ_for(self, content: bytes,
+                   *, algo: str = "sha256") -> str:
+        h = hashlib.new(algo, content)
+        return f"{algo}-" + base64.b64encode(h.digest()).decode("ascii")
+
+    # ── writable mount is rejected ───────────────────────────
+
+    def test_writable_mount_raises(self) -> None:
+        """A regular, non-symlinked, ``0o600`` blob with a
+        matching digest MUST still be rejected if the filesystem
+        mount is writable — permission bits alone do not prevent
+        owner mutation."""
+        content = b"valid blob on writable mount\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, content)
+        reader = RuntimeArtifactReader(
+            mount_inspection=_FakeMountInspection(read_only=False),
+        )
+        with self.assertRaises(InstallError):
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+
+    # ── read-only mount proceeds ─────────────────────────────
+
+    def test_read_only_mount_returns_bytes(self) -> None:
+        """A regular, non-symlinked, ``0o600`` blob with a
+        matching digest on a read-only mount MUST return the
+        verified bytes."""
+        content = b"valid blob on read-only mount\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        self._write_blob(art_id, content)
+        reader = RuntimeArtifactReader(
+            mount_inspection=_FakeMountInspection(read_only=True),
+        )
+        result = reader.open_verified(
+            artifact_id=art_id, integrity=integ,
+        )
+        self.assertEqual(content, result)
+
+    # ── boundary receives the correct path ───────────────────
+
+    def test_mount_inspection_receives_artifact_path(self) -> None:
+        """The mount-inspection boundary is called with the
+        resolved artifact path — not the root directory or some
+        other path."""
+        content = b"path check\n"
+        integ = self._integ_for(content)
+        art_id = _derived_artifact_id(integ)
+        expected_path = os.path.join(self._tmp, art_id)
+        self._write_blob(art_id, content)
+        inspection = _FakeMountInspection(read_only=True)
+        reader = RuntimeArtifactReader(
+            mount_inspection=inspection,
+        )
+        try:
+            reader.open_verified(
+                artifact_id=art_id, integrity=integ,
+            )
+        except NotImplementedError:
+            pass  # expected until task 7.3
+        self.assertEqual(
+            [expected_path], inspection._calls,
+            "mount inspection must be called with the exact "
+            "resolved artifact path",
         )
 
 
