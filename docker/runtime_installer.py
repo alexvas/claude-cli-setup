@@ -898,8 +898,16 @@ def read_projection(path: str) -> list[ProjectionEntry]:
     ext_table = raw["extensions"]
 
     # ── allowed per-extension and per-artifact keys ────────────────
-    allowed_ext = {"package", "version", "artifact", "metadata_file"}
-    allowed_artifact = {"artifact_id", "integrity"}
+    # The host projection serializer is authoritative and writes the
+    # selected artifact identity as flat extension fields.  Retain the
+    # old nested shape as a compatibility input for already-published
+    # projections, but never allow both representations in one entry.
+    flat_artifact_fields = {"artifact_id", "integrity"}
+    allowed_ext = {
+        "package", "version", "metadata_file", "artifact",
+        *flat_artifact_fields,
+    }
+    allowed_artifact = flat_artifact_fields
 
     entries: list[ProjectionEntry] = []
     for ext_name, ext_val in ext_table.items():
@@ -915,17 +923,34 @@ def read_projection(path: str) -> list[ProjectionEntry]:
                 f"{sorted(unknown_ext)!r}"
             )
 
-        # ── validate artifact sub-table ──────────────────────────
-        artifact_raw = ext_val.get("artifact")
-        if not isinstance(artifact_raw, dict):
+        # ── validate selected artifact representation ─────────────
+        has_legacy_artifact = "artifact" in ext_val
+        has_flat_artifact = bool(set(ext_val) & flat_artifact_fields)
+        if has_legacy_artifact and has_flat_artifact:
             raise ProjectionError(
-                f"[extensions.{ext_name!s}].artifact must be a TOML inline table"
+                f"[extensions.{ext_name!s}] must use either flat "
+                "artifact_id/integrity fields or legacy artifact table, "
+                "not both"
             )
-        unknown_artifact = set(artifact_raw) - allowed_artifact
-        if unknown_artifact:
+        if has_legacy_artifact:
+            artifact_raw = ext_val["artifact"]
+            if not isinstance(artifact_raw, dict):
+                raise ProjectionError(
+                    f"[extensions.{ext_name!s}].artifact must be a TOML inline table"
+                )
+            unknown_artifact = set(artifact_raw) - allowed_artifact
+            if unknown_artifact:
+                raise ProjectionError(
+                    f"[extensions.{ext_name!s}].artifact: unknown key(s) "
+                    f"{sorted(unknown_artifact)!r}"
+                )
+            artifact_prefix = "artifact."
+        elif has_flat_artifact:
+            artifact_raw = ext_val
+            artifact_prefix = ""
+        else:
             raise ProjectionError(
-                f"[extensions.{ext_name!s}].artifact: unknown key(s) "
-                f"{sorted(unknown_artifact)!r}"
+                f"[extensions.{ext_name!s}]: missing artifact_id/integrity"
             )
 
         # ── construct validated DTO ───────────────────────────────
@@ -945,10 +970,12 @@ def read_projection(path: str) -> list[ProjectionEntry]:
                 ext_val["metadata_file"], section, "metadata_file",
             )
             art_id = _require_str(
-                artifact_raw["artifact_id"], section, "artifact.artifact_id",
+                artifact_raw["artifact_id"], section,
+                f"{artifact_prefix}artifact_id",
             )
             integrity = _require_str(
-                artifact_raw["integrity"], section, "artifact.integrity",
+                artifact_raw["integrity"], section,
+                f"{artifact_prefix}integrity",
             )
 
             entry = ProjectionEntry(

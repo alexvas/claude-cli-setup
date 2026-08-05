@@ -414,6 +414,37 @@ metadata_file = "package.json"
             self.assertTrue(e.artifact_integrity.startswith("sha"))
             self.assertTrue(e.metadata_file)
 
+    def test_parses_flat_host_generated_artifact_fields(self) -> None:
+        """The installer must consume the flat schema emitted by
+        ``create_runtime_projection`` rather than reject it before
+        mounted-artifact validation can begin."""
+        flat = """\
+[extensions."pi-read"]
+package = "pi-read"
+version = "1.0.0"
+artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz"
+integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs="
+metadata_file = "package.json"
+"""
+        entries = read_projection(self._tmp(flat))
+        self.assertEqual(1, len(entries))
+        self.assertEqual("pi-read", entries[0].package)
+        self.assertEqual(
+            "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz",
+            entries[0].artifact_id,
+        )
+
+    def test_rejects_mixed_flat_and_legacy_artifact_fields(self) -> None:
+        mixed = self._VALID.replace(
+            'metadata_file = "package.json"',
+            'artifact_id = "sha256/other.tgz"\n'
+            'integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs="\n'
+            'metadata_file = "package.json"',
+            1,
+        )
+        with self.assertRaises(ProjectionError):
+            read_projection(self._tmp(mixed))
+
     @staticmethod
     def _tmp(content: str) -> str:
         import tempfile
