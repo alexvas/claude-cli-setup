@@ -47,7 +47,7 @@
 - [x] 7.2 Remove `ArtifactDownloader`, download workspace, URL handling, mutable downloaded-path lifecycle, and container `curl` behavior from runtime installer contracts and production wiring.
 - [x] 7.3 Implement mounted-blob reading and defense-in-depth SRI verification before package execution while retaining idempotent metadata prechecks, post-install name/version validation, ownership checks, and failure cleanup.
 - [x] 7.4 Ensure the production package boundary consumes the exact verified bytes through an immutable inherited descriptor, sealed byte source, or equivalent mechanism and never reopens a mutable named temporary file.
-- [ ] 7.5 Update entrypoint/module CLI tests to prove installation needs no artifact network, starts only after Pi-home ownership repair, runs as `dev`, and aborts before Pi launch on mounted-artifact or package validation failure.
+- [x] 7.5 Update entrypoint/module CLI tests to prove installation needs no artifact network, starts only after Pi-home ownership repair, runs as `dev`, and aborts before Pi launch on mounted-artifact or package validation failure.
 
 ## 8. Introspect Security and Scope
 

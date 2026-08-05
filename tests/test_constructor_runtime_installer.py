@@ -4083,5 +4083,578 @@ class TestRuntimeArtifactReaderMountSafety(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
+# ═══════════════════════════════════════════════════════════════════════
+# 10.6 — Behavioral entrypoint / module-CLI startup contract
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestMainFailurePaths(unittest.TestCase):
+    """Behavioral coverage of :func:`main`: force mounted-artifact
+    and package-validation failures and assert nonzero exit codes.
+    Each test sets up a real projection TOML and pi-home directory
+    in a temp tree, patches module-level fixed-path constants,
+    and exercises ``main(["install"])`` through the actual error
+    paths."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp()
+        self._proj_path = os.path.join(self._tmp, "projection.toml")
+        self._pi_home = os.path.join(self._tmp, "pi-home")
+        os.makedirs(self._pi_home)
+        self._artifact_root = os.path.join(
+            self._tmp, "runtime-artifacts",
+        )
+        os.makedirs(self._artifact_root)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    # ── helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _make_integrity(content: bytes) -> str:
+        d = hashlib.sha256(content).digest()
+        return f"sha256-{base64.b64encode(d).decode('ascii')}"
+
+    @staticmethod
+    def _canonical_id(integrity: str) -> str:
+        algo, raw = integrity.split("-", 1)
+        safe = raw.replace("+", "-").replace("/", "_")
+        return f"{algo}/{safe}.tgz"
+
+    def _write_projection(self, artifact_id: str, integrity: str) -> None:
+        toml = (
+            f'[extensions.test-pkg]\n'
+            f'package = "test-pkg"\n'
+            f'version = "1.0.0"\n'
+            f'metadata_file = "package.json"\n'
+            f'\n'
+            f'[extensions.test-pkg.artifact]\n'
+            f'artifact_id = "{artifact_id}"\n'
+            f'integrity = "{integrity}"\n'
+        )
+        with open(self._proj_path, "w") as fh:
+            fh.write(toml)
+
+    def _write_blob(self, artifact_id: str, content: bytes) -> None:
+        blob_path = os.path.join(self._artifact_root, artifact_id)
+        os.makedirs(os.path.dirname(blob_path), exist_ok=True)
+        with open(blob_path, "wb") as fh:
+            fh.write(content)
+        os.chmod(blob_path, 0o400)
+
+    # ── projection-level failures ────────────────────────────
+
+    def test_missing_projection_returns_exit_projection(self) -> None:
+        """When the runtime projection file does not exist,
+        ``main()`` returns ``_EXIT_PROJECTION`` and never
+        reaches the installer."""
+        import docker.runtime_installer as mod
+
+        with mock.patch.object(mod, "_FIXED_PROJECTION",
+                               self._proj_path):
+            rc = mod.main(["install"])
+        self.assertEqual(
+            rc, mod._EXIT_PROJECTION,
+            "missing projection must return _EXIT_PROJECTION",
+        )
+
+    def test_malformed_projection_returns_exit_projection(self) -> None:
+        """When the projection TOML is syntactically invalid,
+        ``main()`` returns ``_EXIT_PROJECTION``."""
+        import docker.runtime_installer as mod
+
+        with open(self._proj_path, "w") as fh:
+            fh.write("this is not valid toml {{{[[[")
+
+        with mock.patch.object(mod, "_FIXED_PROJECTION",
+                               self._proj_path):
+            rc = mod.main(["install"])
+        self.assertEqual(
+            rc, mod._EXIT_PROJECTION,
+            "malformed projection must return _EXIT_PROJECTION",
+        )
+
+    # ── mounted-artifact failures ────────────────────────────
+
+    @staticmethod
+    def _real_subprocess_run() -> Any:
+        import subprocess
+        return subprocess.run
+
+    def test_missing_blob_returns_exit_install(self) -> None:
+        """When the projection references a valid artifact_id
+        but no blob exists at that path, ``main()`` returns
+        ``_EXIT_INSTALL``.  The mount check and statvfs
+        boundaries are patched so the pipeline reaches
+        ``open_verified``, which fails."""
+        import docker.runtime_installer as mod
+
+        content = b"artifact body"
+        integ = self._make_integrity(content)
+        art_id = self._canonical_id(integ)
+        self._write_projection(art_id, integ)
+        # Do NOT write the blob — it's missing.
+
+        real_run = self._real_subprocess_run()
+
+        def _fake_run(cmd, **_kw):
+            if isinstance(cmd, list) and cmd[0] == "mountpoint":
+                return real_run(["true"], capture_output=True)
+            return real_run(cmd, **_kw)
+
+        with mock.patch.object(mod, "_FIXED_PROJECTION",
+                               self._proj_path):
+            with mock.patch.object(mod, "_FIXED_PI_HOME",
+                                   self._pi_home):
+                with mock.patch.object(
+                    mod, "_MOUNTED_ARTIFACT_ROOT",
+                    self._artifact_root,
+                ), mock.patch.object(
+                    mod._StatvfsMountInspection,
+                    "is_read_only_mount",
+                    return_value=True,
+                ), mock.patch(
+                    "subprocess.run", side_effect=_fake_run,
+                ):
+                    rc = mod.main(["install"])
+
+        self.assertEqual(
+            rc, mod._EXIT_INSTALL,
+            "missing blob must return _EXIT_INSTALL",
+        )
+
+    def test_corrupt_blob_returns_exit_install(self) -> None:
+        """When a blob exists but its bytes do not match the
+        declared SRI integrity, ``main()`` returns
+        ``_EXIT_INSTALL``."""
+        import docker.runtime_installer as mod
+
+        content = b"correct artifact bytes"
+        integ = self._make_integrity(content)
+        art_id = self._canonical_id(integ)
+        self._write_projection(art_id, integ)
+        # Write wrong bytes — integrity will fail.
+        self._write_blob(art_id, b"corrupted!")
+
+        real_run = self._real_subprocess_run()
+
+        def _fake_run(cmd, **_kw):
+            if isinstance(cmd, list) and cmd[0] == "mountpoint":
+                return real_run(["true"], capture_output=True)
+            return real_run(cmd, **_kw)
+
+        with mock.patch.object(mod, "_FIXED_PROJECTION",
+                               self._proj_path):
+            with mock.patch.object(mod, "_FIXED_PI_HOME",
+                                   self._pi_home):
+                with mock.patch.object(
+                    mod, "_MOUNTED_ARTIFACT_ROOT",
+                    self._artifact_root,
+                ), mock.patch.object(
+                    mod._StatvfsMountInspection,
+                    "is_read_only_mount",
+                    return_value=True,
+                ), mock.patch(
+                    "subprocess.run", side_effect=_fake_run,
+                ):
+                    rc = mod.main(["install"])
+
+        self.assertEqual(
+            rc, mod._EXIT_INSTALL,
+            "integrity mismatch must return _EXIT_INSTALL",
+        )
+
+
+class TestEntrypointExecution(unittest.TestCase):
+    """Behavioral entrypoint coverage: drive the full ``main()``
+    pipeline and assert exit codes.  Also verify the entrypoint
+    shell script's failure branch structurally gates ``rtk`` and
+    ``exec gosu dev:dev`` behind installer success."""
+
+    _ENTRYPOINT = os.path.join(
+        os.path.dirname(__file__), "..", "docker", "entrypoint.sh",
+    )
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    # ── helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _make_integrity(content: bytes) -> str:
+        d = hashlib.sha256(content).digest()
+        return f"sha256-{base64.b64encode(d).decode('ascii')}"
+
+    @staticmethod
+    def _canonical_id(integrity: str) -> str:
+        algo, raw = integrity.split("-", 1)
+        safe = raw.replace("+", "-").replace("/", "_")
+        return f"{algo}/{safe}.tgz"
+
+    def _make_fake_run(
+        self, pi_home: str, pkg_name: str, pkg_version: str,
+    ):
+        """Return a ``_fake_run`` side-effect that fakes
+        ``mountpoint`` (always true) and ``pi install``
+        (writes metadata with *pkg_name* / *pkg_version*)."""
+        import subprocess as sp
+
+        real_run = sp.run
+
+        def _fake_run(cmd, **_kw):
+            if isinstance(cmd, list) and cmd[0] == "mountpoint":
+                return real_run(["true"], capture_output=True)
+            if isinstance(cmd, list) and cmd[0] == "pi":
+                pkg_dir = os.path.join(
+                    pi_home, "agent", "npm", "node_modules",
+                    pkg_name,
+                )
+                os.makedirs(pkg_dir, exist_ok=True)
+                meta = {"name": pkg_name, "version": pkg_version}
+                with open(
+                    os.path.join(pkg_dir, "package.json"), "w",
+                ) as mf:
+                    json.dump(meta, mf)
+                uid = os.getuid()
+                gid = os.getgid()
+                for root, dirs, files in os.walk(pkg_dir):
+                    os.chown(root, uid, gid)
+                    for f in files:
+                        os.chown(
+                            os.path.join(root, f), uid, gid,
+                        )
+                return real_run(["true"], capture_output=True)
+            return real_run(cmd, **_kw)
+
+        return _fake_run
+
+    def _setup_pipeline(
+        self, content: bytes,
+    ) -> tuple[str, str, str, str, str, str]:
+        """Create a temp projection, pi-home, and artifact root
+        with a valid blob.  Returns (proj_path, pi_home, art_root,
+        art_id, integ, content)."""
+        integ = self._make_integrity(content)
+        art_id = self._canonical_id(integ)
+
+        proj_path = os.path.join(self._tmp, "projection.toml")
+        pi_home = os.path.join(self._tmp, "pi-home")
+        os.makedirs(pi_home)
+        art_root = os.path.join(self._tmp, "runtime-artifacts")
+        os.makedirs(art_root)
+
+        toml = (
+            f'[extensions.test-pkg]\n'
+            f'package = "test-pkg"\n'
+            f'version = "1.0.0"\n'
+            f'metadata_file = "package.json"\n'
+            f'\n'
+            f'[extensions.test-pkg.artifact]\n'
+            f'artifact_id = "{art_id}"\n'
+            f'integrity = "{integ}"\n'
+        )
+        with open(proj_path, "w") as fh:
+            fh.write(toml)
+
+        blob_path = os.path.join(art_root, art_id)
+        os.makedirs(os.path.dirname(blob_path), exist_ok=True)
+        with open(blob_path, "wb") as fh:
+            fh.write(content)
+        os.chmod(blob_path, 0o400)
+
+        return proj_path, pi_home, art_root, art_id, integ
+
+    def _patch_and_run(
+        self, proj_path: str, pi_home: str, art_root: str,
+        fake_run,
+    ) -> int:
+        """Patch fixed paths + statvfs, then run ``main()``.
+        Returns the exit code."""
+        import docker.runtime_installer as mod
+
+        with mock.patch.object(mod, "_FIXED_PROJECTION", proj_path), \
+             mock.patch.object(mod, "_FIXED_PI_HOME", pi_home), \
+             mock.patch.object(mod, "_MOUNTED_ARTIFACT_ROOT", art_root), \
+             mock.patch.object(
+                 mod._StatvfsMountInspection,
+                 "is_read_only_mount",
+                 return_value=True,
+             ), \
+             mock.patch("subprocess.run", side_effect=fake_run):
+            return mod.main(["install"])
+
+    # ── success ──────────────────────────────────────────────
+
+    def test_successful_install_returns_exit_ok(self) -> None:
+        """Valid projection + matching blob + correct metadata
+        → ``main()`` returns ``_EXIT_OK``."""
+        import docker.runtime_installer as mod
+
+        content = b"successful artifact"
+        proj_path, pi_home, art_root, art_id, integ = \
+            self._setup_pipeline(content)
+        fake_run = self._make_fake_run(
+            pi_home, "test-pkg", "1.0.0",
+        )
+        rc = self._patch_and_run(
+            proj_path, pi_home, art_root, fake_run,
+        )
+        self.assertEqual(
+            rc, mod._EXIT_OK,
+            "successful install must return _EXIT_OK",
+        )
+
+    # ── mounted-artifact failure ─────────────────────────────
+
+    def test_missing_blob_returns_exit_install(self) -> None:
+        """No blob backs the declared artifact_id → ``main()``
+        returns ``_EXIT_INSTALL``."""
+        import docker.runtime_installer as mod
+
+        content = b"will be missing"
+        integ = self._make_integrity(content)
+        art_id = self._canonical_id(integ)
+
+        proj_path = os.path.join(self._tmp, "projection.toml")
+        pi_home = os.path.join(self._tmp, "pi-home")
+        os.makedirs(pi_home)
+        art_root = os.path.join(self._tmp, "runtime-artifacts")
+        os.makedirs(art_root)
+
+        toml = (
+            f'[extensions.test-pkg]\n'
+            f'package = "test-pkg"\n'
+            f'version = "1.0.0"\n'
+            f'metadata_file = "package.json"\n'
+            f'\n'
+            f'[extensions.test-pkg.artifact]\n'
+            f'artifact_id = "{art_id}"\n'
+            f'integrity = "{integ}"\n'
+        )
+        with open(proj_path, "w") as fh:
+            fh.write(toml)
+        # NO blob written — intentionally missing.
+
+        import subprocess as sp
+        real_run = sp.run
+
+        def _fake_run(cmd, **_kw):
+            if isinstance(cmd, list) and cmd[0] == "mountpoint":
+                return real_run(["true"], capture_output=True)
+            return real_run(cmd, **_kw)
+
+        rc = self._patch_and_run(
+            proj_path, pi_home, art_root, _fake_run,
+        )
+        self.assertEqual(
+            rc, mod._EXIT_INSTALL,
+            "missing blob must return _EXIT_INSTALL",
+        )
+
+    # ── package-validation failure ───────────────────────────
+
+    def test_package_validation_failure_returns_exit_install(self) -> None:
+        """Valid blob, but ``pi install`` creates metadata with
+        a mismatched package name → post-install validation
+        fails → ``main()`` returns ``_EXIT_INSTALL``."""
+        import docker.runtime_installer as mod
+
+        content = b"validated blob for wrong metadata"
+        proj_path, pi_home, art_root, art_id, integ = \
+            self._setup_pipeline(content)
+        # pi install creates metadata with wrong name
+        fake_run = self._make_fake_run(
+            pi_home, "wrong-pkg", "1.0.0",
+        )
+        rc = self._patch_and_run(
+            proj_path, pi_home, art_root, fake_run,
+        )
+        self.assertEqual(
+            rc, mod._EXIT_INSTALL,
+            "package name mismatch must return _EXIT_INSTALL",
+        )
+
+    def test_version_mismatch_returns_exit_install(self) -> None:
+        """Valid blob, but ``pi install`` creates metadata with
+        a mismatched version → ``main()`` returns
+        ``_EXIT_INSTALL``."""
+        import docker.runtime_installer as mod
+
+        content = b"validated blob for wrong version"
+        proj_path, pi_home, art_root, art_id, integ = \
+            self._setup_pipeline(content)
+        # pi install creates metadata with wrong version
+        fake_run = self._make_fake_run(
+            pi_home, "test-pkg", "9.9.9",
+        )
+        rc = self._patch_and_run(
+            proj_path, pi_home, art_root, fake_run,
+        )
+        self.assertEqual(
+            rc, mod._EXIT_INSTALL,
+            "version mismatch must return _EXIT_INSTALL",
+        )
+
+    # ── entrypoint harness integration ───────────────────────
+
+    _HARNESS = os.path.join(
+        os.path.dirname(__file__), "entrypoint_harness.sh",
+    )
+
+    def _run_harness(
+        self, scenario: str, installer_fail: bool = True,
+    ) -> "subprocess.CompletedProcess[str]":
+        """Run the entrypoint harness with a temp projection
+        and the given scenario."""
+        import subprocess as sp
+
+        # Write a minimal valid projection.
+        content = b"harness blob"
+        integ = self._make_integrity(content)
+        art_id = self._canonical_id(integ)
+        proj_file = os.path.join(self._tmp, "proj.toml")
+        toml = (
+            f'[extensions.test-pkg]\n'
+            f'package = "test-pkg"\n'
+            f'version = "1.0.0"\n'
+            f'metadata_file = "package.json"\n'
+            f'\n'
+            f'[extensions.test-pkg.artifact]\n'
+            f'artifact_id = "{art_id}"\n'
+            f'integrity = "{integ}"\n'
+        )
+        with open(proj_file, "w") as fh:
+            fh.write(toml)
+
+        env = {
+            **os.environ,
+            "_SCENARIO": scenario,
+            "_INSTALLER_FAIL": "1" if installer_fail else "0",
+            "_ID_MODE": "root",
+            "_PI_HOME_SANDBOX": self._tmp,
+            "_PROJECTION_FILE": proj_file,
+        }
+        return sp.run(
+            ["bash", self._HARNESS],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def _assert_trace_no_rtk_no_exec(self, trace: str) -> None:
+        """Assert the harness trace reflects correct startup
+        ordering and failure gating.
+
+        Required ordering (all of these must be present):
+
+        1. Pi-home repair commands (find … chown, find … chmod)
+           appear before the installer launch.
+        2. The installer is launched via ``gosu dev:dev``.
+
+        Failure gating (none of these must appear):
+
+        - ``rtk init``
+        - ``rtk telemetry``
+        - ``exec gosu dev:dev``
+
+        And the trace must end with a non-zero ``exit_code``."""
+        lines = [l.strip() for l in trace.splitlines()]
+
+        # ── locate key events ──────────────────────────────────
+        def _idx_containing(sub: str) -> int:
+            for i, line in enumerate(lines):
+                if sub in line:
+                    return i
+            return -1
+
+        def _idx_match(*needles: str) -> int:
+            """Return the index of the first line containing
+            *all* of *needles*, or -1."""
+            for i, line in enumerate(lines):
+                if all(n in line for n in needles):
+                    return i
+            return -1
+
+        installer_idx = _idx_containing(
+            "gosu dev:dev env PYTHONPATH=/usr/local/lib/pi-cli"
+            " python3 -m docker.runtime_installer install",
+        )
+        chown_idx = _idx_match("find ", "chown dev:dev")
+        chmod_idx = _idx_match("find ", "chmod ug+rwX")
+
+        # ── installer launch ───────────────────────────────────
+        self.assertGreater(
+            installer_idx, -1,
+            "trace must contain the installer launched via"
+            " gosu dev:dev",
+        )
+
+        # ── repair commands must be present ────────────────────
+        self.assertGreater(
+            chown_idx, -1,
+            "trace must contain find … chown dev:dev repair",
+        )
+        self.assertGreater(
+            chmod_idx, -1,
+            "trace must contain find … chmod ug+rwX repair",
+        )
+
+        # ── repair before installer ────────────────────────────
+        self.assertLess(
+            chown_idx, installer_idx,
+            "chown repair must appear BEFORE installer launch",
+        )
+        self.assertLess(
+            chmod_idx, installer_idx,
+            "chmod repair must appear BEFORE installer launch",
+        )
+
+        # ── installer exits non-zero ───────────────────────────
+        exit_lines = [l for l in lines if "exit_code" in l]
+        self.assertTrue(
+            exit_lines,
+            "trace must contain exit_code",
+        )
+        self.assertTrue(
+            any("exit_code 1" in l for l in exit_lines),
+            "installer failure must produce exit_code 1;"
+            " got: " + " | ".join(exit_lines),
+        )
+
+        # ── no rtk, no exec gosu ───────────────────────────────
+        self.assertNotIn(
+            "rtk init", trace,
+            "trace must NOT contain rtk init"
+            " when installation fails",
+        )
+        self.assertNotIn(
+            "rtk telemetry", trace,
+            "trace must NOT contain rtk telemetry"
+            " when installation fails",
+        )
+        self.assertNotIn(
+            'exec gosu dev:dev', trace,
+            "trace must NOT contain exec gosu dev:dev"
+            " when installation fails",
+        )
+
+    def test_harness_mounted_artifact_failure_aborts(self) -> None:
+        """Entrypoint harness with ``_INSTALLER_FAIL=1`` under
+        the mounted-artifact-failure scenario: the trace must
+        show the installer ran, exited non-zero, and neither
+        ``rtk`` nor ``exec gosu dev:dev`` was reached."""
+        result = self._run_harness("mounted-artifact-failure")
+        trace = result.stdout
+        self._assert_trace_no_rtk_no_exec(trace)
+
+    def test_harness_package_validation_failure_aborts(self) -> None:
+        """Entrypoint harness with ``_INSTALLER_FAIL=1`` under
+        the package-validation-failure scenario: same guard —
+        installer fails, no rtk, no exec."""
+        result = self._run_harness("package-validation-failure")
+        trace = result.stdout
+        self._assert_trace_no_rtk_no_exec(trace)
