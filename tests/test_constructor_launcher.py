@@ -2628,6 +2628,98 @@ class TestRunTransaction(unittest.TestCase):
         self.assertEqual(len(shared_mounts), 1, shared_mounts)
         self.assertIn("readonly", shared_mounts[0])
 
+    # ── cache-hit offline ─────────────────────────────────────__
+
+    def test_cache_hit_performs_no_network_request(self) -> None:
+        """When every selected artifact is already cached,
+        ``orchestrate_run`` performs zero extension artifact
+        network requests — the injected fetcher is never called."""
+        # Pre-populate the cache by materializing all selected
+        # artifacts through the real pipeline.
+        req1 = self._request(
+            _artifact_fetcher=self._artifact_bytes,
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result1 = self._run(req1)
+        self.assertEqual(
+            result1.exit_kind, ExitKind.SUCCESS,
+            f"pre-population run must succeed: {result1.message}",
+        )
+
+        # Second run with a fetcher that records calls and raises
+        # if invoked — proving the cache fully satisfied every
+        # artifact.
+        calls: list[str] = []
+
+        def _no_network(url: str) -> bytes:
+            calls.append(url)
+            raise AssertionError(
+                f"unexpected artifact fetch for {url}"
+            )
+
+        req2 = self._request(
+            _artifact_fetcher=_no_network,
+            executor=FakeRunExecutor(returncode=0),
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result2 = self._run(req2)
+        self.assertEqual(
+            result2.exit_kind, ExitKind.SUCCESS,
+            f"cache-hit run must succeed: {result2.message}",
+        )
+        self.assertEqual(
+            calls, [],
+            "no artifact URL must be fetched when all blobs are "
+            "cached — transport must not be invoked",
+        )
+
+    def test_cache_miss_transport_failure_fails_before_docker(self) -> None:
+        """When a selected artifact is not in the cache and the
+        transport fails, ``orchestrate_run`` returns an
+        OPERATIONAL failure, never executes Docker, and includes
+        an actionable diagnostic with the transport failure detail
+        and the selected artifact URL."""
+        executor = FakeRunExecutor(returncode=0)
+
+        def _failing_fetcher(url: str) -> bytes:
+            raise RuntimeError(
+                f"simulated transport failure for {url}"
+            )
+
+        req = self._request(
+            _artifact_fetcher=_failing_fetcher,
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+        result = self._run(req)
+        self.assertEqual(
+            result.exit_kind, ExitKind.OPERATIONAL,
+            f"transport failure must return OPERATIONAL, "
+            f"got {result.exit_kind}: {result.message}",
+        )
+        self.assertIn(
+            "Failed to materialize runtime artifacts",
+            result.message or "",
+            "failure message must identify materialization as the cause",
+        )
+        self.assertIn(
+            "simulated transport failure",
+            result.message or "",
+            "failure message must preserve the original transport "
+            "failure detail so callers can diagnose the cause",
+        )
+        self.assertIn(
+            "registry.npmjs.org",
+            result.message or "",
+            "failure message must include the selected artifact URL "
+            "that could not be fetched",
+        )
+        self.assertEqual(
+            len(executor.calls), 0,
+            "Docker must not execute when artifact materialization fails",
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 11.3 - Docker-backed boundaries (ProcessRunner injection)

@@ -40,6 +40,9 @@ class ArtifactMaterializationError(Exception):
     detail: str
     """Human-readable detail suitable for diagnostics."""
 
+    def __str__(self) -> str:
+        return self.detail
+
 
 # ── typed materialization DTOs ────────────────────────────────────────
 
