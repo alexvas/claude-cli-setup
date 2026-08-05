@@ -16,7 +16,6 @@ This module SHALL NOT read:
 from __future__ import annotations
 
 import base64
-import binascii
 import enum
 import hashlib
 import hmac
@@ -34,6 +33,20 @@ from typing import Protocol, runtime_checkable
 # the host.  The installer SHALL NOT accept any other root — no env var,
 # no constructor argument, no projection field.
 _MOUNTED_ARTIFACT_ROOT: str = "/run/pi-cli/runtime-artifacts"
+
+# Linux memfd seal constants.  Not exposed by Python's ``fcntl``
+# module, so we define them directly from <linux/fcntl.h>.
+_MEMFD_F_ADD_SEALS: int = 1033  # 0x0409
+_MEMFD_F_SEAL_SEAL: int = 0x0001
+_MEMFD_F_SEAL_SHRINK: int = 0x0002
+_MEMFD_F_SEAL_GROW: int = 0x0004
+_MEMFD_F_SEAL_WRITE: int = 0x0008
+_MEMFD_ALL_SEALS: int = (
+    _MEMFD_F_SEAL_SEAL
+    | _MEMFD_F_SEAL_SHRINK
+    | _MEMFD_F_SEAL_GROW
+    | _MEMFD_F_SEAL_WRITE
+)
 
 
 def _mounted_artifact_path(artifact_id: str) -> str:
@@ -137,58 +150,138 @@ class RuntimeArtifactReader:
     ) -> bytes:
         """Open, verify, and return the blob at the fixed root.
 
-        Order of checks (task 7.3):
+        Checks (in strict order):
 
         1. Derive and validate *artifact_id* → path.
-        2. Reject identity/integrity mismatch.
+        2. Identity agreement — *artifact_id* MUST match the
+           canonical derivation from *integrity*.
         3. **Reject writable mount** — the blob path MUST reside
-           on a read-only filesystem, not just have restrictive
-           permission bits.
-        4. Open with ``O_NOFOLLOW``, verify regular file +
-           owner-only permissions, stream through SRI digest,
-           compare, return exact bytes.
+           on a read-only filesystem.
+        4. Open once with ``O_NOFOLLOW``, verify regular file +
+           owner-only permissions, accumulate every byte while
+           streaming through SRI digest, verify the digest,
+           then **return the same accumulated bytes** — no
+           second open, no TOCTOU gap.
+
+        All failures are raised as :class:`InstallError` or
+        :class:`IntegrityError`; no generic ``AttributeError``,
+        ``NotImplementedError``, or ``ValueError`` escapes.
         """
         _path = _mounted_artifact_path(artifact_id)
-        # identity agreement will go here (task 7.2 / 7.3)
-        # mount check will go here:
-        #   if not self._mount_inspection.is_read_only_mount(_path):
-        #       raise InstallError("artifact mount is not read-only")
-        raise NotImplementedError(
-            "RuntimeArtifactReader.open_verified — "
-            "production implementation pending (task 7.3)"
-        )
+
+        # ── 1. Parse integrity (never leak ValueError) ───────
+        algo: str
+        raw_digest: str
+        try:
+            algo, raw_digest = integrity.split("-", 1)
+        except ValueError:
+            raise IntegrityError(
+                f"malformed integrity string: {integrity!r}",
+                algorithm="<none>",
+                expected=integrity,
+                actual="<malformed>",
+            ) from None
+        if algo not in ("sha256", "sha384", "sha512"):
+            raise IntegrityError(
+                f"unsupported integrity algorithm: {algo!r}",
+                algorithm=algo,
+                expected=integrity,
+                actual="<unsupported>",
+            )
+
+        # ── 2. Identity agreement ─────────────────────────────
+        safe_digest = raw_digest.replace("+", "-").replace("/", "_")
+        canonical_id = f"{algo}/{safe_digest}.tgz"
+        if not hmac.compare_digest(artifact_id, canonical_id):
+            raise ProjectionError(
+                f"artifact_id {artifact_id!r} does not match "
+                f"integrity {integrity!r} (expected "
+                f"{canonical_id!r})",
+            )
+
+        # ── 3. Reject writable mount ──────────────────────────
+        if not self._mount_inspection.is_read_only_mount(_path):
+            raise InstallError(
+                "artifact mount is not read-only: " + _path,
+            )
+
+        # ── 4. Single open, verify, accumulate, return ────────
+        blob_flags: int = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        _noatime: int = getattr(os, "O_NOATIME", 0)
+        if not _noatime:
+            raise InstallError(
+                "O_NOATIME unavailable on this platform",
+            )
+
+        try:
+            blob_fd = os.open(_path, blob_flags | _noatime)
+        except PermissionError:
+            raise InstallError(
+                f"O_NOATIME denied for artifact at {_path}",
+            ) from None
+        except OSError as exc:
+            raise InstallError(
+                f"cannot open artifact at {_path}: {exc}",
+            ) from exc
+
+        try:
+            try:
+                blob_st = os.fstat(blob_fd)
+            except OSError as exc:
+                raise InstallError(
+                    f"cannot stat artifact at {_path}: {exc}",
+                ) from exc
+
+            # ── regular file only ──
+            if not stat.S_ISREG(blob_st.st_mode):
+                raise InstallError(
+                    f"artifact at {_path} is not a regular file",
+                )
+
+            # ── owner-only permissions ──
+            if blob_st.st_mode & 0o077:
+                raise InstallError(
+                    f"artifact at {_path} has group/world permissions",
+                )
+
+            # ── accumulate + hash in a single pass ──
+            hasher: "hashlib._Hash" = hashlib.new(algo)
+            chunks: list[bytes] = []
+            while True:
+                try:
+                    chunk = os.read(blob_fd, 64 * 1024)
+                except OSError as exc:
+                    raise InstallError(
+                        f"read error on artifact at {_path}: {exc}",
+                    ) from exc
+                if not chunk:
+                    break
+                hasher.update(chunk)
+                chunks.append(chunk)
+
+            actual_raw = base64.b64encode(hasher.digest()).decode("ascii")
+            if not hmac.compare_digest(actual_raw, raw_digest):
+                raise IntegrityError(
+                    f"integrity check failed for artifact at {_path}",
+                    algorithm=algo,
+                    expected=integrity,
+                    actual=f"{algo}-{actual_raw}",
+                )
+
+            # ── reassemble verified bytes ──
+            verified = b"".join(chunks)
+            if not verified:
+                raise InstallError(
+                    f"artifact at {_path} is empty",
+                )
+            return verified
+        finally:
+            os.close(blob_fd)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Shared URL identity validator
 # ═══════════════════════════════════════════════════════════════════════
-
-
-def validate_npm_tarball_url(url: str, package: str, version: str) -> None:
-    """Validate *url* against the npm tarball identity contract.
-
-    Delegates to the shared canonical implementation in
-    :mod:`docker.versioning.npm_tarball`, then maps
-    :class:`~docker.versioning.npm_tarball.NpmTarballUrlError`
-    to :class:`ProjectionError` for the installer boundary.
-
-    A valid npm tarball URL::
-
-        https://registry.npmjs.org/<package>/-/<pkg_name>-<base_version>.tgz
-
-    where ``<pkg_name>`` is the last path segment of *package* and
-    ``<base_version>`` is *version* with any ``+build`` metadata
-    stripped (npm tarball filenames never include build metadata).
-    """
-    from docker.versioning.npm_tarball import (
-        NpmTarballUrlError,
-        validate,
-    )
-
-    try:
-        validate(url, package, version)
-    except NpmTarballUrlError as exc:
-        raise ProjectionError(str(exc)) from exc
 
 
 def _reject_path_traversal(value: str, *, field_name: str) -> None:
@@ -248,72 +341,6 @@ def _reject_path_traversal(value: str, *, field_name: str) -> None:
         )
 
 
-def _validate_downloaded_artifact(
-    fs: ArtifactFilesystem,
-    workspace_dir: str,
-    artifact_path: str,
-) -> str:
-    """Trust-boundary check on a downloaded artifact path.
-
-    The downloader returns an unverified local path.  Before the
-    installer reads or hashes anything at that path it MUST prove:
-
-    * the path is absolute
-    * the path resolves to a direct child of *workspace_dir*
-    * the path refers to a regular file (not a symlink, directory,
-      or special file)
-
-    All filesystem queries go through the injected *fs* boundary so
-    that tests can prove behaviour with fakes instead of real
-    filesystem state.
-
-    Symlinks are always rejected — even if their current target
-    is inside the workspace — because accepting and resolving
-    them preserves a TOCTOU path-swap window.
-
-    Returns the real (normalized) path that should be used for
-    reading, hashing, and installation.
-
-    Raises :class:`InstallError` on any violation.
-    """
-    import os
-    import stat
-
-    if not fs.is_absolute(artifact_path):
-        raise InstallError(
-            f"downloaded artifact path must be absolute: "
-            f"{artifact_path!r}"
-        )
-
-    # Resolve workspace directory (could be a symlink itself).
-    real_ws = fs.realpath(workspace_dir)
-
-    # Must be a regular file — NOT a symlink, directory, FIFO, etc.
-    # os.lstat follows no links, so symlinks are rejected here.
-    try:
-        if not stat.S_ISREG(fs.lstat_mode(artifact_path)):
-            raise InstallError(
-                f"downloaded artifact is not a regular file: "
-                f"{artifact_path!r}"
-            )
-    except FileNotFoundError:
-        raise InstallError(
-            f"downloaded artifact does not exist: {artifact_path!r}"
-        )
-
-    # Ensure the artifact (fully normalized, no symlinks followed
-    # since we already rejected them) is inside the workspace.
-    real_artifact = fs.realpath(artifact_path)
-    if not real_artifact.startswith(real_ws + os.sep):
-        raise InstallError(
-            f"downloaded artifact {artifact_path!r} "
-            f"(resolved: {real_artifact!r}) is outside workspace "
-            f"{real_ws!r}"
-        )
-
-    return real_artifact
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # DTOs
 # ═══════════════════════════════════════════════════════════════════════
@@ -355,7 +382,7 @@ class ProjectionEntry:
     """A single extension entry read from the runtime projection."""
     package: str
     version: str
-    artifact_url: str
+    artifact_id: str
     artifact_integrity: str
     metadata_file: str
 
@@ -394,8 +421,23 @@ class ProjectionEntry:
         except SemverError as exc:
             raise ProjectionError(f"version {exc} — want exact semver") from exc
 
-        # -- artifact_url ----------------------------------------------
-        validate_npm_tarball_url(self.artifact_url, pkg, ver)
+        # -- artifact_id -----------------------------------------------
+        art_id = self.artifact_id
+        if not art_id:
+            raise ProjectionError("artifact_id must not be empty")
+        if os.path.isabs(art_id):
+            raise ProjectionError(
+                f"artifact_id must be relative: {art_id!r}",
+            )
+        parts = art_id.split(os.sep)
+        if ".." in parts or art_id.startswith(".."):
+            raise ProjectionError(
+                f"artifact_id must not contain '..': {art_id!r}",
+            )
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ProjectionError(
+                f"artifact_id must be '<algo>/<digest>.tgz': {art_id!r}",
+            )
 
         # -- artifact_integrity ----------------------------------------
         integ = self.artifact_integrity
@@ -453,101 +495,6 @@ class MountChecker(Protocol):
     """Verify that *path* is a mount point."""
 
     def is_mount(self, path: str) -> bool:
-        ...
-
-
-class ArtifactDownloader(Protocol):
-    """Download an artifact to a local file.
-
-    Returns the path to the downloaded (unverified) artifact.
-    Integrity verification is *not* performed here — it is owned
-    by the installer module over the returned bytes.
-
-    Raises :class:`InstallError` on download failure.
-    """
-
-    def fetch(self, *, url: str, dest_dir: str) -> str:
-        ...
-
-
-class ArtifactFilesystem(Protocol):
-    """Read and manage a downloaded artifact file on disk.
-
-    Provides injectable read/remove/stat operations so that
-    installer-owned integrity verification, path validation, and
-    cleanup are testable without real filesystem effects.
-
-    The path is the one returned by :meth:`ArtifactDownloader.fetch`.
-    """
-
-    def is_absolute(self, path: str) -> bool:
-        """Return ``True`` when *path* is absolute."""
-        ...
-
-    def lstat_mode(self, path: str) -> int:
-        """Return the ``st_mode`` bits of *path* without following
-        symlinks (semantics of :func:`os.lstat`).
-
-        Raises :class:`FileNotFoundError` when *path* does not
-        exist.
-        """
-        ...
-
-    def realpath(self, path: str) -> str:
-        """Return the canonical path of *path* with all symlinks
-        resolved (semantics of :func:`os.path.realpath`).
-        """
-        ...
-
-    def read_bytes(self, path: str) -> bytes:
-        """Read the *entire* artifact file at *path*.
-
-        Raises :class:`InstallError` on failure (missing,
-        permissions, truncated).
-        """
-        ...
-
-    def remove(self, path: str) -> None:
-        """Delete the artifact at *path*.
-
-        Called on success (after install), on integrity failure,
-        on install failure, and on interruption.
-        Must not raise if the file is already absent.
-        """
-        ...
-
-
-class TempWorkspace(Protocol):
-    """Create and destroy private temp directories for downloads.
-
-    Each call to :meth:`create` returns:
-
-    * **Absolute** — the returned path is an absolute filesystem path.
-    * **Unique** — no two calls to ``create`` (across processes or
-      threads) may return the same path.
-    * **Owner-only** — the directory MUST be created with mode
-      ``0o700`` so that only the calling user can read, write, or
-      traverse it.
-
-    :meth:`cleanup` removes the directory and all contents.
-    """
-
-    def create(self) -> str:
-        """Create a unique private temp directory.
-
-        Returns the absolute path.
-
-        Raises :class:`InstallError` on failure (e.g. permission
-        denied, no space).
-        """
-        ...
-
-    def cleanup(self, path: str) -> None:
-        """Remove the workspace directory and all contents.
-
-        Must not raise if already removed or if *path* does not
-        exist.
-        """
         ...
 
 
@@ -620,9 +567,7 @@ class InstallContext:
     """Injectable boundary implementations for the installer."""
 
     mount_check: MountChecker
-    workspace: TempWorkspace
-    download: ArtifactDownloader
-    file: ArtifactFilesystem
+    blob_reader: MountedBlobReader
     installer: PackageInstaller
     metadata: MetadataReader
     privilege: PrivilegeContext
@@ -655,81 +600,6 @@ class InstallContext:
         return _RealMountCheck()
 
     @staticmethod
-    def real_workspace() -> TempWorkspace:
-        import os
-        import shutil
-        import tempfile
-
-        class _RealTempWorkspace:
-            def create(self) -> str:
-                path = tempfile.mkdtemp(suffix=".pi-workspace")
-                os.chmod(path, 0o700)
-                return path
-
-            def cleanup(self, path: str) -> None:
-                shutil.rmtree(path, ignore_errors=True)
-
-        return _RealTempWorkspace()
-
-    @staticmethod
-    def real_download() -> ArtifactDownloader:
-        import subprocess
-        import shutil
-
-        class _RealArtifactDownloader:
-            def fetch(self, url: str, dest_dir: str) -> str:
-                """Download *url* to *dest_dir* via curl.
-
-                Returns the absolute path to the downloaded file.
-                The caller owns integrity verification.
-                """
-                import os
-                basename = url.rstrip("/").rsplit("/", 1)[-1] or "artifact"
-                dest = os.path.join(dest_dir, basename)
-                result = subprocess.run(
-                    [
-                        "curl", "--fail", "--location",
-                        "--silent", "--show-error",
-                        "--output", dest,
-                        url,
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    raise InstallError(
-                        f"download of {url!r} failed (exit {result.returncode}): "
-                        f"{result.stderr.strip()}"
-                    )
-                return dest
-
-        return _RealArtifactDownloader()
-
-    @staticmethod
-    def real_file() -> ArtifactFilesystem:
-        import os
-        import stat as st
-
-        class _RealArtifactFilesystem:
-            def read_bytes(self, path: str) -> bytes:
-                with open(path, "rb") as fh:
-                    return fh.read()
-
-            def remove(self, path: str) -> None:
-                os.unlink(path)
-
-            def is_absolute(self, path: str) -> bool:
-                return os.path.isabs(path)
-
-            def lstat_mode(self, path: str) -> int:
-                return os.lstat(path).st_mode
-
-            def realpath(self, path: str) -> str:
-                return os.path.realpath(path)
-
-        return _RealArtifactFilesystem()
-
-    @staticmethod
     def real_installer() -> PackageInstaller:
         import json
         import subprocess
@@ -738,21 +608,27 @@ class InstallContext:
             def install(self, package: str, artifact_bytes: bytes) -> None:
                 """Install a Pi extension from verified bytes.
 
-                Writes *artifact_bytes* to a private temp file,
-                invokes ``pi install``, and removes the temp file
-                on all exit paths.  The bytes are never re-read
-                from a mutable filesystem path — closing the TOCTOU
-                gap between verification and installation.
-                """
-                import os
-                import tempfile
+                Writes *artifact_bytes* to a sealed in-memory file
+                descriptor (:func:`os.memfd_create` with
+                ``MFD_ALLOW_SEALING``), applies write/grow/shrink/
+                seal seals via ``fcntl(F_ADD_SEALS)``, then invokes
+                ``pi install /proc/self/fd/<N>``.  The descriptor is
+                closed on all exit paths.
 
-                fd, tmp_path = tempfile.mkstemp(
-                    suffix=".tgz", prefix="pi-install-",
+                The bytes never touch a mutable filesystem path
+                and the sealed memfd guarantees that even the
+                ``pi`` child process cannot modify them — they are
+                an immutable byte source.
+                """
+                import fcntl
+                import os
+                import subprocess
+
+                fd = os.memfd_create(
+                    f"pi-install-{package}",
+                    os.MFD_ALLOW_SEALING,
                 )
                 try:
-                    # Write all bytes — os.write() may return after
-                    # writing only part of the buffer.
                     data = artifact_bytes
                     while data:
                         written = os.write(fd, data)
@@ -761,12 +637,23 @@ class InstallContext:
                                 f"os.write returned {written}"
                             )
                         data = data[written:]
-                    os.close(fd)
-                    fd = -1  # guard double-close
+                    os.lseek(fd, 0, os.SEEK_SET)
+
+                    # Seal before passing to the child — prevents
+                    # write, truncate, grow, and further seal
+                    # modifications.
+                    fcntl.fcntl(
+                        fd,
+                        _MEMFD_F_ADD_SEALS,
+                        _MEMFD_ALL_SEALS,
+                    )
+
+                    fd_path = f"/proc/self/fd/{fd}"
                     result = subprocess.run(
-                        ["pi", "install", tmp_path],
+                        ["pi", "install", fd_path],
                         capture_output=True,
                         text=True,
+                        pass_fds=[fd],
                     )
                     if result.returncode != 0:
                         raise InstallError(
@@ -774,13 +661,8 @@ class InstallContext:
                             f"{result.stderr.strip()}"
                         )
                 finally:
-                    if fd >= 0:
-                        try:
-                            os.close(fd)
-                        except OSError:
-                            pass
                     try:
-                        os.unlink(tmp_path)
+                        os.close(fd)
                     except OSError:
                         pass
 
@@ -893,13 +775,11 @@ class InstallContext:
     @staticmethod
     def make_real() -> "InstallContext":
         """Create an :class:`InstallContext` wired to real system
-        boundaries (mount-point check, curl download, filesystem,
+        boundaries (mount-point check, mounted-artifact reader,
         pi install, user/group introspection)."""
         return InstallContext(
             mount_check=InstallContext.real_mount_check(),
-            workspace=InstallContext.real_workspace(),
-            download=InstallContext.real_download(),
-            file=InstallContext.real_file(),
+            blob_reader=RuntimeArtifactReader(),
             installer=InstallContext.real_installer(),
             metadata=InstallContext.real_metadata(),
             privilege=InstallContext.real_privilege(),
@@ -1019,7 +899,7 @@ def read_projection(path: str) -> list[ProjectionEntry]:
 
     # ── allowed per-extension and per-artifact keys ────────────────
     allowed_ext = {"package", "version", "artifact", "metadata_file"}
-    allowed_artifact = {"url", "integrity"}
+    allowed_artifact = {"artifact_id", "integrity"}
 
     entries: list[ProjectionEntry] = []
     for ext_name, ext_val in ext_table.items():
@@ -1064,8 +944,8 @@ def read_projection(path: str) -> list[ProjectionEntry]:
             meta = _require_str(
                 ext_val["metadata_file"], section, "metadata_file",
             )
-            url = _require_str(
-                artifact_raw["url"], section, "artifact.url",
+            art_id = _require_str(
+                artifact_raw["artifact_id"], section, "artifact.artifact_id",
             )
             integrity = _require_str(
                 artifact_raw["integrity"], section, "artifact.integrity",
@@ -1074,7 +954,7 @@ def read_projection(path: str) -> list[ProjectionEntry]:
             entry = ProjectionEntry(
                 package=pkg,
                 version=ver,
-                artifact_url=url,
+                artifact_id=art_id,
                 artifact_integrity=integrity,
                 metadata_file=meta,
             )
@@ -1196,33 +1076,20 @@ def install_extensions(
                 ))
         return InstallResult(results=tuple(planned), dry_run=True)
 
-    # ── 2. Create temp workspace (reused across extensions) ──
-    try:
-        workspace_dir = ctx.workspace.create()
-    except Exception as exc:
-        raise InstallError(
-            f"failed to create temp workspace: {exc}"
-        ) from exc
-
-    # ── 3. Install each extension — cleanup workspace on all exits ──
-    try:
-        for entry in entries:
-            try:
-                result = _install_one(
-                    ctx, entry, pi_home, workspace_dir,
-                )
-                results.append(result)
-            except InstallError as exc:
-                results.append(ExtensionResult(
-                    package=entry.package,
-                    version=entry.version,
-                    status=InstallStatus.FAILED,
-                    detail=f"[{entry.package}@{entry.version}] {exc}",
-                ))
-                # First failure stops subsequent mutations
-                break
-    finally:
-        ctx.workspace.cleanup(workspace_dir)
+    # ── 2. Install each extension via mounted blob reader ────
+    for entry in entries:
+        try:
+            result = _install_one(ctx, entry, pi_home)
+            results.append(result)
+        except InstallError as exc:
+            results.append(ExtensionResult(
+                package=entry.package,
+                version=entry.version,
+                status=InstallStatus.FAILED,
+                detail=f"[{entry.package}@{entry.version}] {exc}",
+            ))
+            # First failure stops subsequent mutations
+            break
 
     return InstallResult(results=tuple(results))
 
@@ -1231,9 +1098,9 @@ def _install_one(
     ctx: InstallContext,
     entry: ProjectionEntry,
     pi_home: str,
-    workspace_dir: str,
 ) -> ExtensionResult:
-    """Install (or skip) a single extension."""
+    """Install (or skip) a single extension via the mounted
+    blob reader — no download, no workspace, no mutable file path."""
 
     # ── 2a. Metadata pre-check ────────────────────────────────────
     try:
@@ -1251,9 +1118,6 @@ def _install_one(
         pkg_name = installed.get("name")
         pkg_version = installed.get("version")
         if pkg_name == entry.package and pkg_version == entry.version:
-            # Validate metadata ownership before accepting the
-            # cached install — root- or foreign-owned metadata
-            # must never be reported as ALREADY_INSTALLED.
             metadata_path = _npm_metadata_path(
                 pi_home, entry.package, entry.metadata_file,
             )
@@ -1270,105 +1134,13 @@ def _install_one(
             )
         # Name/version mismatch — fall through to reinstall
 
-    # ── 2b. Download + post-download transaction ──────────────────
-    # Wrap the entire download→verify→install sequence so that the
-    # artifact is removed on ALL exit paths, including
-    # KeyboardInterrupt and SystemExit.
-    artifact_path: str | None = None
-    try:
-        try:
-            artifact_path = ctx.download.fetch(
-                url=entry.artifact_url,
-                dest_dir=workspace_dir,
-            )
-        except InstallError:
-            raise
-        except Exception as exc:
-            raise InstallError(
-                f"download failed for {entry.package}: {exc}"
-            ) from exc
-
-        return _install_one_after_download(
-            ctx, entry, pi_home, workspace_dir, artifact_path,
-        )
-    finally:
-        if artifact_path is not None:
-            _remove_artifact(ctx, artifact_path)
-
-
-def _install_one_after_download(
-    ctx: InstallContext,
-    entry: ProjectionEntry,
-    pi_home: str,
-    workspace_dir: str,
-    artifact_path: str,
-) -> ExtensionResult:
-    """Verify integrity, install, and post-validate — called
-    after the artifact has been downloaded to *artifact_path*.
-
-    ``_install_one`` wraps this with artifact-cleanup on all
-    exit paths."""
-
-    # ── 2b'. Path-trust validation ───────────────────────────────
-    verified_path = _validate_downloaded_artifact(
-        ctx.file, workspace_dir, artifact_path,
+    # ── 2b. Open verified blob from read-only mount ───────────────
+    content = ctx.blob_reader.open_verified(
+        artifact_id=entry.artifact_id,
+        integrity=entry.artifact_integrity,
     )
 
-    # ── 2c. Integrity verification ───────────────────────────────
-    try:
-        content = ctx.file.read_bytes(verified_path)
-    except InstallError:
-        raise
-    except Exception as exc:
-        raise InstallError(
-            f"failed to read downloaded artifact for {entry.package}: {exc}"
-        ) from exc
-
-    if not content:
-        raise InstallError(
-            f"downloaded artifact for {entry.package} is empty"
-        )
-
-    algo, _, b64 = entry.artifact_integrity.partition("-")
-    hasher: "hashlib._Hash"
-    if algo == "sha256":
-        hasher = hashlib.sha256()
-    elif algo == "sha384":
-        hasher = hashlib.sha384()
-    elif algo == "sha512":
-        hasher = hashlib.sha512()
-    else:
-        raise IntegrityError(
-            f"unsupported integrity algorithm: {algo!r}",
-            algorithm=algo,
-            expected=entry.artifact_integrity,
-            actual="<none>",
-        )
-
-    hasher.update(content)
-    actual_digest = hasher.digest()
-
-    try:
-        expected_digest = base64.b64decode(b64, validate=True)
-    except Exception:
-        raise IntegrityError(
-            f"invalid base64 in projected integrity for {entry.package}",
-            algorithm=algo,
-            expected=entry.artifact_integrity,
-            actual="<invalid-base64>",
-        ) from None
-
-    if not hmac.compare_digest(actual_digest, expected_digest):
-        raise IntegrityError(
-            f"integrity check failed for {entry.package}: "
-            f"expected {algo}:{binascii.hexlify(expected_digest).decode()}, "
-            f"got {algo}:{binascii.hexlify(actual_digest).decode()}",
-            algorithm=algo,
-            expected=binascii.hexlify(expected_digest).decode(),
-            actual=binascii.hexlify(actual_digest).decode(),
-        )
-
-    # ── 2d. Install from verified bytes ──────────────────────────
+    # ── 2c. Install from verified bytes ──────────────────────────
     try:
         ctx.installer.install(
             package=entry.package,
@@ -1381,7 +1153,7 @@ def _install_one_after_download(
             f"install failed for {entry.package} ({entry.version}): {exc}"
         ) from exc
 
-    # ── 2e. Post-install metadata verification ───────────────────
+    # ── 2d. Post-install metadata verification ───────────────────
     try:
         new_meta = ctx.metadata.read(
             pi_home=pi_home,
@@ -1403,7 +1175,7 @@ def _install_one_after_download(
             f"got name={new_name!r} version={new_version!r}"
         )
 
-    # ── 2g. Owner validation ─────────────────────────────────────
+    # ── 2e. Owner validation ─────────────────────────────────────
     metadata_path = _npm_metadata_path(
         pi_home, entry.package, entry.metadata_file,
     )
@@ -1419,14 +1191,6 @@ def _install_one_after_download(
         version=entry.version,
         status=InstallStatus.OK,
     )
-
-
-def _remove_artifact(ctx: InstallContext, path: str) -> None:
-    """Best-effort artifact removal."""
-    try:
-        ctx.file.remove(path)
-    except Exception:
-        pass  # removal is best-effort; failures are swallowed
 
 
 def _npm_metadata_path(pi_home: str, package: str, metadata_file: str) -> str:

@@ -36,8 +36,6 @@ from unittest import mock
 import docker
 
 from docker.runtime_installer import (
-    ArtifactDownloader,
-    ArtifactFilesystem,
     ExtensionResult,
     InstallContext,
     InstallError,
@@ -54,7 +52,6 @@ from docker.runtime_installer import (
     ProjectionEntry,
     ProjectionError,
     RuntimeArtifactReader,
-    TempWorkspace,
     _mounted_artifact_path,
     _MOUNTED_ARTIFACT_ROOT,
     _MountInspection,
@@ -62,8 +59,6 @@ from docker.runtime_installer import (
     exit_code_for,
     install_extensions,
     read_projection,
-    validate_npm_tarball_url,
-    _validate_downloaded_artifact,
 )
 
 
@@ -83,7 +78,7 @@ class TestProjectionEntryFieldValidation(unittest.TestCase):
     def _ok(**overrides: str) -> None:
         kwargs = {
             "package": "p", "version": "1.0.0",
-            "artifact_url": _pkg_url("p", "1.0.0"),
+            "artifact_id": _VALID_ARTIFACT_ID,
             "artifact_integrity": _VALID_SHA256,
             "metadata_file": "package.json",
         }
@@ -113,19 +108,19 @@ class TestProjectionEntryFieldValidation(unittest.TestCase):
 
     def test_valid_version_accepted(self) -> None:
         self._ok(version="1.2.3-beta.1",
-                 artifact_url=_pkg_url("p", "1.2.3-beta.1"))
+                 artifact_id=_VALID_ARTIFACT_ID)
 
     def test_prerelease_version_accepted(self) -> None:
         self._ok(version="1.0.0-rc.2",
-                 artifact_url=_pkg_url("p", "1.0.0-rc.2"))
+                 artifact_id=_VALID_ARTIFACT_ID)
 
     def test_build_metadata_version_accepted(self) -> None:
         self._ok(version="1.2.3+build.20250101",
-                 artifact_url=_pkg_url("p", "1.2.3"))
+                 artifact_id=_VALID_ARTIFACT_ID)
 
     def test_prerelease_with_build_accepted(self) -> None:
         self._ok(version="1.2.3-beta.1+exp.sha.5114f85",
-                 artifact_url=_pkg_url("p", "1.2.3-beta.1"))
+                 artifact_id=_VALID_ARTIFACT_ID)
 
     def test_version_latest_rejected(self) -> None:
         self._fail(version="latest")
@@ -154,62 +149,25 @@ class TestProjectionEntryFieldValidation(unittest.TestCase):
     def test_version_malformed_prerelease_rejected(self) -> None:
         self._fail(version="1.2.3-!!!")
 
-    # ── artifact_url ─────────────────────────────────────────────
+    # ── artifact_id ─────────────────────────────────────────────
 
-    def test_url_must_be_https(self) -> None:
-        self._fail(artifact_url="http://registry.npmjs.org/p/-/p-1.0.0.tgz")
+    def test_artifact_id_rejects_traversal(self) -> None:
+        self._fail(artifact_id="../sha256/hash.tgz")
 
-    def test_url_rejects_query_string(self) -> None:
-        self._fail(
-            artifact_url=
-            "https://registry.npmjs.org/p/-/p-1.0.0.tgz?token=secret")
+    def test_artifact_id_rejects_absolute(self) -> None:
+        self._fail(artifact_id="/sha256/hash.tgz")
 
-    def test_url_rejects_fragment(self) -> None:
-        self._fail(
-            artifact_url=
-            "https://registry.npmjs.org/p/-/p-1.0.0.tgz#README")
+    def test_artifact_id_rejects_empty(self) -> None:
+        self._fail(artifact_id="")
 
-    def test_url_rejects_missing_separator(self) -> None:
-        self._fail(
-            artifact_url="https://registry.npmjs.org/p/pkg-1.0.0.tgz")
+    def test_artifact_id_rejects_missing_algo(self) -> None:
+        self._fail(artifact_id="hash.tgz")
 
-    def test_url_rejects_wrong_package_path(self) -> None:
-        self._fail(artifact_url="https://registry.npmjs.org/q/-/p-1.0.0.tgz",
-                   package="p")
+    def test_artifact_id_rejects_no_slash(self) -> None:
+        self._fail(artifact_id="just-a-hash.tgz")
 
-    def test_url_rejects_wrong_scope(self) -> None:
-        self._fail(
-            artifact_url=
-            "https://registry.npmjs.org/@scope/a/-/a-1.0.0.tgz",
-            package="@scope/b")
-
-    def test_url_rejects_wrong_basename(self) -> None:
-        self._fail(artifact_url="https://registry.npmjs.org/p/-/bad-1.0.0.tgz",
-                   package="p")
-
-    def test_url_rejects_wrong_version(self) -> None:
-        self._fail(artifact_url="https://registry.npmjs.org/p/-/p-9.9.9.tgz",
-                   version="1.0.0")
-
-    def test_url_accepts_build_metadata_version(self) -> None:
-        """Version ``1.0.0+build123`` matches URL without ``+build``
-        — npm tarballs never include build metadata in filenames."""
-        self._ok(version="1.0.0+build123",
-                 artifact_url=_pkg_url("p", "1.0.0+build123"))
-
-    def test_url_rejects_build_metadata_in_filename(self) -> None:
-        """URL with ``+build`` in the tarball filename is invalid."""
-        self._fail(
-            artifact_url=
-            "https://registry.npmjs.org/p/-/p-1.0.0+build.tgz",
-            version="1.0.0+build")
-
-    def test_url_accepts_prerelease(self) -> None:
-        self._ok(version="1.0.0-alpha.1",
-                 artifact_url=_pkg_url("p", "1.0.0-alpha.1"))
-
-    def test_valid_url_accepted(self) -> None:
-        self._ok(artifact_url=_pkg_url("p", "1.0.0"))
+    def test_valid_artifact_id_accepted(self) -> None:
+        self._ok(artifact_id=_VALID_ARTIFACT_ID)
 
     # ── artifact_integrity ───────────────────────────────────────
 
@@ -276,11 +234,11 @@ class TestProjectionEntryFieldValidation(unittest.TestCase):
 
     def test_package_rejects_absolute(self) -> None:
         self._fail(package="/bad",
-                   artifact_url=_pkg_url("/bad", "1.0.0"))
+                   artifact_id=_VALID_ARTIFACT_ID)
 
     def test_package_rejects_backslash(self) -> None:
         self._fail(package="bad\\name",
-                   artifact_url=_pkg_url("bad\\name", "1.0.0"))
+                   artifact_id=_VALID_ARTIFACT_ID)
 
     def test_package_rejects_parent_segment(self) -> None:
         self._fail(package="..")
@@ -288,7 +246,7 @@ class TestProjectionEntryFieldValidation(unittest.TestCase):
     def test_double_dot_in_package_name_accepted(self) -> None:
         """``a..b`` as package name has no traversal — accepted."""
         self._ok(package="a..b",
-                 artifact_url=_pkg_url("a..b", "1.0.0"))
+                 artifact_id=_VALID_ARTIFACT_ID)
 
 
 class TestProjectionEntryDto(unittest.TestCase):
@@ -298,20 +256,21 @@ class TestProjectionEntryDto(unittest.TestCase):
         e = ProjectionEntry(
             package="@scope/pkg",
             version="1.2.3",
-            artifact_url="https://registry.npmjs.org/@scope/pkg/-/pkg-1.2.3.tgz",
+            artifact_id=_VALID_ARTIFACT_ID,
             artifact_integrity=_VALID_SHA512,
             metadata_file="package.json",
         )
         self.assertEqual("@scope/pkg", e.package)
         self.assertEqual("1.2.3", e.version)
-        self.assertIn("registry.npmjs.org", e.artifact_url)
+        self.assertIn("sha256/", e.artifact_id)
+        self.assertIn(".tgz", e.artifact_id)
         self.assertIn("sha512-", e.artifact_integrity)
         self.assertEqual("package.json", e.metadata_file)
 
     def test_frozen(self) -> None:
         e = ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )
         with self.assertRaises(Exception):
@@ -321,7 +280,7 @@ class TestProjectionEntryDto(unittest.TestCase):
         # Every entry must carry integrity so the installer can verify.
         e = ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA512,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA512,
             metadata_file="package.json",
         )
         self.assertTrue(len(e.artifact_integrity) > 0)
@@ -431,13 +390,13 @@ class TestReadProjectionValid(unittest.TestCase):
 [extensions."pi-read"]
 package = "pi-read"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/pi-read/-/pi-read-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 
 [extensions."pi-green-loop"]
 package = "pi-green-loop"
 version = "2.0.0"
-artifact = { url = "https://registry.npmjs.org/pi-green-loop/-/pi-green-loop-2.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 """
 
@@ -450,7 +409,8 @@ metadata_file = "package.json"
         for e in entries:
             self.assertTrue(e.package)
             self.assertTrue(e.version)
-            self.assertTrue(e.artifact_url.startswith("https://"))
+            self.assertIn("/", e.artifact_id)
+            self.assertTrue(e.artifact_id.endswith(".tgz"))
             self.assertTrue(e.artifact_integrity.startswith("sha"))
             self.assertTrue(e.metadata_file)
 
@@ -480,19 +440,19 @@ class TestDeterministicOrdering(unittest.TestCase):
 [extensions.z]
 package = "z"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/z/-/z-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 
 [extensions.a]
 package = "a"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/a/-/a-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 
 [extensions.m]
 package = "m"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/m/-/m-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 """
 
@@ -517,7 +477,7 @@ class TestClosedSchemaRejection(unittest.TestCase):
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 """
 
@@ -531,7 +491,7 @@ metadata_file = "package.json"
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 source = { package = "p", registry = "https://x" }
 """)
@@ -543,7 +503,7 @@ source = { package = "p", registry = "https://x" }
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 update = { provider = "npm", max_age_seconds = 3600 }
 """)
@@ -555,7 +515,7 @@ update = { provider = "npm", max_age_seconds = 3600 }
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 override = { allow = false, message = "no" }
 """)
@@ -569,9 +529,9 @@ override = { allow = false, message = "no" }
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
-artifacts = { "1.0.0" = { url = "https://x", integrity = "sha512-A" }, "2.0.0" = { url = "https://x", integrity = "sha512-B" } }
+artifacts = { "1.0.0" = { artifact_id = "https://x", integrity = "sha512-A" }, "2.0.0" = { artifact_id = "https://x", integrity = "sha512-B" } }
 """)
         with self.assertRaises(ProjectionError):
             read_projection(path)
@@ -594,7 +554,7 @@ class TestRequiredFields(unittest.TestCase):
         path = _tmp_toml("""\
 [extensions.p]
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 """)
         with self.assertRaises(ProjectionError):
@@ -604,7 +564,7 @@ metadata_file = "package.json"
         path = _tmp_toml("""\
 [extensions.p]
 package = "p"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "package.json"
 """)
         with self.assertRaises(ProjectionError):
@@ -626,7 +586,7 @@ metadata_file = "package.json"
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz" }
 metadata_file = "package.json"
 """)
         with self.assertRaises(ProjectionError):
@@ -637,7 +597,7 @@ metadata_file = "package.json"
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 """)
         with self.assertRaises(ProjectionError):
             read_projection(path)
@@ -651,7 +611,7 @@ class TestReadProjectionWrongTypes(unittest.TestCase):
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = {{ url = "{_pkg_url('p', '1.0.0')}", integrity = "{_VALID_SHA256}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{_VALID_SHA256}" }}
 metadata_file = "package.json"
 """
 
@@ -697,7 +657,7 @@ metadata_file = "package.json"
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = 0 }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = 0 }
 metadata_file = "package.json"
 """
         path = _tmp_toml(toml)
@@ -733,13 +693,13 @@ class TestReadProjectionDuplicatePackage(unittest.TestCase):
 [extensions.a]
 package = "dup"
 version = "1.0.0"
-artifact = {{ url = "{_pkg_url('dup', '1.0.0')}", integrity = "{_VALID_SHA256}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{_VALID_SHA256}" }}
 metadata_file = "package.json"
 
 [extensions.b]
 package = "dup"
 version = "2.0.0"
-artifact = {{ url = "{_pkg_url('dup', '2.0.0')}", integrity = "{_VALID_SHA256}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{_VALID_SHA256}" }}
 metadata_file = "package.json"
 """
 
@@ -754,13 +714,13 @@ metadata_file = "package.json"
 [extensions.a]
 package = "x"
 version = "1.0.0"
-artifact = {{ url = "{_pkg_url('x', '1.0.0')}", integrity = "{_VALID_SHA256}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{_VALID_SHA256}" }}
 metadata_file = "package.json"
 
 [extensions.b]
 package = "y"
 version = "2.0.0"
-artifact = {{ url = "{_pkg_url('y', '2.0.0')}", integrity = "{_VALID_SHA256}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{_VALID_SHA256}" }}
 metadata_file = "package.json"
 """
         path = _tmp_toml(toml)
@@ -782,7 +742,7 @@ class TestUnsafeMetadataPath(unittest.TestCase):
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "../etc/passwd"
 """)
         with self.assertRaises(MetadataValidationError):
@@ -793,7 +753,7 @@ metadata_file = "../etc/passwd"
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "/etc/passwd"
 """)
         with self.assertRaises(MetadataValidationError):
@@ -804,7 +764,7 @@ metadata_file = "/etc/passwd"
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
+artifact = { artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
 metadata_file = "pkg/package.json"
 """)
         entries = read_projection(path)
@@ -827,7 +787,7 @@ class TestPackageNameSafety(unittest.TestCase):
     def _entry(package: str) -> ProjectionEntry:
         return ProjectionEntry(
             package=package, version="1.0.0",
-            artifact_url=_pkg_url(package, "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )
 
@@ -837,7 +797,7 @@ class TestPackageNameSafety(unittest.TestCase):
 [extensions.p]
 package = "{package}"
 version = "1.0.0"
-artifact = {{ url = "{_pkg_url(package, '1.0.0')}", integrity = "{_VALID_SHA256}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{_VALID_SHA256}" }}
 metadata_file = "package.json"
 """
 
@@ -1100,270 +1060,6 @@ class TestSharedSemverValidation(unittest.TestCase):
         self._fail("not-a-version")
 
 
-class TestValidateNpmTarballUrl(unittest.TestCase):
-    """The shared ``validate_npm_tarball_url`` validator enforces
-    the complete npm tarball identity contract: HTTPS, exact path
-    ``/<package>/-/<basename>-<version>.tgz``, no query/fragment.
-
-    Both ``ProjectionEntry.__post_init__`` and ``read_projection``
-    call this single validator to prevent installer/model drift."""
-
-    # ── helpers ──────────────────────────────────────────────────
-
-    @staticmethod
-    def _url(package: str, version: str, host: str = "registry.npmjs.org") -> str:
-        basename = package.split("/")[-1]
-        base_ver = version.split("+", 1)[0]
-        return f"https://{host}/{package}/-/{basename}-{base_ver}.tgz"
-
-    def _ok(self, url: str, package: str, version: str) -> None:
-        validate_npm_tarball_url(url, package, version)
-
-    def _fail(self, url: str, package: str, version: str) -> None:
-        with self.assertRaises(ProjectionError):
-            validate_npm_tarball_url(url, package, version)
-
-    # ── valid ────────────────────────────────────────────────────
-
-    def test_unscoped(self) -> None:
-        self._ok(
-            self._url("express", "4.18.2"),
-            "express", "4.18.2",
-        )
-
-    def test_scoped(self) -> None:
-        self._ok(
-            self._url("@scope/pkg", "1.0.0"),
-            "@scope/pkg", "1.0.0",
-        )
-
-    def test_pre_release_version(self) -> None:
-        self._ok(
-            self._url("pkg", "1.0.0-alpha.1"),
-            "pkg", "1.0.0-alpha.1",
-        )
-
-    def test_build_metadata_in_version(self) -> None:
-        self._ok(
-            self._url("pkg", "1.0.0+build123"),
-            "pkg", "1.0.0+build123",
-        )
-
-    def test_any_https_host_accepted(self) -> None:
-        self._ok(
-            self._url("pkg", "1.0.0", host="mirror.internal.example.com"),
-            "pkg", "1.0.0",
-        )
-
-    # ── rejections: scheme ───────────────────────────────────────
-
-    def test_http_rejected(self) -> None:
-        self._fail(
-            self._url("p", "1.0.0").replace("https", "http"),
-            "p", "1.0.0",
-        )
-
-    def test_no_scheme_rejected(self) -> None:
-        self._fail("registry.npmjs.org/p/-/p-1.0.0.tgz", "p", "1.0.0")
-
-    # ── rejections: query / fragment ─────────────────────────────
-
-    def test_query_string_rejected(self) -> None:
-        self._fail(
-            self._url("p", "1.0.0") + "?token=abc",
-            "p", "1.0.0",
-        )
-
-    def test_fragment_rejected(self) -> None:
-        self._fail(
-            self._url("p", "1.0.0") + "#readme",
-            "p", "1.0.0",
-        )
-
-    # ── rejections: path structure ───────────────────────────────
-
-    def test_missing_dash_slash_dash(self) -> None:
-        self._fail(
-            "https://registry.npmjs.org/pkg/pkg-1.0.0.tgz",
-            "pkg", "1.0.0",
-        )
-
-    def test_wrong_package_name_in_path(self) -> None:
-        self._fail(
-            self._url("other", "1.0.0"),
-            "pkg", "1.0.0",
-        )
-
-    def test_wrong_scope_in_path(self) -> None:
-        self._fail(
-            self._url("@scope/x", "1.0.0"),
-            "@scope/y", "1.0.0",
-        )
-
-    def test_right_scope_wrong_basename(self) -> None:
-        """Path has correct scope but tarball filename has wrong
-        basename — the path segment after ``/-/`` must match."""
-        self._fail(
-            "https://registry.npmjs.org/@scope/x/-/y-1.0.0.tgz",
-            "@scope/x", "1.0.0",
-        )
-
-    def test_unscoped_instead_of_scoped(self) -> None:
-        self._fail(
-            self._url("name", "1.0.0"),
-            "@scope/name", "1.0.0",
-        )
-
-    def test_scoped_instead_of_unscoped(self) -> None:
-        self._fail(
-            self._url("@scope/name", "1.0.0"),
-            "name", "1.0.0",
-        )
-
-    def test_version_mismatch_in_filename(self) -> None:
-        self._fail(
-            self._url("p", "9.9.9"),
-            "p", "1.0.0",
-        )
-
-    def test_basename_mismatch_in_filename(self) -> None:
-        self._fail(
-            self._url("p", "1.0.0").replace("/p-1.0.0", "/z-1.0.0"),
-            "p", "1.0.0",
-        )
-
-    # ── rejections: build metadata ───────────────────────────────
-
-    def test_build_metadata_stripped_from_filename(self) -> None:
-        """Npm tarball filenames never include ``+build``.  A URL
-        that contains it in the filename is rejected even when the
-        version parameter itself carries the same build metadata."""
-        self._fail(
-            "https://registry.npmjs.org/pkg/-/pkg-1.0.0+build.tgz",
-            "pkg", "1.0.0+build",
-        )
-
-    def test_base_version_must_match(self) -> None:
-        """Build metadata is stripped in the filename but the base
-        version must still match.  ``1.0.0+build1`` ≠ ``2.0.0+build2``
-        because base versions differ."""
-        self._fail(
-            self._url("pkg", "2.0.0"),
-            "pkg", "1.0.0+build1",
-        )
-
-
-class TestNpmTarballUrlCrossBoundary(unittest.TestCase):
-    """The npm tarball URL contract is identical whether validated at
-    the model boundary (:func:`~docker.versioning.model._validate_npm_tarball_url`)
-    or the installer boundary (:func:`~docker.runtime_installer.validate_npm_tarball_url`).
-
-    Both MUST produce the same accept/reject decisions for the same
-    *(url, package, version)* triple."""
-
-    _CASES: list[tuple[bool, str, str, str, str]] = [
-        # (accept, url, package, version, label)
-        (True,  "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
-                "pkg", "1.0.0", "unscoped"),
-        (True,  "https://registry.npmjs.org/@s/n/-/n-1.0.0.tgz",
-                "@s/n", "1.0.0", "scoped"),
-        (True,  "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
-                "pkg", "1.0.0+build99", "build stripped"),
-        (True,  "https://mirror.example.com/pkg/-/pkg-1.0.0.tgz",
-                "pkg", "1.0.0", "mirror host"),
-        (False, "http://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
-                "pkg", "1.0.0", "non-HTTPS"),
-        (False, "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz?x",
-                "pkg", "1.0.0", "query string"),
-        (False, "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz#x",
-                "pkg", "1.0.0", "fragment"),
-        (False, "https://registry.npmjs.org/pkg/pkg-1.0.0.tgz",
-                "pkg", "1.0.0", "missing /-/"),
-        (False, "https://registry.npmjs.org/pkg/-/pkg-1.0.0+build.tgz",
-                "pkg", "1.0.0+build", "+build in filename"),
-        (False, "https://registry.npmjs.org/other/-/pkg-1.0.0.tgz",
-                "pkg", "1.0.0", "wrong package path"),
-        (False, "https://registry.npmjs.org/pkg/-/wrong-1.0.0.tgz",
-                "pkg", "1.0.0", "wrong basename"),
-        (False, "https://registry.npmjs.org/pkg/-/pkg-9.9.9.tgz",
-                "pkg", "1.0.0", "wrong version"),
-    ]
-
-    def test_all_cases_match_at_both_boundaries(self) -> None:
-        """Every (accept, url, package, version) case produces the
-        same decision at the shared module, model boundary, and
-        installer boundary."""
-        from docker.versioning.npm_tarball import (
-            NpmTarballUrlError,
-            validate as _shared_validate,
-        )
-        from docker.versioning.model import (
-            InvalidArtifactKey,
-            _validate_npm_tarball_url as _model_validate,
-        )
-        for accept, url, pkg, ver, label in self._CASES:
-            with self.subTest(case=label):
-                shared_ok = model_ok = installer_ok = False
-
-                try:
-                    _shared_validate(url, pkg, ver)
-                    shared_ok = True
-                except NpmTarballUrlError:
-                    pass
-
-                try:
-                    _model_validate(url, pkg, ver)
-                    model_ok = True
-                except InvalidArtifactKey:
-                    pass
-
-                try:
-                    validate_npm_tarball_url(url, pkg, ver)
-                    installer_ok = True
-                except ProjectionError:
-                    pass
-
-                self.assertEqual(
-                    accept, shared_ok,
-                    f"shared module: expected accept={accept} "
-                    f"for {label}",
-                )
-                self.assertEqual(
-                    shared_ok, model_ok,
-                    f"model disagrees with shared module on {label}",
-                )
-                self.assertEqual(
-                    shared_ok, installer_ok,
-                    f"installer disagrees with shared module on {label}",
-                )
-
-
-class TestUnsafeArtifactUrl(unittest.TestCase):
-    """Artifact URL must be HTTPS and match package+version in path."""
-
-    def test_non_https_rejected(self) -> None:
-        path = _tmp_toml("""\
-[extensions.p]
-package = "p"
-version = "1.0.0"
-artifact = { url = "http://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
-metadata_file = "package.json"
-""")
-        with self.assertRaises(ProjectionError):
-            read_projection(path)
-
-    def test_package_version_mismatch_in_url(self) -> None:
-        path = _tmp_toml("""\
-[extensions.p]
-package = "p"
-version = "1.0.0"
-artifact = { url = "https://registry.npmjs.org/p/-/p-9.9.9.tgz", integrity = "sha256-ypeBEsobvcr6wjGzmiPcTaeG7/gUfE5yuYB3ha/uSLs=" }
-metadata_file = "package.json"
-""")
-        with self.assertRaises(ProjectionError):
-            read_projection(path)
-
-
 class TestUnsafeIntegrity(unittest.TestCase):
     """SRI integrity must be well-formed and use a supported algorithm."""
 
@@ -1372,7 +1068,7 @@ class TestUnsafeIntegrity(unittest.TestCase):
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = {{ url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "{integrity}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{integrity}" }}
 metadata_file = "package.json"
 """
 
@@ -1402,6 +1098,12 @@ metadata_file = "package.json"
 _VALID_SHA256 = "sha256-" + base64.b64encode(
     hashlib.sha256(b"a").digest()
 ).decode()
+_VALID_ARTIFACT_ID = (
+    "sha256/"
+    + _VALID_SHA256.split("-", 1)[1]
+    .replace("+", "-").replace("/", "_")
+    + ".tgz"
+)
 _VALID_SHA384 = "sha384-" + base64.b64encode(
     hashlib.sha384(b"a").digest()
 ).decode()
@@ -1418,7 +1120,7 @@ class TestValidIntegrityAlgorithms(unittest.TestCase):
 [extensions.p]
 package = "p"
 version = "1.0.0"
-artifact = {{ url = "https://registry.npmjs.org/p/-/p-1.0.0.tgz", integrity = "{integrity}" }}
+artifact = {{ artifact_id = "sha256/ypeBEsobvcr6wjGzmiPcTaeG7_gUfE5yuYB3ha_uSLs=.tgz", integrity = "{integrity}" }}
 metadata_file = "package.json"
 """
 
@@ -1440,826 +1142,6 @@ metadata_file = "package.json"
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class TestExactArtifactResolution(unittest.TestCase):
-    """The downloader receives exactly the projected URL (no integrity).
-    The installer receives the exact verified local artifact path.
-    No registry queries, no fallback artifacts, no URL construction."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-
-    def test_downloader_receives_exact_url(self) -> None:
-        url = "https://registry.npmjs.org/@s/p/-/p-1.0.0.tgz"
-        entries = [ProjectionEntry(
-            package="@s/p", version="1.0.0",
-            artifact_url=url, artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        recorded = self.ctx.download._last_call  # type: ignore[attr-defined]
-        self.assertEqual(url, recorded["url"])
-
-    def test_downloader_never_receives_integrity(self) -> None:
-        """The integrity value must never be passed to the downloader —
-        it is installer-owned."""
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        recorded = self.ctx.download._last_call  # type: ignore[attr-defined]
-        self.assertNotIn("integrity", recorded)
-
-    def test_no_fallback_artifact_attempted(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("404"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertEqual(1, self.ctx.download.call_count)  # type: ignore[attr-defined]
-
-    def test_installer_receives_verified_bytes_not_path(self) -> None:
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
-        self.assertEqual("p", recorded["package"])
-        # The installer receives verified bytes, not a mutable path.
-        self.assertIn("artifact_bytes_len", recorded)
-        self.assertNotIn("artifact_path", recorded,
-                          "installer must not receive a mutable file path")
-        self.assertNotIn("url", recorded)
-        self.assertNotIn("version", recorded)
-
-    def test_installer_never_queries_registries(self) -> None:
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
-        for val in recorded.values():
-            self.assertNotIn("registry", str(val).lower())
-            self.assertNotIn("npmjs", str(val).lower())
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Installer-owned integrity verification
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestInstallerOwnedIntegrity(unittest.TestCase):
-    """Integrity verification is performed by the installer module
-    over the downloaded bytes — the downloader never sees the
-    expected checksum, and bytes cannot be swapped after verification."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-
-    # ── The downloader provides UNVERIFIED bytes ────────────────────
-
-    def test_downloader_does_not_know_integrity(self) -> None:
-        """fetch() signature accepts url and dest_dir — no integrity param."""
-        sig = inspect.signature(ArtifactDownloader.fetch)
-        self.assertNotIn("integrity", sig.parameters,
-                         "ArtifactDownloader.fetch must not accept integrity")
-
-    # ── Integrity rejection (installer-owned) ───────────────────────
-
-    def test_wrong_digest_fails(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        # Use a deliberately wrong expected integrity
-        wrong_integrity = "sha256-" + base64.b64encode(
-            hashlib.sha256(b"WRONG").digest()
-        ).decode()
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=wrong_integrity,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertFalse(result.ok)
-        self.assertEqual(InstallStatus.FAILED, result.results[0].status)
-        self.assertIn("integrity", (result.results[0].detail or "").lower())
-
-    def test_integrity_failure_blocks_installer(self) -> None:
-        wrong = "sha256-" + base64.b64encode(
-            hashlib.sha256(b"WRONG").digest()
-        ).decode()
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=wrong,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertEqual(
-            0, self.ctx.installer.call_count,  # type: ignore[attr-defined]
-            "installer must not be called when integrity fails",
-        )
-
-    def test_empty_download_rejected(self) -> None:
-        self.ctx.file._set_bytes(b"")  # type: ignore[attr-defined]
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertFalse(result.ok)
-
-    def test_integrity_ok_allows_install(self) -> None:
-        # Download bytes whose hash matches the projected integrity
-        expected = "sha256-" + base64.b64encode(
-            hashlib.sha256(_dummy_bytes).digest()
-        ).decode()
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=expected,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertTrue(result.ok)
-        self.assertGreater(
-            self.ctx.installer.call_count, 0,  # type: ignore[attr-defined]
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Call-order recording
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestCallOrderRecording(unittest.TestCase):
-    """Order: load → mount → metadata-check → download →
-    (integrity-verify by installer) → install → post-validate."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-
-    def test_call_order_matches_contract(self) -> None:
-        self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
-            package="p", version="1.0.0",
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        self.assertIn("mount_check", order)
-        mount_idx = order.index("mount_check")
-        self.assertIn("metadata.read", order)
-        meta_idx = order.index("metadata.read")
-        self.assertGreater(meta_idx, mount_idx)
-        # download and install are skipped because already installed
-        self.assertNotIn("download", order)
-        self.assertNotIn("install", order)
-
-    def test_download_before_install_when_not_cached(self) -> None:
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        dl_idx = order.index("download")
-        inst_idx = order.index("install")
-        self.assertLess(dl_idx, inst_idx,
-                        "download must precede install")
-
-    def test_install_before_post_validate(self) -> None:
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        inst_idx = order.index("install")
-        # Post-install metadata read must come after install
-        meta_indices = [i for i, name in enumerate(order)
-                        if name == "metadata.read"]
-        # First read is pre-check (not installed), second is post-install
-        post_idx = meta_indices[-1]
-        self.assertLess(inst_idx, post_idx,
-                        "install must precede post-install metadata read")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Download failures
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestDownloadFailures(unittest.TestCase):
-    """Download failures produce bounded, actionable diagnostics."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-
-    def test_connection_failure_in_diagnostics(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("connection refused: registry.npmjs.org:443"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertIn("connection refused",
-                      (result.results[0].detail or "").lower())
-
-    def test_http_failure_in_diagnostics(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("HTTP 404 Not Found: https://example.com/pkg.tgz"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertIn("404", result.results[0].detail or "")
-
-    def test_timeout_in_diagnostics(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("download timed out after 30s"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertIn("time", (result.results[0].detail or "").lower())
-
-    def test_diagnostics_include_package_and_version(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("gone"),
-        )
-        entries = [ProjectionEntry(
-            package="@scope/p", version="2.3.4",
-            artifact_url=_pkg_url("@scope/p", "2.3.4"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        detail = result.results[0].detail or ""
-        self.assertIn("@scope/p", detail)
-        self.assertIn("2.3.4", detail)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Interrupted installation
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestInterruptedInstallation(unittest.TestCase):
-    """Interruption must never write a "validated" marker or report OK."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-
-    def test_installer_failure_reported_as_failed(self) -> None:
-        self.ctx.installer._fail_with(  # type: ignore[attr-defined]
-            InstallError("pi install exited 1"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertFalse(result.ok)
-        self.assertEqual(InstallStatus.FAILED, result.results[0].status)
-
-    def test_installer_failure_never_reports_ok_for_that_extension(self) -> None:
-        self.ctx.installer._fail_with(  # type: ignore[attr-defined]
-            InstallError("segfault"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertEqual(InstallStatus.FAILED, result.results[0].status)
-
-    def test_metadata_read_failure_after_install_reports_failed(self) -> None:
-        self.ctx.metadata._fail_on_all_reads(  # type: ignore[attr-defined]
-            InstallError("package.json not found"),
-        )
-        entries = [ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-        result = install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        self.assertFalse(result.ok)
-        self.assertEqual(InstallStatus.FAILED, result.results[0].status)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Downloaded path trust boundary
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestDownloadedPathTrust(unittest.TestCase):
-    """Before the installer reads, hashes, or installs a downloaded
-    artifact, it MUST validate that the path returned by
-    ``ArtifactDownloader.fetch`` is safe.
-
-    All filesystem queries go through the injected
-    ``ArtifactFilesystem`` boundary so that the validation is
-    proved purely in-memory without real filesystem state.
-    """
-
-    _WS = "/var/tmp/pi-workspace-0001"
-
-    def setUp(self) -> None:
-        self._fs = _FakeArtifactFilesystem()
-
-    # ── helpers ──────────────────────────────────────────────────
-
-    def _ok(self, path: str) -> str:
-        return _validate_downloaded_artifact(self._fs, self._WS, path)
-
-    def _fail(self, path: str) -> None:
-        with self.assertRaises(InstallError):
-            self._ok(path)
-
-    # ── valid ────────────────────────────────────────────────────
-
-    def test_absolute_regular_file_inside_workspace_accepted(self) -> None:
-        artifact = f"{self._WS}/artifact.tgz"
-        self._fs._register_file(artifact)
-        resolved = self._ok(artifact)
-        self.assertEqual(artifact, resolved)
-
-    # ── rejections ───────────────────────────────────────────────
-
-    def test_relative_path_rejected(self) -> None:
-        self._fail("artifact.tgz")
-
-    def test_path_outside_workspace_rejected(self) -> None:
-        outside = "/etc/passwd"
-        self._fs._register_file(outside)
-        self._fail(outside)
-
-    def test_nonexistent_path_rejected(self) -> None:
-        # Never registered → lstat_mode raises FileNotFoundError
-        self._fail(f"{self._WS}/missing.tgz")
-
-    def test_directory_rejected(self) -> None:
-        import stat
-        d = f"{self._WS}/subdir"
-        self._fs._stat_map[d] = (stat.S_IFDIR | 0o755, d)
-        self._fail(d)
-
-    def test_symlink_even_inside_workspace_rejected(self) -> None:
-        """All symlinks are rejected — accepting and resolving
-        preserves a TOCTOU path-swap window."""
-        link = f"{self._WS}/link.tgz"
-        self._fs._register_symlink(link, real_target=f"{self._WS}/real.tgz")
-        self._fs._register_file(f"{self._WS}/real.tgz")
-        self._fail(link)
-
-    def test_symlink_outside_workspace_rejected(self) -> None:
-        link = f"{self._WS}/escape.tgz"
-        self._fs._register_symlink(link, real_target="/etc/passwd")
-        self._fs._register_file("/etc/passwd")
-        self._fail(link)
-
-    def test_dangling_symlink_rejected(self) -> None:
-        link = f"{self._WS}/dangle.tgz"
-        self._fs._register_symlink(
-            link, real_target="/nonexistent/path",
-        )
-        self._fail(link)
-
-    def test_fifo_rejected(self) -> None:
-        import stat
-        fifo = f"{self._WS}/pipe"
-        self._fs._stat_map[fifo] = (stat.S_IFIFO | 0o644, fifo)
-        self._fail(fifo)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Artifact lifecycle (read / install / remove)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestArtifactLifecycle(unittest.TestCase):
-    """The downloaded artifact file is read for hashing, the verified
-    path is passed to install, and the file is removed on every exit
-    path (success, integrity failure, install failure, interruption)."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-        self.expected = "sha256-" + base64.b64encode(
-            hashlib.sha256(_dummy_bytes).digest()
-        ).decode()
-
-    def _entry(self) -> ProjectionEntry:
-        return ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=self.expected,
-            metadata_file="package.json",
-        )
-
-    def _artifact_path(self) -> str:
-        """Path returned by the fake downloader for the first fetch.
-
-        Derived from the fake workspace path — not hard-coded."""
-        ws = self.ctx.workspace  # type: ignore[attr-defined]
-        return f"{ws._created[0]}/artifact.tgz"
-
-    # ── read_bytes → install chain ────────────────────────────────
-
-    def test_file_read_before_install(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        read_idx = order.index("file.read_bytes")
-        inst_idx = order.index("install")
-        self.assertLess(read_idx, inst_idx,
-                        "file.read_bytes must precede install")
-
-    def test_verified_bytes_passed_to_install(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        # Verify the installer received bytes (not a mutable path).
-        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
-        self.assertIn("artifact_bytes_len", recorded)
-        self.assertNotIn("artifact_path", recorded,
-                         "installer must not receive a mutable file path — "
-                         "TOCTOU between read and install is closed")
-        self.assertEqual(
-            len(_dummy_bytes), recorded["artifact_bytes_len"],
-            "installer must receive the exact bytes that were verified",
-        )
-
-    # ── removal on success ────────────────────────────────────────
-
-    def test_artifact_removed_after_successful_install(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        self.assertIn(
-            self._artifact_path(),
-            self.ctx.file._removed,  # type: ignore[attr-defined]
-            "artifact must be removed after successful install",
-        )
-
-    def test_removal_happens_after_install(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        inst_idx = order.index("install")
-        rm_idx = order.index("file.remove")
-        self.assertLess(inst_idx, rm_idx,
-                        "install must precede artifact removal")
-
-    # ── removal on integrity failure ──────────────────────────────
-
-    def test_artifact_removed_on_integrity_failure(self) -> None:
-        wrong_integrity = "sha256-" + base64.b64encode(
-            hashlib.sha256(b"WRONG").digest()
-        ).decode()
-        entry = ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=wrong_integrity,
-            metadata_file="package.json",
-        )
-        install_extensions(
-            self.ctx, entries=[entry], pi_home="/mnt/pi",
-        )
-        self.assertIn(
-            self._artifact_path(),
-            self.ctx.file._removed,  # type: ignore[attr-defined]
-            "artifact must be removed after integrity failure",
-        )
-
-    # ── removal on install failure ────────────────────────────────
-
-    def test_artifact_removed_on_install_failure(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)     # type: ignore[attr-defined]
-        self.ctx.installer._fail_with(              # type: ignore[attr-defined]
-            InstallError("pi install crashed"),
-        )
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        self.assertIn(
-            self._artifact_path(),
-            self.ctx.file._removed,  # type: ignore[attr-defined]
-            "artifact must be removed after install failure",
-        )
-
-    # ── removal on interruption (downloader raises mid-sequence) ──
-
-    def test_artifact_removed_on_download_interruption(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("connection lost mid-download"),
-        )
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        # No file was created, but remove should be a no-op.
-        self.assertFalse(self.ctx.file._fail_remove)  # type: ignore[attr-defined]
-
-    # ── read failure surface ──────────────────────────────────────
-
-    def test_file_read_failure_surfaces_as_install_error(self) -> None:
-        self.ctx.file._fail_read = True  # type: ignore[attr-defined]
-        result = install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        self.assertFalse(result.ok)
-        self.assertEqual(0, self.ctx.installer.call_count)  # type: ignore[attr-defined]
-
-    # ── TOCTOU gap minified ─────────────────────────────────────────
-
-    def test_install_receives_verified_bytes_not_mutable_path(self) -> None:
-        """The installer receives the exact bytes that were verified,
-        not a filesystem path that could be replaced between
-        read_bytes and install.  This minifies the TOCTOU window
-        identified in Stage 10.5 item 62. TOCTOU would be closed
-        with materialize-runtime-artifacts-on-host change impementation"""
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
-        self.assertIn(
-            "artifact_bytes_len", recorded,
-            "installer must receive artifact_bytes, not artifact_path",
-        )
-        self.assertNotIn(
-            "artifact_path", recorded,
-            "installer must NEVER receive a filesystem path — "
-            "the file could have been replaced between read and install",
-        )
-
-    def test_bytes_match_read_content(self) -> None:
-        """The bytes passed to install are exactly the bytes returned
-        by read_bytes — not a re-read from a potentially mutated file."""
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        recorded = self.ctx.installer._last_call  # type: ignore[attr-defined]
-        self.assertEqual(
-            len(_dummy_bytes), recorded["artifact_bytes_len"],
-            "install bytes must have the exact length of the verified content",
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Temp workspace lifecycle
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestTempWorkspaceLifecycle(unittest.TestCase):
-    """A unique, collision-safe private temp directory is created
-    before download and cleaned up on every exit path: success,
-    integrity failure, install failure, and interruption."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-        self._valid = "sha256-" + base64.b64encode(
-            hashlib.sha256(_dummy_bytes).digest()
-        ).decode()
-
-    def _entry(self) -> ProjectionEntry:
-        return ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=self._valid,
-            metadata_file="package.json",
-        )
-
-    def _assert_workspace_cleaned_up(self) -> None:
-        ws = self.ctx.workspace  # type: ignore[attr-defined]
-        self.assertGreater(len(ws._created), 0,
-                           "workspace must be created")
-        for path in ws._created:
-            self.assertIn(
-                path, ws._cleaned,
-                f"workspace {path!r} must be cleaned up",
-            )
-
-    # ── creation ─────────────────────────────────────────────────
-
-    def test_workspace_created_before_download(self) -> None:
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        ws_idx = order.index("workspace.create")
-        dl_idx = order.index("download")
-        self.assertLess(ws_idx, dl_idx,
-                        "workspace.create must precede download")
-
-    def test_workspace_path_is_absolute(self) -> None:
-        """Every workspace path returned by create() is absolute."""
-        ws = self.ctx.workspace  # type: ignore[attr-defined]
-        path1 = ws.create()
-        path2 = ws.create()
-        self.assertTrue(os.path.isabs(path1),
-                        f"workspace path must be absolute: {path1!r}")
-        self.assertTrue(os.path.isabs(path2),
-                        f"workspace path must be absolute: {path2!r}")
-        ws.cleanup(path1)
-        ws.cleanup(path2)
-
-    def test_workspace_path_is_unique(self) -> None:
-        """No two create() calls return the same path."""
-        ws = self.ctx.workspace  # type: ignore[attr-defined]
-        paths = [ws.create() for _ in range(5)]
-        self.assertEqual(len(paths), len(set(paths)),
-                         f"workspace paths must be unique, got: {paths}")
-        for p in paths:
-            ws.cleanup(p)
-
-    def test_workspace_contract_privacy_clause(self) -> None:
-        """The TempWorkspace docstring mandates owner-only (0o700)
-        permissions so downloaded artifacts are never world-readable."""
-        doc = TempWorkspace.__doc__ or ""
-        self.assertIn("0o700", doc,
-                       "TempWorkspace must document 0o700 mode")
-        self.assertIn("Owner-only", doc,
-                       "TempWorkspace must document owner-only privacy")
-
-    def test_workspace_has_owner_only_permissions(self) -> None:
-        """A workspace created by a real TempWorkspace MUST have
-        owner-only permissions (0o700).  This test exercises the
-        real boundary, not the fake — it proves the behavioral
-        contract, not just the docstring."""
-        ws = InstallContext.real_workspace()
-        path = ws.create()
-        try:
-            self.assertTrue(os.path.isabs(path),
-                            f"workspace path must be absolute: {path!r}")
-            stat = os.stat(path)
-            actual = stat.st_mode & 0o777
-            self.assertEqual(
-                0o700, actual,
-                f"workspace must be owner-only (0o700), "
-                f"got {actual:#o}: {path!r}",
-            )
-        finally:
-            ws.cleanup(path)
-
-    def test_two_extensions_get_same_workspace(self) -> None:
-        """A single install_extensions call reuses the workspace."""
-        self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
-            package="a", version="1.0.0",
-        )
-        entries = [
-            ProjectionEntry(
-                package="a", version="1.0.0",
-                artifact_url=_pkg_url("a", "1.0.0"), artifact_integrity=self._valid,
-                metadata_file="p.json",
-            ),
-            ProjectionEntry(
-                package="b", version="2.0.0",
-                artifact_url=_pkg_url("b", "2.0.0"), artifact_integrity=self._valid,
-                metadata_file="p.json",
-            ),
-        ]
-        install_extensions(
-            self.ctx, entries=entries, pi_home="/mnt/pi",
-        )
-        ws = self.ctx.workspace  # type: ignore[attr-defined]
-        self.assertEqual(1, ws._counter,
-                         "single install_extensions call creates one workspace")
-
-    # ── cleanup on success ───────────────────────────────────────
-
-    def test_workspace_cleaned_up_on_success(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        self._assert_workspace_cleaned_up()
-
-    def test_workspace_cleanup_after_file_removal(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)  # type: ignore[attr-defined]
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        order = self.ctx._call_log  # type: ignore[attr-defined]
-        file_rm = order.index("file.remove")
-        ws_clean = order.index("workspace.cleanup")
-        self.assertLess(file_rm, ws_clean,
-                        "file.remove must precede workspace.cleanup")
-
-    # ── cleanup on integrity failure ─────────────────────────────
-
-    def test_workspace_cleaned_up_on_integrity_failure(self) -> None:
-        wrong = "sha256-" + base64.b64encode(
-            hashlib.sha256(b"WRONG").digest()
-        ).decode()
-        entry = ProjectionEntry(
-            package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=wrong,
-            metadata_file="package.json",
-        )
-        install_extensions(
-            self.ctx, entries=[entry], pi_home="/mnt/pi",
-        )
-        self._assert_workspace_cleaned_up()
-
-    # ── cleanup on install failure ───────────────────────────────
-
-    def test_workspace_cleaned_up_on_install_failure(self) -> None:
-        self.ctx.file._set_bytes(_dummy_bytes)     # type: ignore[attr-defined]
-        self.ctx.installer._fail_with(              # type: ignore[attr-defined]
-            InstallError("pi install crashed"),
-        )
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        self._assert_workspace_cleaned_up()
-
-    # ── cleanup on download interruption ─────────────────────────
-
-    def test_workspace_cleaned_up_on_download_failure(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
-            InstallError("connection refused"),
-        )
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-        )
-        self._assert_workspace_cleaned_up()
-
-    # ── dry-run ──────────────────────────────────────────────────
-
-    def test_dry_run_skips_workspace_creation(self) -> None:
-        install_extensions(
-            self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-            dry_run=True,
-        )
-        ws = self.ctx.workspace  # type: ignore[attr-defined]
-        self.assertEqual(0, ws._counter,
-                         "dry-run must not create temp workspace")
-
-    # ── creation failure ─────────────────────────────────────────
-
-    def test_workspace_creation_failure_surfaces(self) -> None:
-        self.ctx.workspace._fail_create = True  # type: ignore[attr-defined]
-        with self.assertRaises(InstallError):
-            install_extensions(
-                self.ctx, entries=[self._entry()], pi_home="/mnt/pi",
-            )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 10.1 — Package process failures
-# ═══════════════════════════════════════════════════════════════════════
-
-
 class TestPackageProcessFailures(unittest.TestCase):
     """Installer process failures produce diagnostics with bounded output."""
 
@@ -2272,7 +1154,7 @@ class TestPackageProcessFailures(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2286,7 +1168,7 @@ class TestPackageProcessFailures(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2300,7 +1182,7 @@ class TestPackageProcessFailures(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="@x/y", version="3.0.0",
-            artifact_url=_pkg_url("@x/y", "3.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2328,7 +1210,7 @@ class TestIdempotentInstallation(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2345,11 +1227,11 @@ class TestIdempotentInstallation(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertEqual(0, self.ctx.download.call_count)  # type: ignore[attr-defined]
+        self.assertEqual(0, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
         self.assertEqual(0, self.ctx.installer.call_count)  # type: ignore[attr-defined]
 
 
@@ -2371,7 +1253,7 @@ class TestAlreadyMatchingPackage(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2387,7 +1269,7 @@ class TestAlreadyMatchingPackage(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="3.2.1",
-            artifact_url=_pkg_url("p", "3.2.1"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2403,11 +1285,11 @@ class TestAlreadyMatchingPackage(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertEqual(0, self.ctx.download.call_count)  # type: ignore[attr-defined]
+        self.assertEqual(0, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
 
     def test_already_matching_triggers_no_install(self) -> None:
         self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
@@ -2415,7 +1297,7 @@ class TestAlreadyMatchingPackage(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
@@ -2427,7 +1309,7 @@ class TestAlreadyMatchingPackage(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2455,7 +1337,7 @@ class TestMismatchedInstalledPackages(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2471,7 +1353,7 @@ class TestMismatchedInstalledPackages(unittest.TestCase):
         self.ctx.metadata._set_spoof_name("evil")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="good", version="1.0.0",
-            artifact_url=_pkg_url("good", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2495,14 +1377,14 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
     def test_missing_package_triggers_install(self) -> None:
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
             self.ctx, entries=entries, pi_home="/mnt/pi",
         )
         self.assertTrue(result.ok)
-        self.assertGreater(self.ctx.download.call_count, 0)  # type: ignore[attr-defined]
+        self.assertGreater(self.ctx.blob_reader.call_count, 0)  # type: ignore[attr-defined]
         self.assertGreater(self.ctx.installer.call_count, 0)  # type: ignore[attr-defined]
 
     def test_wrong_package_name_triggers_reinstall(self) -> None:
@@ -2512,7 +1394,7 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
         self.ctx.metadata._set_spoof_name("evil")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="good", version="1.0.0",
-            artifact_url=_pkg_url("good", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2527,13 +1409,13 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
             self.ctx, entries=entries, pi_home="/mnt/pi",
         )
-        self.assertGreater(self.ctx.download.call_count, 0)  # type: ignore[attr-defined]
+        self.assertGreater(self.ctx.blob_reader.call_count, 0)  # type: ignore[attr-defined]
         self.assertGreater(self.ctx.installer.call_count, 0)  # type: ignore[attr-defined]
         self.assertFalse(result.ok)
 
@@ -2541,7 +1423,7 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
         self.ctx.metadata._set_malformed(True)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2554,7 +1436,7 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
         self.ctx.metadata._set_is_directory(True)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2569,7 +1451,7 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
         self.ctx.metadata._set_spoof_name("other")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="target", version="1.0.0",
-            artifact_url=_pkg_url("target", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2588,13 +1470,13 @@ class TestMetadataPreCheckErrorDiscrimination(unittest.TestCase):
     def _single_entry(self) -> ProjectionEntry:
         return ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"),
+            artifact_id=_VALID_ARTIFACT_ID,
             artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )
 
     def test_metadata_not_found_triggers_install(self) -> None:
-        """MetadataNotFoundError → download + install proceeds."""
+        """MetadataNotFoundError → blob read + install proceeds."""
         entries = [self._single_entry()]
         result = install_extensions(
             self.ctx, entries=entries, pi_home="/mnt/pi",
@@ -2602,12 +1484,12 @@ class TestMetadataPreCheckErrorDiscrimination(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(InstallStatus.OK, result.results[0].status)
         self.assertIn(
-            "download",
-            self.ctx.download._call_log,  # type: ignore[attr-defined]
+            "blob_reader.open_verified",
+            self.ctx.blob_reader._call_log,  # type: ignore[attr-defined]
         )
 
     def test_malformed_metadata_surfaces_without_install(self) -> None:
-        """Parse/malformed error → surfaced as FAILED; no download."""
+        """Parse/malformed error → surfaced as FAILED; no blob read."""
         self.ctx.metadata._malformed = True  # type: ignore[attr-defined]
         entries = [self._single_entry()]
         result = install_extensions(
@@ -2616,13 +1498,13 @@ class TestMetadataPreCheckErrorDiscrimination(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(InstallStatus.FAILED, result.results[0].status)
         self.assertNotIn(
-            "download",
-            self.ctx.download._call_log,  # type: ignore[attr-defined]
-            "malformed metadata must not trigger a download",
+            "blob_reader.open_verified",
+            self.ctx.blob_reader._call_log,  # type: ignore[attr-defined]
+            "malformed metadata must not trigger a blob read",
         )
 
     def test_read_failure_surfaces_without_install(self) -> None:
-        """Generic InstallError (e.g. permission) → FAILED; no download."""
+        """Generic InstallError (e.g. permission) → FAILED; no blob read."""
         self.ctx.metadata._fail_on_next_read(  # type: ignore[attr-defined]
             InstallError("EACCES: permission denied"),
         )
@@ -2633,9 +1515,9 @@ class TestMetadataPreCheckErrorDiscrimination(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(InstallStatus.FAILED, result.results[0].status)
         self.assertNotIn(
-            "download",
-            self.ctx.download._call_log,  # type: ignore[attr-defined]
-            "read permission error must not trigger a download",
+            "blob_reader.open_verified",
+            self.ctx.blob_reader._call_log,  # type: ignore[attr-defined]
+            "read permission error must not trigger a blob read",
         )
 
 
@@ -2656,7 +1538,7 @@ class TestReinstallAndValidate(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2670,7 +1552,7 @@ class TestReinstallAndValidate(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2686,7 +1568,7 @@ class TestReinstallAndValidate(unittest.TestCase):
         self.ctx.metadata._set_spoof_name("impostor")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="genuine", version="1.0.0",
-            artifact_url=_pkg_url("genuine", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2700,7 +1582,7 @@ class TestReinstallAndValidate(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2728,12 +1610,12 @@ class TestMultipleExtensions(unittest.TestCase):
         entries = [
             ProjectionEntry(
                 package="skip-me", version="1.0.0",
-                artifact_url=_pkg_url("skip-me", "1.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="package.json",
             ),
             ProjectionEntry(
                 package="install-me", version="2.0.0",
-                artifact_url=_pkg_url("install-me", "2.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="package.json",
             ),
         ]
@@ -2755,27 +1637,27 @@ class TestMultipleExtensions(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="stale", version="1.0.0",
-            artifact_url=_pkg_url("stale", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
             self.ctx, entries=entries, pi_home="/mnt/pi",
         )
-        self.assertGreater(self.ctx.download.call_count, 0)  # type: ignore[attr-defined]
+        self.assertGreater(self.ctx.blob_reader.call_count, 0)  # type: ignore[attr-defined]
 
     def test_first_failure_stops_subsequent_mutations(self) -> None:
-        self.ctx.download._fail_with(  # type: ignore[attr-defined]
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
             InstallError("network unreachable"),
         )
         entries = [
             ProjectionEntry(
                 package="first", version="1.0.0",
-                artifact_url=_pkg_url("first", "1.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="package.json",
             ),
             ProjectionEntry(
                 package="second", version="2.0.0",
-                artifact_url=_pkg_url("second", "2.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="package.json",
             ),
         ]
@@ -2783,22 +1665,24 @@ class TestMultipleExtensions(unittest.TestCase):
             self.ctx, entries=entries, pi_home="/mnt/pi",
         )
         self.assertFalse(result.ok)
-        self.assertEqual(1, self.ctx.download.call_count)  # type: ignore[attr-defined]
+        self.assertEqual(1, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
 
     def test_prior_successful_entries_accurately_reported(self) -> None:
         self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
             package="ok-pkg", version="1.0.0",
         )
-        self.ctx.download._fail_after_n(0)  # type: ignore[attr-defined]
+        self.ctx.blob_reader._set_failure(  # type: ignore[attr-defined]
+            InstallError("download failed after N"),
+        )
         entries = [
             ProjectionEntry(
                 package="ok-pkg", version="1.0.0",
-                artifact_url=_pkg_url("ok-pkg", "1.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="package.json",
             ),
             ProjectionEntry(
                 package="fail-pkg", version="2.0.0",
-                artifact_url=_pkg_url("fail-pkg", "2.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="package.json",
             ),
         ]
@@ -2831,7 +1715,7 @@ class TestPostInstallValidation(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2846,7 +1730,7 @@ class TestPostInstallValidation(unittest.TestCase):
         self.ctx.metadata._set_spoof_name("evil")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="right", version="1.0.0",
-            artifact_url=_pkg_url("right", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -2865,7 +1749,7 @@ class TestAlreadyInstalledOwnerValidation(unittest.TestCase):
     def _matching_entry(self) -> ProjectionEntry:
         return ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"),
+            artifact_id=_VALID_ARTIFACT_ID,
             artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )
@@ -2943,7 +1827,7 @@ class TestMetadataPathResolution(unittest.TestCase):
     def test_unscoped_default_metadata_path(self) -> None:
         entries = [ProjectionEntry(
             package="pi-read", version="1.0.0",
-            artifact_url=_pkg_url("pi-read", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
@@ -2958,7 +1842,7 @@ class TestMetadataPathResolution(unittest.TestCase):
         self.ctx.installer._expect_version("my-pkg", "2.0.0")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="my-pkg", version="2.0.0",
-            artifact_url=_pkg_url("my-pkg", "2.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="dist/package.json",
         )]
         install_extensions(
@@ -2973,7 +1857,7 @@ class TestMetadataPathResolution(unittest.TestCase):
         self.ctx.installer._expect_version("@earendil-works/pi", "3.0.0")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="@earendil-works/pi", version="3.0.0",
-            artifact_url=_pkg_url("@earendil-works/pi", "3.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
@@ -2991,7 +1875,7 @@ class TestMetadataPathResolution(unittest.TestCase):
         self.ctx.installer._expect_version("@scope/pkg", "2.0.0")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="@scope/pkg", version="2.0.0",
-            artifact_url=_pkg_url("@scope/pkg", "2.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="sub/package.json",
         )]
         install_extensions(
@@ -3007,7 +1891,7 @@ class TestMetadataPathResolution(unittest.TestCase):
     def test_different_pi_home_changes_prefix(self) -> None:
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
@@ -3022,7 +1906,7 @@ class TestMetadataPathResolution(unittest.TestCase):
         """A bare path like /mnt/pi/package.json is never valid."""
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
@@ -3057,7 +1941,7 @@ class TestMetadataFilePassthrough(unittest.TestCase):
     def test_pre_check_read_receives_default_metadata_file(self) -> None:
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
@@ -3071,7 +1955,7 @@ class TestMetadataFilePassthrough(unittest.TestCase):
     def test_pre_check_read_receives_nested_metadata_file(self) -> None:
         entries = [ProjectionEntry(
             package="@scope/pkg", version="3.2.1",
-            artifact_url=_pkg_url("@scope/pkg", "3.2.1"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="nested/deep/package.json",
         )]
         install_extensions(
@@ -3089,7 +1973,7 @@ class TestMetadataFilePassthrough(unittest.TestCase):
         )
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="sub/pkg.json",
         )]
         result = install_extensions(
@@ -3109,7 +1993,7 @@ class TestMetadataFilePassthrough(unittest.TestCase):
         """Unscoped package → /mnt/pi/agent/npm/node_modules/pkg/package.json."""
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
@@ -3125,7 +2009,7 @@ class TestMetadataFilePassthrough(unittest.TestCase):
         self.ctx.installer._expect_version("@s/p", "2.0.0")  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="@s/p", version="2.0.0",
-            artifact_url=_pkg_url("@s/p", "2.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="dist/pkg.json",
         )]
         install_extensions(
@@ -3145,12 +2029,12 @@ class TestMetadataFilePassthrough(unittest.TestCase):
         entries = [
             ProjectionEntry(
                 package="a", version="1.0.0",
-                artifact_url=_pkg_url("a", "1.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="a/package.json",
             ),
             ProjectionEntry(
                 package="b", version="2.0.0",
-                artifact_url=_pkg_url("b", "2.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="b/custom.json",
             ),
         ]
@@ -3178,7 +2062,7 @@ class TestPiHomeMountCheck(unittest.TestCase):
         self.ctx.mount_check._set_mount(False)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         with self.assertRaises(InstallError):
@@ -3190,7 +2074,7 @@ class TestPiHomeMountCheck(unittest.TestCase):
         self.ctx.mount_check._set_mount(False)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         try:
@@ -3199,14 +2083,14 @@ class TestPiHomeMountCheck(unittest.TestCase):
             )
         except InstallError:
             pass
-        self.assertEqual(0, self.ctx.download.call_count)  # type: ignore[attr-defined]
+        self.assertEqual(0, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
         self.assertEqual(0, self.ctx.installer.call_count)  # type: ignore[attr-defined]
 
     def test_is_mount_allows_proceeding(self) -> None:
         self.ctx.mount_check._set_mount(True)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -3229,7 +2113,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_does_not_install(self) -> None:
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         result = install_extensions(
@@ -3241,19 +2125,19 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_does_not_download(self) -> None:
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         install_extensions(
             self.ctx, entries=entries, pi_home="/mnt/pi", dry_run=True,
         )
-        self.assertEqual(0, self.ctx.download.call_count)  # type: ignore[attr-defined]
+        self.assertEqual(0, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
 
     def test_dry_run_still_checks_mount(self) -> None:
         self.ctx.mount_check._set_mount(False)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         with self.assertRaises(InstallError):
@@ -3279,7 +2163,7 @@ class TestPiHomeSafety(unittest.TestCase):
         self.ctx.mount_check._set_exists(False)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         with self.assertRaises(InstallError):
@@ -3291,7 +2175,7 @@ class TestPiHomeSafety(unittest.TestCase):
         self.ctx.mount_check._set_mount(False)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         with self.assertRaises(InstallError):
@@ -3303,7 +2187,7 @@ class TestPiHomeSafety(unittest.TestCase):
         self.ctx.mount_check._set_is_symlink(True)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         with self.assertRaises(InstallError):
@@ -3315,7 +2199,7 @@ class TestPiHomeSafety(unittest.TestCase):
         with self.assertRaises(MetadataValidationError):
             ProjectionEntry(
                 package="p", version="1.0.0",
-                artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+                artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
                 metadata_file="../../etc/passwd",
             )
 
@@ -3323,7 +2207,7 @@ class TestPiHomeSafety(unittest.TestCase):
         self.ctx.mount_check._set_writable(False)  # type: ignore[attr-defined]
         entries = [ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )]
         with self.assertRaises(InstallError):
@@ -3346,7 +2230,7 @@ class TestOwnershipExpectations(unittest.TestCase):
         self.ctx = _make_fake_context()
         self.p = ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )
 
@@ -3367,7 +2251,7 @@ class TestOwnershipExpectations(unittest.TestCase):
             install_extensions(
                 self.ctx, entries=[self.p], pi_home="/mnt/pi",
             )
-        self.assertEqual(0, self.ctx.download.call_count)   # type: ignore[attr-defined]
+        self.assertEqual(0, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
         self.assertEqual(0, self.ctx.installer.call_count)  # type: ignore[attr-defined]
 
     # ── validate_owner boundary ─────────────────────────────────────
@@ -3421,7 +2305,7 @@ class TestDryRunContract(unittest.TestCase):
         self.ctx = _make_fake_context()
         self.p = ProjectionEntry(
             package="p", version="1.0.0",
-            artifact_url=_pkg_url("p", "1.0.0"), artifact_integrity=_VALID_SHA256,
+            artifact_id=_VALID_ARTIFACT_ID, artifact_integrity=_VALID_SHA256,
             metadata_file="package.json",
         )
 
@@ -3451,7 +2335,7 @@ class TestDryRunContract(unittest.TestCase):
         install_extensions(
             self.ctx, entries=[self.p], pi_home="/mnt/pi", dry_run=True,
         )
-        self.assertEqual(0, self.ctx.download.call_count)  # type: ignore[attr-defined]
+        self.assertEqual(0, self.ctx.blob_reader.call_count)  # type: ignore[attr-defined]
 
     def test_dry_run_no_package_execution(self) -> None:
         install_extensions(
@@ -3585,12 +2469,10 @@ class TestSourceContract(unittest.TestCase):
             set(), intersection,
             f"runtime_installer must not import {sorted(intersection)}",
         )
-        # The shared npm_tarball and semver modules are the only
-        # allowed versioning imports — they are focused,
-        # dependency-free validators used by both model and
-        # installer.
-        for mod in ("docker.versioning.npm_tarball",
-                     "docker.versioning.semver"):
+        # The shared semver module is the only allowed versioning
+        # import — it is a focused, dependency-free validator
+        # used by both model and installer.
+        for mod in ("docker.versioning.semver",):
             self.assertIn(
                 mod, imports,
                 f"runtime_installer must import the shared {mod} validator",
@@ -3749,7 +2631,7 @@ class _FakeMountChecker(_CallRecorder, MountChecker):
         self._writable = value
 
 
-class _FakeArtifactDownloader(_CallRecorder, ArtifactDownloader):
+class _FakeArtifactDownloader(_CallRecorder):
     """Returns a local path — never verifies or returns bytes."""
 
     def __init__(self, fs: "_FakeArtifactFilesystem | None" = None) -> None:
@@ -3781,7 +2663,7 @@ class _FakeArtifactDownloader(_CallRecorder, ArtifactDownloader):
         self._fail_after = n
 
 
-class _FakeArtifactFilesystem(_CallRecorder, ArtifactFilesystem):
+class _FakeArtifactFilesystem(_CallRecorder):
     """Holds bytes in memory keyed by path; tracks removals;
     provides fake stat/realpath/absolute operations."""
 
@@ -3855,7 +2737,7 @@ class _FakeArtifactFilesystem(_CallRecorder, ArtifactFilesystem):
         self._default_bytes = value
 
 
-class _FakeTempWorkspace(_CallRecorder, TempWorkspace):
+class _FakeTempWorkspace(_CallRecorder):
     """Creates unique workspace paths and tracks cleanups."""
 
     def __init__(self) -> None:
@@ -4008,6 +2890,7 @@ class _FakeInstallContext(InstallContext):
         installer: _FakePackageInstaller,
         metadata: _FakeMetadataReader,
         privilege: _FakePrivilegeContext,
+        blob_reader: _FakeMountedBlobReader | None = None,
     ) -> None:
         object.__setattr__(self, "mount_check", mount_check)
         object.__setattr__(self, "workspace", workspace)
@@ -4016,6 +2899,10 @@ class _FakeInstallContext(InstallContext):
         object.__setattr__(self, "installer", installer)
         object.__setattr__(self, "metadata", metadata)
         object.__setattr__(self, "privilege", privilege)
+        object.__setattr__(
+            self, "blob_reader",
+            blob_reader or _FakeMountedBlobReader(),
+        )
         self._call_log: list[str] = []
 
 
@@ -4056,118 +2943,6 @@ def _tmp_toml(content: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 # 10.3 — Interruption coverage: KeyboardInterrupt / SystemExit
 # ═══════════════════════════════════════════════════════════════════════
-
-
-class TestWorkspaceCleanupOnInterruption(unittest.TestCase):
-    """Workspace cleanup must execute on all exit paths, including
-    :class:`KeyboardInterrupt` and :class:`SystemExit`."""
-
-    def setUp(self) -> None:
-        self.ctx = _make_fake_context()
-
-    # ── helpers ──────────────────────────────────────────────────
-
-    def _entries(self, *, package: str = "p", version: str = "1.0.0") -> list[ProjectionEntry]:
-        return [ProjectionEntry(
-            package=package, version=version,
-            artifact_url=_pkg_url(package, version),
-            artifact_integrity=_VALID_SHA256,
-            metadata_file="package.json",
-        )]
-
-    # ── KeyboardInterrupt ────────────────────────────────────────
-
-    def test_keyboard_interrupt_cleans_workspace(self) -> None:
-        """KeyboardInterrupt during download → workspace cleanup invoked."""
-        self.ctx.download._fail_with(KeyboardInterrupt())  # type: ignore[attr-defined]
-        entries = self._entries()
-        with self.assertRaises(KeyboardInterrupt):
-            install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertIn(
-            "workspace.cleanup",
-            self.ctx.workspace._call_log,  # type: ignore[attr-defined]
-            "workspace must be cleaned up on KeyboardInterrupt",
-        )
-
-    def test_keyboard_interrupt_during_download_cleans_artifact(self) -> None:
-        """KeyboardInterrupt during install → artifact file removed.
-
-        The download succeeds (artifact file is created), but a
-        :class:`KeyboardInterrupt` fires during installation
-        — the per-entry ``try/finally`` must still remove the
-        downloaded artifact."""
-        self.ctx.installer._fail_with(KeyboardInterrupt())  # type: ignore[attr-defined]
-        entries = self._entries()
-        with self.assertRaises(KeyboardInterrupt):
-            install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertIn(
-            "file.remove",
-            self.ctx.file._call_log,  # type: ignore[attr-defined]
-            "downloaded artifact must be removed on KeyboardInterrupt",
-        )
-
-    def test_keyboard_interrupt_still_cleans_workspace_for_already_installed(self) -> None:
-        """KeyboardInterrupt after first entry ALREADY_INSTALLED → workspace cleaned."""
-        self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
-            package="skip-me", version="1.0.0",
-        )
-        # Second entry triggers KeyboardInterrupt on download
-        self.ctx.download._fail_with(KeyboardInterrupt())  # type: ignore[attr-defined]
-        entries = [
-            ProjectionEntry(
-                package="skip-me", version="1.0.0",
-                artifact_url=_pkg_url("skip-me", "1.0.0"),
-                artifact_integrity=_VALID_SHA256,
-                metadata_file="package.json",
-            ),
-            ProjectionEntry(
-                package="will-interrupt", version="1.0.0",
-                artifact_url=_pkg_url("will-interrupt", "1.0.0"),
-                artifact_integrity=_VALID_SHA256,
-                metadata_file="package.json",
-            ),
-        ]
-        with self.assertRaises(KeyboardInterrupt):
-            install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertIn(
-            "workspace.cleanup",
-            self.ctx.workspace._call_log,  # type: ignore[attr-defined]
-        )
-
-    # ── SystemExit ───────────────────────────────────────────────
-
-    def test_system_exit_cleans_workspace(self) -> None:
-        """SystemExit during download → workspace cleanup invoked."""
-        self.ctx.download._fail_with(SystemExit(42))  # type: ignore[attr-defined]
-        entries = self._entries()
-        with self.assertRaises(SystemExit) as ctx:
-            install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertEqual(ctx.exception.code, 42)
-        self.assertIn(
-            "workspace.cleanup",
-            self.ctx.workspace._call_log,  # type: ignore[attr-defined]
-            "workspace must be cleaned up on SystemExit",
-        )
-
-    def test_system_exit_cleans_artifact(self) -> None:
-        """SystemExit during install → artifact file removed.
-
-        Download succeeds, SystemExit fires during installation
-        — per-entry ``try/finally`` must still remove the artifact."""
-        self.ctx.installer._fail_with(SystemExit(1))  # type: ignore[attr-defined]
-        entries = self._entries()
-        with self.assertRaises(SystemExit):
-            install_extensions(self.ctx, entries=entries, pi_home="/mnt/pi")
-        self.assertIn(
-            "file.remove",
-            self.ctx.file._call_log,  # type: ignore[attr-defined]
-            "downloaded artifact must be removed on SystemExit",
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Real-installer boundary — partial-write resilience
-# ═══════════════════════════════════════════════════════════════════
 
 
 class TestRealPackageInstallerPartialWrite(unittest.TestCase):
@@ -4317,6 +3092,58 @@ class TestRealPackageInstallerPartialWrite(unittest.TestCase):
         )
 
 
+class TestRealPackageInstallerMemfdSealing(unittest.TestCase):
+    """The real installer creates a sealed memfd and passes it to
+    ``pi install`` via ``/proc/self/fd/<N>``.  Before
+    ``subprocess.run`` is invoked, the descriptor must already be
+    sealed with all four seals (write, grow, shrink, seal) — the
+    ``pi`` child inherits an immutable byte source, not a writable
+    descriptor."""
+
+    def setUp(self) -> None:
+        self._installer = InstallContext.real_installer()
+
+    def test_memfd_is_sealed_before_pi_install(self) -> None:
+        """Intercept subprocess.run and verify via fcntl(F_GET_SEALS)
+        that the memfd carries all four seals before ``pi install``
+        is spawned."""
+        import fcntl
+        import subprocess
+
+        artifact = b"sealed-test-bytes" * 1024  # ~17 KiB
+        sealing_observed: dict[str, bool] = {"sealed": False}
+        real_run = subprocess.run
+
+        # F_GET_SEALS = 1034 (0x040A) — not in Python's fcntl
+        _F_GET_SEALS: int = 1034
+        _ALL_SEALS_MASK: int = 0x000F  # SEAL|SHRINK|GROW|WRITE
+
+        def _capture_and_verify(cmd, pass_fds=(), **_kw):
+            fd_path: str = cmd[2]
+            fd_num: int = int(fd_path.rsplit("/", 1)[-1])
+            try:
+                seals: int = fcntl.fcntl(fd_num, _F_GET_SEALS)
+            except OSError:
+                seals = 0
+            if seals & _ALL_SEALS_MASK == _ALL_SEALS_MASK:
+                sealing_observed["sealed"] = True
+            # Use ["true"] so we don't actually invoke pi install.
+            return real_run(
+                ["true"], capture_output=True, text=True,
+            )
+
+        with mock.patch(
+            "subprocess.run", side_effect=_capture_and_verify,
+        ):
+            self._installer.install("test-pkg", artifact)
+
+        self.assertTrue(
+            sealing_observed["sealed"],
+            "memfd must be sealed (write/grow/shrink/seal) "
+            "before pi install is invoked",
+        )
+
+
 class TestArchitectureHostURLBoundary(unittest.TestCase):
     """RED — runtime URLs must be host-only; the container projection and
     installer must not expose or depend on downloadable URLs or download-
@@ -4427,11 +3254,13 @@ class _FakeMountedBlobReader(_CallRecorder, MountedBlobReader):
         self._fail_with: InstallError | None = None
         self._calls: list[dict[str, object]] = []
         self._validate_id: bool = True
+        self.call_count = 0
 
     def open_verified(
         self, *, artifact_id: str, integrity: str,
     ) -> bytes:
         self._call_log.append("blob_reader.open_verified")
+        self.call_count += 1
 
         # ── identity agreement ───────────────────────────────
         if self._validate_id:
@@ -4600,7 +3429,7 @@ class TestMountedBlobValidation(_MountedInstallTestBase, unittest.TestCase):
         }])
         self.assertEqual(1, len(result.results))
         self.assertEqual(
-            InstallStatus.INSTALLED,
+            InstallStatus.OK,
             result.results[0].status,
             "valid blob must result in INSTALLED",
         )
@@ -4898,7 +3727,7 @@ class TestMountedArtifactIdentityAgreement(
             "integrity": integ,
         }])
         self.assertEqual(
-            InstallStatus.INSTALLED, result.results[0].status,
+            InstallStatus.OK, result.results[0].status,
         )
         self.assertIn(
             "install", self.ctx._call_log,
