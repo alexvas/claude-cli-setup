@@ -58,8 +58,8 @@
 
 ## 9. Validate and Document
 
-- [ ] 9.1 Update maintained README/runtime documentation to describe host materialization, first-launch network behavior, cache-hit offline launches, individual read-only mounts, and cache-miss failures without adding a public `prefetch` command.
-- [ ] 9.2 Run cache, projection, rendering, run-orchestration, installer, entrypoint, ownership, concurrency, cancellation, and failure-recovery tests with fake filesystem/network/lock/package/Docker boundaries.
-- [ ] 9.3 Run the full constructor and compatibility suites, Python compile/static checks, shell checks, and `git diff --check` without Docker or network.
+- [x] 9.1 Update maintained README/runtime documentation to describe host materialization, first-launch network behavior, cache-hit offline launches, individual read-only mounts, and cache-miss failures without adding a public `prefetch` command.
+- [x] 9.2 Run cache, projection, rendering, run-orchestration, installer, entrypoint, ownership, concurrency, cancellation, and failure-recovery tests with fake filesystem/network/lock/package/Docker boundaries.
+- [x] 9.3 Run the full constructor and compatibility suites, Python compile/static checks, shell checks, and `git diff --check` without Docker or network.
 - [ ] 9.4 Collect real-Docker acceptance evidence when available for first materialization, repeated cache-hit launch, runtime override selection, read-only individual mounts, no container artifact download, corrupt-cache recovery, and resulting package metadata/ownership.
 - [ ] 9.5 Inspect and redact acceptance evidence, run `openspec validate materialize-runtime-artifacts-on-host --strict`, and reconcile all active change artifacts before marking the change complete.

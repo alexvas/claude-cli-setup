@@ -50,6 +50,12 @@ Direct launch with explicit projects:
 ./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
 ```
 
+### Runtime extension artifacts
+
+Before `run` starts Docker, the host selects the reviewed runtime extensions and materializes each selected tarball in its private content-addressed cache. A first launch for an uncached selection may use the network to fetch only its reviewed artifacts. Later launches reuse verified cache hits and need no extension-artifact network access, so they can start offline.
+
+The container receives neither artifact URLs nor the cache directory. It receives only the narrow runtime projection and one read-only file mount per selected verified artifact beneath `/run/pi-cli/runtime-artifacts`; unselected cache content is never mounted. If a cache miss cannot be downloaded, verified, or published, `run` fails before Docker starts. There is no public prefetch command; run preparation owns cache materialization.
+
 ## 3. Update environment components
 
 ### Update Pi after a release

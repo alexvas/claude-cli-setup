@@ -50,6 +50,12 @@
 ./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
 ```
 
+### 运行时扩展工件
+
+在 Docker 启动前，`run` 会在主机上选择已审核的运行时扩展，并将每个选定 tarball 写入私有的 content-addressed cache。首次启动时，如果选定工件尚未缓存，可能需要网络来获取已审核的工件。后续启动会复用已验证的 cache hit，不需要扩展工件网络访问，因此可以离线启动。
+
+容器不会获得工件 URL 或 cache 目录。它只获得窄化的运行时投影，以及每个已选、已验证工件在 `/run/pi-cli/runtime-artifacts` 下的一个只读文件挂载；未选中的 cache 内容绝不会被挂载。如果 cache miss 无法下载、验证或发布，`run` 会在 Docker 启动前失败。没有公开的 prefetch 命令；缓存物化由 `run` 准备阶段负责。
+
 ## 3. 更新环境组件
 
 ### Pi 发布后的更新流程
