@@ -51,10 +51,10 @@
 
 ## 8. Introspect Security and Scope
 
-- [ ] 8.1 Review host/cache trust boundaries for symlink swaps, cache poisoning, partial publication, same-UID mutation, lock abandonment, mount-source replacement, and exact-byte package execution.
-- [ ] 8.2 Confirm the container receives no reviewed inventory, effective build projection, downloadable URL, host cache path, update provider, override policy, unselected blob, or broad cache-directory mount.
-- [ ] 8.3 Confirm runtime artifact changes do not invalidate Docker build layers and `build` does not become responsible for launch correctness or mandatory cache warming.
-- [ ] 8.4 Run focused architecture/import checks proving facade concerns remain outside materialization, rendering, run orchestration, and installer internals.
+- [x] 8.1 Review host/cache trust boundaries for symlink swaps, cache poisoning, partial publication, same-UID mutation, lock abandonment, mount-source replacement, and exact-byte package execution.
+- [x] 8.2 Confirm the container receives no reviewed inventory, effective build projection, downloadable URL, host cache path, update provider, override policy, unselected blob, or broad cache-directory mount.
+- [x] 8.3 Confirm runtime artifact changes do not invalidate Docker build layers and `build` does not become responsible for launch correctness or mandatory cache warming.
+- [x] 8.4 Run focused architecture/import checks proving facade concerns remain outside materialization, rendering, run orchestration, and installer internals.
 
 ## 9. Validate and Document
 
