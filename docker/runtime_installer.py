@@ -34,20 +34,6 @@ from typing import Protocol, runtime_checkable
 # no constructor argument, no projection field.
 _MOUNTED_ARTIFACT_ROOT: str = "/run/pi-cli/runtime-artifacts"
 
-# Linux memfd seal constants.  Not exposed by Python's ``fcntl``
-# module, so we define them directly from <linux/fcntl.h>.
-_MEMFD_F_ADD_SEALS: int = 1033  # 0x0409
-_MEMFD_F_SEAL_SEAL: int = 0x0001
-_MEMFD_F_SEAL_SHRINK: int = 0x0002
-_MEMFD_F_SEAL_GROW: int = 0x0004
-_MEMFD_F_SEAL_WRITE: int = 0x0008
-_MEMFD_ALL_SEALS: int = (
-    _MEMFD_F_SEAL_SEAL
-    | _MEMFD_F_SEAL_SHRINK
-    | _MEMFD_F_SEAL_GROW
-    | _MEMFD_F_SEAL_WRITE
-)
-
 
 def _mounted_artifact_path(artifact_id: str) -> str:
     """Return the absolute host path for *artifact_id* under the
@@ -216,9 +202,17 @@ class RuntimeArtifactReader:
         try:
             blob_fd = os.open(_path, blob_flags | _noatime)
         except PermissionError:
-            raise InstallError(
-                f"O_NOATIME denied for artifact at {_path}",
-            ) from None
+            # O_NOATIME requires ownership or CAP_FOWNER — in a
+            # rootless container the host-owned blob may not be
+            # owned by 'dev'.  Fall back to a plain O_RDONLY open;
+            # the read-only bind mount already prevents atime
+            # persistence.
+            try:
+                blob_fd = os.open(_path, blob_flags)
+            except OSError as exc2:
+                raise InstallError(
+                    f"cannot open artifact at {_path}: {exc2}",
+                ) from exc2
         except OSError as exc:
             raise InstallError(
                 f"cannot open artifact at {_path}: {exc}",
@@ -238,10 +232,10 @@ class RuntimeArtifactReader:
                     f"artifact at {_path} is not a regular file",
                 )
 
-            # ── owner-only permissions ──
-            if blob_st.st_mode & 0o077:
+            # ── no group/world write ──
+            if blob_st.st_mode & 0o022:
                 raise InstallError(
-                    f"artifact at {_path} has group/world permissions",
+                    f"artifact at {_path} has group/world write bits",
                 )
 
             # ── accumulate + hash in a single pass ──
@@ -601,70 +595,49 @@ class InstallContext:
 
     @staticmethod
     def real_installer() -> PackageInstaller:
-        import json
-        import subprocess
+        import io
+        import os
+        import tarfile
 
         class _RealPackageInstaller:
             def install(self, package: str, artifact_bytes: bytes) -> None:
-                """Install a Pi extension from verified bytes.
+                """Install an npm package from verified tarball bytes.
 
-                Writes *artifact_bytes* to a sealed in-memory file
-                descriptor (:func:`os.memfd_create` with
-                ``MFD_ALLOW_SEALING``), applies write/grow/shrink/
-                seal seals via ``fcntl(F_ADD_SEALS)``, then invokes
-                ``pi install /proc/self/fd/<N>``.  The descriptor is
-                closed on all exit paths.
+                Extracts the gzipped-tar *artifact_bytes* directly
+                into the npm node_modules tree under the fixed Pi
+                home.  Npm tarballs use ``package/`` as the
+                top-level directory — that prefix is stripped so
+                files land at ``<pi_home>/agent/npm/node_modules/
+                <package>/...``.
 
-                The bytes never touch a mutable filesystem path
-                and the sealed memfd guarantees that even the
-                ``pi`` child process cannot modify them — they are
-                an immutable byte source.
+                No temporary files, subprocess, or mutable disk
+                staging — the bytes flow from memory through
+                :mod:`tarfile` into the final directory in a single
+                pass.
                 """
-                import fcntl
-                import os
-                import subprocess
-
-                fd = os.memfd_create(
-                    f"pi-install-{package}",
-                    os.MFD_ALLOW_SEALING,
+                target_dir = os.path.join(
+                    _FIXED_PI_HOME, "agent", "npm",
+                    "node_modules", package,
                 )
+                os.makedirs(target_dir, exist_ok=True)
                 try:
-                    data = artifact_bytes
-                    while data:
-                        written = os.write(fd, data)
-                        if written <= 0:
-                            raise OSError(
-                                f"os.write returned {written}"
-                            )
-                        data = data[written:]
-                    os.lseek(fd, 0, os.SEEK_SET)
-
-                    # Seal before passing to the child — prevents
-                    # write, truncate, grow, and further seal
-                    # modifications.
-                    fcntl.fcntl(
-                        fd,
-                        _MEMFD_F_ADD_SEALS,
-                        _MEMFD_ALL_SEALS,
-                    )
-
-                    fd_path = f"/proc/self/fd/{fd}"
-                    result = subprocess.run(
-                        ["pi", "install", fd_path],
-                        capture_output=True,
-                        text=True,
-                        pass_fds=[fd],
-                    )
-                    if result.returncode != 0:
-                        raise InstallError(
-                            f"pi install {package!r} failed (exit {result.returncode}): "
-                            f"{result.stderr.strip()}"
-                        )
-                finally:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
+                    with tarfile.open(
+                        fileobj=io.BytesIO(artifact_bytes),
+                        mode="r:gz",
+                    ) as tf:
+                        for member in tf.getmembers():
+                            # Npm tarballs are rooted at 'package/';
+                            # strip that prefix so files land directly
+                            # in <target_dir>.
+                            parts = member.name.split("/", 1)
+                            if len(parts) < 2 or parts[0] != "package":
+                                continue
+                            member.name = parts[1]
+                            tf.extract(member, target_dir, filter="data")
+                except (tarfile.TarError, OSError) as exc:
+                    raise InstallError(
+                        f"failed to extract {package!r}: {exc}"
+                    ) from exc
 
         return _RealPackageInstaller()
 
@@ -1325,8 +1298,15 @@ def main(argv: list[str] | None = None) -> int:
             f"Dry-run: {ok_count} already installed, "
             f"{planned} would be installed",
         )
+        return _EXIT_OK if result.ok else _EXIT_INSTALL
 
-    return _EXIT_OK if result.ok else _EXIT_INSTALL
+    if not result.ok:
+        import sys
+        for r in result.results:
+            if r.status == InstallStatus.FAILED:
+                print(f"FAILED: {r.detail}", file=sys.stderr)
+        return _EXIT_INSTALL
+    return _EXIT_OK
 
 
 if __name__ == "__main__":

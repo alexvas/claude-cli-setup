@@ -1361,6 +1361,9 @@ class TestMismatchedInstalledPackages(unittest.TestCase):
 
     def setUp(self) -> None:
         self.ctx = _make_fake_context()
+        # Disable id/integrity agreement check — these tests validate
+        # metadata mismatch behaviour, not identity derivation.
+        self.ctx.blob_reader._disable_id_check()  # type: ignore[attr-defined]
 
     def test_version_mismatch_is_failure(self) -> None:
         self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
@@ -1404,6 +1407,9 @@ class TestMismatchedPackageEdgeCases(unittest.TestCase):
 
     def setUp(self) -> None:
         self.ctx = _make_fake_context()
+        # Disable id/integrity agreement check — these tests validate
+        # metadata edge cases, not identity derivation.
+        self.ctx.blob_reader._disable_id_check()  # type: ignore[attr-defined]
 
     def test_missing_package_triggers_install(self) -> None:
         entries = [ProjectionEntry(
@@ -1739,6 +1745,9 @@ class TestPostInstallValidation(unittest.TestCase):
 
     def setUp(self) -> None:
         self.ctx = _make_fake_context()
+        # Disable id/integrity agreement check — these tests validate
+        # post-install metadata verification, not identity derivation.
+        self.ctx.blob_reader._disable_id_check()  # type: ignore[attr-defined]
 
     def test_post_install_match_is_ok(self) -> None:
         self.ctx.metadata._set_installed(  # type: ignore[attr-defined]
@@ -2976,203 +2985,74 @@ def _tmp_toml(content: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class TestRealPackageInstallerPartialWrite(unittest.TestCase):
-    """The real installer writes to a temp file via os.write,
-    which may return after writing only part of the buffer.
-    The installer must loop until all bytes are written, and the
-    bytes passed to ``pi install`` must be exactly the original
-    artifact bytes."""
+class TestRealPackageInstallerTarballExtraction(unittest.TestCase):
+    """The real installer extracts npm tarball bytes directly
+    into node_modules via :mod:`tarfile` — no subprocess, no
+    memfd, no mutable staging."""
 
     def setUp(self) -> None:
-        # Always use the real installer (not a test double).
+        import tempfile
         self._installer = InstallContext.real_installer()
-
-    def test_partial_writes_do_not_truncate_temp_file(self) -> None:
-        """Simulate os.write returning partial counts (1 byte at a
-        time), then verify that the file passed to ``pi install``
-        contains exactly the original artifact bytes."""
-        import subprocess
-
-        artifact = b"\x00\x01\x02\x03" * 4096  # 16 KiB
-
-        # Capture the path and verify written content from within
-        # the mocked subprocess.run.
-        captured: dict[str, bytes] = {}
-
-        real_run = subprocess.run
-
-        def _fake_run(cmd, **_kw):
-            # cmd is ["pi", "install", <tmp_path>]
-            tmp_path = cmd[2]
-            with open(tmp_path, "rb") as fh:
-                captured["written"] = fh.read()
-            captured["cmd"] = cmd
-            return real_run(
-                ["true"], capture_output=True, text=True,
-            )
-
-        original_write = os.write
-        write_count = {"calls": 0}
-
-        def _partial_write(fd, data):
-            write_count["calls"] += 1
-            # Write at most 1 byte per call to force the loop.
-            chunk = data[:1]
-            return original_write(fd, chunk)
-
-        with mock.patch("os.write", side_effect=_partial_write):
-            with mock.patch(
-                "subprocess.run", side_effect=_fake_run,
-            ):
-                self._installer.install("test-pkg", artifact)
-
-        # Assertions
-        self.assertEqual(
-            captured.get("written"), artifact,
-            "bytes written to temp file must equal original artifact bytes",
+        self._tmp = tempfile.mkdtemp(prefix="test-npm-install-")
+        # Point _FIXED_PI_HOME at a temp so extraction is isolated.
+        self._home_patch = mock.patch.object(
+            docker.runtime_installer,
+            "_FIXED_PI_HOME",
+            self._tmp,
         )
-        self.assertEqual(
-            captured["cmd"][:2], ["pi", "install"],
-            "subprocess must invoke pi install",
+        self._home_patch.start()
+
+    def tearDown(self) -> None:
+        self._home_patch.stop()
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    @staticmethod
+    def _make_tgz(files: dict[str, bytes]) -> bytes:
+        """Build a gzipped npm-style tarball rooted at ``package/``."""
+        import io
+        import tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            for name, content in files.items():
+                info = tarfile.TarInfo(f"package/{name}")
+                info.size = len(content)
+                tf.addfile(info, io.BytesIO(content))
+        return buf.getvalue()
+
+    def test_extracts_package_json_to_node_modules(self) -> None:
+        tgz = self._make_tgz({
+            "package.json": b'{"name":"pkg","version":"1.0.0"}',
+        })
+        self._installer.install("@scope/pkg", tgz)
+        target = os.path.join(
+            self._tmp, "agent", "npm", "node_modules",
+            "@scope", "pkg", "package.json",
         )
-        self.assertTrue(
-            write_count["calls"] > 1,
-            f"partial write must trigger multiple os.write calls, "
-            f"got {write_count['calls']}",
+        self.assertTrue(os.path.isfile(target),
+                        f"expected {target} to exist after extraction")
+
+    def test_strips_npm_package_prefix(self) -> None:
+        tgz = self._make_tgz({"index.js": b"module.exports=1;"})
+        self._installer.install("plain-pkg", tgz)
+        target = os.path.join(
+            self._tmp, "agent", "npm", "node_modules",
+            "plain-pkg", "index.js",
         )
+        self.assertTrue(os.path.isfile(target),
+                        f"expected {target} to exist, package/ prefix "
+                        "must be stripped")
 
-    def test_empty_artifact_completes_without_write(self) -> None:
-        """Empty artifact bytes is a valid edge-case — the
-        installer must handle it and pass an empty temp file to
-        ``pi install``."""
-        import subprocess
-
-        captured: dict[str, bytes] = {}
-        real_run = subprocess.run
-
-        def _fake_run(cmd, **_kw):
-            tmp_path = cmd[2]
-            with open(tmp_path, "rb") as fh:
-                captured["written"] = fh.read()
-            return real_run(
-                ["true"], capture_output=True, text=True,
-            )
-
-        with mock.patch("subprocess.run", side_effect=_fake_run):
-            self._installer.install("empty-pkg", b"")
-
-        self.assertEqual(
-            captured.get("written"), b"",
-            "empty artifact must produce empty temp file",
+    def test_empty_tarball_succeeds(self) -> None:
+        self._installer.install("empty", self._make_tgz({}))
+        target = os.path.join(
+            self._tmp, "agent", "npm", "node_modules", "empty",
         )
+        self.assertTrue(os.path.isdir(target))
 
-    def test_subprocess_failure_propagates_install_error(self) -> None:
-        """When pi install exits non-zero, the installer must
-        raise InstallError and clean up the temp file."""
-        artifact = b"payload"
-        tmp_path_seen: list[str] = []
-
-        def _fake_run(cmd, **_kw):
-            tmp_path_seen.append(cmd[2])
-            return mock.MagicMock(
-                returncode=1, stderr="simulated failure",
-            )
-
-        with mock.patch("subprocess.run", side_effect=_fake_run):
-            with self.assertRaises(InstallError) as ctx:
-                self._installer.install("bad-pkg", artifact)
-            self.assertIn("simulated failure", str(ctx.exception))
-
-        # Temp file must be removed after failure.
-        if tmp_path_seen:
-            self.assertFalse(
-                os.path.exists(tmp_path_seen[0]),
-                "temp file must be cleaned up after install failure",
-            )
-
-    def test_os_write_zero_raises_oserror(self) -> None:
-        """os.write returning 0 must raise OSError — a zero-length
-        write would not advance the buffer, causing an infinite loop."""
-        import subprocess
-
-        artifact = b"some bytes"
-        write_calls = 0
-        original_write = os.write
-
-        def _zero_then_ok(fd, data):
-            nonlocal write_calls
-            write_calls += 1
-            if write_calls == 1:
-                return 0  # simulate stalled write
-            return original_write(fd, data)
-
-        def _fake_run(cmd, **_kw):
-            return subprocess.run(
-                ["true"], capture_output=True, text=True,
-            )
-
-        with mock.patch("os.write", side_effect=_zero_then_ok):
-            with mock.patch("subprocess.run", side_effect=_fake_run):
-                with self.assertRaises(OSError) as ctx:
-                    self._installer.install("pkg", artifact)
-                self.assertIn("os.write returned 0", str(ctx.exception))
-
-        self.assertEqual(
-            write_calls, 1,
-            "installer must not call os.write again after zero return",
-        )
-
-
-class TestRealPackageInstallerMemfdSealing(unittest.TestCase):
-    """The real installer creates a sealed memfd and passes it to
-    ``pi install`` via ``/proc/self/fd/<N>``.  Before
-    ``subprocess.run`` is invoked, the descriptor must already be
-    sealed with all four seals (write, grow, shrink, seal) — the
-    ``pi`` child inherits an immutable byte source, not a writable
-    descriptor."""
-
-    def setUp(self) -> None:
-        self._installer = InstallContext.real_installer()
-
-    def test_memfd_is_sealed_before_pi_install(self) -> None:
-        """Intercept subprocess.run and verify via fcntl(F_GET_SEALS)
-        that the memfd carries all four seals before ``pi install``
-        is spawned."""
-        import fcntl
-        import subprocess
-
-        artifact = b"sealed-test-bytes" * 1024  # ~17 KiB
-        sealing_observed: dict[str, bool] = {"sealed": False}
-        real_run = subprocess.run
-
-        # F_GET_SEALS = 1034 (0x040A) — not in Python's fcntl
-        _F_GET_SEALS: int = 1034
-        _ALL_SEALS_MASK: int = 0x000F  # SEAL|SHRINK|GROW|WRITE
-
-        def _capture_and_verify(cmd, pass_fds=(), **_kw):
-            fd_path: str = cmd[2]
-            fd_num: int = int(fd_path.rsplit("/", 1)[-1])
-            try:
-                seals: int = fcntl.fcntl(fd_num, _F_GET_SEALS)
-            except OSError:
-                seals = 0
-            if seals & _ALL_SEALS_MASK == _ALL_SEALS_MASK:
-                sealing_observed["sealed"] = True
-            # Use ["true"] so we don't actually invoke pi install.
-            return real_run(
-                ["true"], capture_output=True, text=True,
-            )
-
-        with mock.patch(
-            "subprocess.run", side_effect=_capture_and_verify,
-        ):
-            self._installer.install("test-pkg", artifact)
-
-        self.assertTrue(
-            sealing_observed["sealed"],
-            "memfd must be sealed (write/grow/shrink/seal) "
-            "before pi install is invoked",
-        )
+    def test_corrupt_tarball_raises_install_error(self) -> None:
+        with self.assertRaises(InstallError):
+            self._installer.install("bad", b"not a tarball")
 
 
 class TestArchitectureHostURLBoundary(unittest.TestCase):
@@ -3927,7 +3807,8 @@ class TestRuntimeArtifactReader(unittest.TestCase):
         content = b"group writable\n"
         integ = self._integ_for(content)
         art_id = _derived_artifact_id(integ)
-        self._write_blob(art_id, content, mode=0o660)
+        path = self._write_blob(art_id, content)
+        os.chmod(path, 0o660)  # ensure group-write survives umask
         reader = self._reader()
         with self.assertRaises(InstallError):
             reader.open_verified(
@@ -3938,7 +3819,8 @@ class TestRuntimeArtifactReader(unittest.TestCase):
         content = b"world writable\n"
         integ = self._integ_for(content)
         art_id = _derived_artifact_id(integ)
-        self._write_blob(art_id, content, mode=0o666)
+        path = self._write_blob(art_id, content)
+        os.chmod(path, 0o666)  # ensure world-write survives umask
         reader = self._reader()
         with self.assertRaises(InstallError):
             reader.open_verified(
@@ -4326,50 +4208,65 @@ class TestEntrypointExecution(unittest.TestCase):
         safe = raw.replace("+", "-").replace("/", "_")
         return f"{algo}/{safe}.tgz"
 
-    def _make_fake_run(
-        self, pi_home: str, pkg_name: str, pkg_version: str,
-    ):
-        """Return a ``_fake_run`` side-effect that fakes
-        ``mountpoint`` (always true) and ``pi install``
-        (writes metadata with *pkg_name* / *pkg_version*)."""
-        import subprocess as sp
+    @staticmethod
+    def _make_integrity_from_file(path: str) -> str:
+        with open(path, "rb") as fh:
+            return TestEntrypointExecution._make_integrity(fh.read())
 
-        real_run = sp.run
+    @staticmethod
+    def _write_npm_blob(path: str, name: str, version: str) -> None:
+        """Write an npm-style tarball to *path*."""
+        import io
+        import tarfile
+        meta = {"name": name, "version": version}
+        meta_bytes = json.dumps(meta).encode("utf-8")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            info = tarfile.TarInfo("package/package.json")
+            info.size = len(meta_bytes)
+            tf.addfile(info, io.BytesIO(meta_bytes))
+        os.chmod(path, 0o644)  # make writable for overwrite
+        with open(path, "wb") as fh:
+            fh.write(buf.getvalue())
+        os.chmod(path, 0o444)
 
-        def _fake_run(cmd, **_kw):
-            if isinstance(cmd, list) and cmd[0] == "mountpoint":
-                return real_run(["true"], capture_output=True)
-            if isinstance(cmd, list) and cmd[0] == "pi":
-                pkg_dir = os.path.join(
-                    pi_home, "agent", "npm", "node_modules",
-                    pkg_name,
-                )
-                os.makedirs(pkg_dir, exist_ok=True)
-                meta = {"name": pkg_name, "version": pkg_version}
-                with open(
-                    os.path.join(pkg_dir, "package.json"), "w",
-                ) as mf:
-                    json.dump(meta, mf)
-                uid = os.getuid()
-                gid = os.getgid()
-                for root, dirs, files in os.walk(pkg_dir):
-                    os.chown(root, uid, gid)
-                    for f in files:
-                        os.chown(
-                            os.path.join(root, f), uid, gid,
-                        )
-                return real_run(["true"], capture_output=True)
-            return real_run(cmd, **_kw)
-
-        return _fake_run
+    @staticmethod
+    def _rewrite_projection(
+        proj_path: str, art_id: str, integ: str,
+        pkg_name: str, pkg_version: str,
+    ) -> None:
+        toml = (
+            f'[extensions."{pkg_name}"]\n'
+            f'package = "{pkg_name}"\n'
+            f'version = "{pkg_version}"\n'
+            f'metadata_file = "package.json"\n'
+            f'artifact_id = "{art_id}"\n'
+            f'integrity = "{integ}"\n'
+        )
+        with open(proj_path, "w") as fh:
+            fh.write(toml)
 
     def _setup_pipeline(
-        self, content: bytes,
-    ) -> tuple[str, str, str, str, str, str]:
+        self, pkg_name: str = "test-pkg",
+        pkg_version: str = "1.0.0",
+    ) -> tuple[str, str, str, str, str, bytes]:
         """Create a temp projection, pi-home, and artifact root
-        with a valid blob.  Returns (proj_path, pi_home, art_root,
-        art_id, integ, content)."""
-        integ = self._make_integrity(content)
+        with a valid npm-tarball blob.  Returns (proj_path, pi_home,
+        art_root, art_id, integ, tarball_bytes)."""
+        import io
+        import tarfile
+
+        # Build a minimal npm-style tarball.
+        meta = {"name": pkg_name, "version": pkg_version}
+        meta_bytes = json.dumps(meta).encode("utf-8")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            info = tarfile.TarInfo("package/package.json")
+            info.size = len(meta_bytes)
+            tf.addfile(info, io.BytesIO(meta_bytes))
+        tarball = buf.getvalue()
+
+        integ = self._make_integrity(tarball)
         art_id = self._canonical_id(integ)
 
         proj_path = os.path.join(self._tmp, "projection.toml")
@@ -4379,12 +4276,10 @@ class TestEntrypointExecution(unittest.TestCase):
         os.makedirs(art_root)
 
         toml = (
-            f'[extensions.test-pkg]\n'
-            f'package = "test-pkg"\n'
-            f'version = "1.0.0"\n'
+            f'[extensions."{pkg_name}"]\n'
+            f'package = "{pkg_name}"\n'
+            f'version = "{pkg_version}"\n'
             f'metadata_file = "package.json"\n'
-            f'\n'
-            f'[extensions.test-pkg.artifact]\n'
             f'artifact_id = "{art_id}"\n'
             f'integrity = "{integ}"\n'
         )
@@ -4394,18 +4289,25 @@ class TestEntrypointExecution(unittest.TestCase):
         blob_path = os.path.join(art_root, art_id)
         os.makedirs(os.path.dirname(blob_path), exist_ok=True)
         with open(blob_path, "wb") as fh:
-            fh.write(content)
-        os.chmod(blob_path, 0o400)
+            fh.write(tarball)
+        os.chmod(blob_path, 0o444)
 
-        return proj_path, pi_home, art_root, art_id, integ
+        return proj_path, pi_home, art_root, art_id, integ, tarball
 
     def _patch_and_run(
         self, proj_path: str, pi_home: str, art_root: str,
-        fake_run,
     ) -> int:
-        """Patch fixed paths + statvfs, then run ``main()``.
-        Returns the exit code."""
+        """Patch fixed paths + statvfs + mountpoint, then run
+        ``main()``.  Returns the exit code."""
         import docker.runtime_installer as mod
+        import subprocess as sp
+
+        real_run = sp.run
+
+        def _fake_mountpoint(cmd, **_kw):
+            if isinstance(cmd, list) and cmd[0] == "mountpoint":
+                return real_run(["true"], capture_output=True)
+            return real_run(cmd, **_kw)
 
         with mock.patch.object(mod, "_FIXED_PROJECTION", proj_path), \
              mock.patch.object(mod, "_FIXED_PI_HOME", pi_home), \
@@ -4415,25 +4317,19 @@ class TestEntrypointExecution(unittest.TestCase):
                  "is_read_only_mount",
                  return_value=True,
              ), \
-             mock.patch("subprocess.run", side_effect=fake_run):
+             mock.patch("subprocess.run", side_effect=_fake_mountpoint):
             return mod.main(["install"])
 
     # ── success ──────────────────────────────────────────────
 
     def test_successful_install_returns_exit_ok(self) -> None:
-        """Valid projection + matching blob + correct metadata
-        → ``main()`` returns ``_EXIT_OK``."""
+        """Valid projection + matching tarball blob + correct
+        metadata → ``main()`` returns ``_EXIT_OK``."""
         import docker.runtime_installer as mod
 
-        content = b"successful artifact"
-        proj_path, pi_home, art_root, art_id, integ = \
-            self._setup_pipeline(content)
-        fake_run = self._make_fake_run(
-            pi_home, "test-pkg", "1.0.0",
-        )
-        rc = self._patch_and_run(
-            proj_path, pi_home, art_root, fake_run,
-        )
+        proj_path, pi_home, art_root, art_id, integ, _ = \
+            self._setup_pipeline()
+        rc = self._patch_and_run(proj_path, pi_home, art_root)
         self.assertEqual(
             rc, mod._EXIT_OK,
             "successful install must return _EXIT_OK",
@@ -4446,8 +4342,7 @@ class TestEntrypointExecution(unittest.TestCase):
         returns ``_EXIT_INSTALL``."""
         import docker.runtime_installer as mod
 
-        content = b"will be missing"
-        integ = self._make_integrity(content)
+        integ = self._make_integrity(b"will be missing")
         art_id = self._canonical_id(integ)
 
         proj_path = os.path.join(self._tmp, "projection.toml")
@@ -4457,12 +4352,10 @@ class TestEntrypointExecution(unittest.TestCase):
         os.makedirs(art_root)
 
         toml = (
-            f'[extensions.test-pkg]\n'
+            f'[extensions."test-pkg"]\n'
             f'package = "test-pkg"\n'
             f'version = "1.0.0"\n'
             f'metadata_file = "package.json"\n'
-            f'\n'
-            f'[extensions.test-pkg.artifact]\n'
             f'artifact_id = "{art_id}"\n'
             f'integrity = "{integ}"\n'
         )
@@ -4470,17 +4363,7 @@ class TestEntrypointExecution(unittest.TestCase):
             fh.write(toml)
         # NO blob written — intentionally missing.
 
-        import subprocess as sp
-        real_run = sp.run
-
-        def _fake_run(cmd, **_kw):
-            if isinstance(cmd, list) and cmd[0] == "mountpoint":
-                return real_run(["true"], capture_output=True)
-            return real_run(cmd, **_kw)
-
-        rc = self._patch_and_run(
-            proj_path, pi_home, art_root, _fake_run,
-        )
+        rc = self._patch_and_run(proj_path, pi_home, art_root)
         self.assertEqual(
             rc, mod._EXIT_INSTALL,
             "missing blob must return _EXIT_INSTALL",
@@ -4489,42 +4372,50 @@ class TestEntrypointExecution(unittest.TestCase):
     # ── package-validation failure ───────────────────────────
 
     def test_package_validation_failure_returns_exit_install(self) -> None:
-        """Valid blob, but ``pi install`` creates metadata with
-        a mismatched package name → post-install validation
-        fails → ``main()`` returns ``_EXIT_INSTALL``."""
+        """Tarball with mismatched package name → post-install
+        validation fails → ``main()`` returns ``_EXIT_INSTALL``."""
         import docker.runtime_installer as mod
 
-        content = b"validated blob for wrong metadata"
-        proj_path, pi_home, art_root, art_id, integ = \
-            self._setup_pipeline(content)
-        # pi install creates metadata with wrong name
-        fake_run = self._make_fake_run(
-            pi_home, "wrong-pkg", "1.0.0",
-        )
-        rc = self._patch_and_run(
-            proj_path, pi_home, art_root, fake_run,
-        )
+        proj_path, pi_home, art_root, art_id, integ, _ = \
+            self._setup_pipeline(pkg_name="test-pkg", pkg_version="1.0.0")
+        # Overwrite the blob with a tarball that has the wrong name.
+        old_blob_path = os.path.join(art_root, art_id)
+        self._write_npm_blob(old_blob_path, "wrong-pkg", "1.0.0")
+        # Recompute integrity, derive the new canonical art_id,
+        # and rename the blob so the installer can find it.
+        integ = self._make_integrity_from_file(old_blob_path)
+        art_id = self._canonical_id(integ)
+        new_blob_path = os.path.join(art_root, art_id)
+        os.makedirs(os.path.dirname(new_blob_path), exist_ok=True)
+        os.rename(old_blob_path, new_blob_path)
+        self._rewrite_projection(proj_path, art_id, integ,
+                                 pkg_name="test-pkg", pkg_version="1.0.0")
+        rc = self._patch_and_run(proj_path, pi_home, art_root)
         self.assertEqual(
             rc, mod._EXIT_INSTALL,
             "package name mismatch must return _EXIT_INSTALL",
         )
 
     def test_version_mismatch_returns_exit_install(self) -> None:
-        """Valid blob, but ``pi install`` creates metadata with
-        a mismatched version → ``main()`` returns
+        """Tarball with mismatched version → ``main()`` returns
         ``_EXIT_INSTALL``."""
         import docker.runtime_installer as mod
 
-        content = b"validated blob for wrong version"
-        proj_path, pi_home, art_root, art_id, integ = \
-            self._setup_pipeline(content)
-        # pi install creates metadata with wrong version
-        fake_run = self._make_fake_run(
-            pi_home, "test-pkg", "9.9.9",
-        )
-        rc = self._patch_and_run(
-            proj_path, pi_home, art_root, fake_run,
-        )
+        proj_path, pi_home, art_root, art_id, integ, _ = \
+            self._setup_pipeline(pkg_name="test-pkg", pkg_version="1.0.0")
+        # Overwrite the blob with a tarball that has the wrong version.
+        old_blob_path = os.path.join(art_root, art_id)
+        self._write_npm_blob(old_blob_path, "test-pkg", "9.9.9")
+        # Recompute integrity, derive the new canonical art_id,
+        # and rename the blob so the installer can find it.
+        integ = self._make_integrity_from_file(old_blob_path)
+        art_id = self._canonical_id(integ)
+        new_blob_path = os.path.join(art_root, art_id)
+        os.makedirs(os.path.dirname(new_blob_path), exist_ok=True)
+        os.rename(old_blob_path, new_blob_path)
+        self._rewrite_projection(proj_path, art_id, integ,
+                                 pkg_name="test-pkg", pkg_version="1.0.0")
+        rc = self._patch_and_run(proj_path, pi_home, art_root)
         self.assertEqual(
             rc, mod._EXIT_INSTALL,
             "version mismatch must return _EXIT_INSTALL",

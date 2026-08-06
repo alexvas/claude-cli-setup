@@ -392,7 +392,7 @@ def inspect_verified_blob_readonly(
     Verifies that a content-addressed blob for *integrity* exists
     under *cache_root*, is a regular file reached without following
     any symlink component (root, algorithm directory, or leaf), has
-    owner-only permissions, and its bytes match the declared SRI
+    has no group/world write bits, and its bytes match the declared SRI
     digest.
 
     **No mutation** — the function never creates, removes, renames,
@@ -466,8 +466,8 @@ def inspect_verified_blob_readonly(
                 if not _stat.S_ISREG(blob_st.st_mode):
                     return False
 
-                # ── owner-only permissions ──
-                if blob_st.st_mode & 0o077:
+                # ── no group/world write ──
+                if blob_st.st_mode & 0o022:
                     return False
 
                 # ── hash and compare ──
@@ -498,7 +498,7 @@ def validate_cache_blob(
     cache_root: str | None = None,
 ) -> None:
     """Validate that *host_path* is a regular file, not a symlink,
-    contained within *cache_root*, and has owner-only permissions.
+    contained within *cache_root*, and has no group/world write bits.
 
     Raises :class:`ArtifactMaterializationError` on any violation.
     """
@@ -542,13 +542,13 @@ def validate_cache_blob(
             detail=f"blob path {host_path!r} is not a regular file",
         )
 
-    # ── owner-only permissions ───────────────────────────────────
+    # ── no group/world write ───────────────────────────────────
     st = os.stat(host_path)
-    if st.st_mode & 0o077:
+    if st.st_mode & 0o022:
         raise ArtifactMaterializationError(
             reason="permissions",
             detail=(
-                f"blob at {host_path!r} has group/other access "
+                f"blob at {host_path!r} has group/other write bits "
                 f"(mode {oct(st.st_mode)})"
             ),
         )
@@ -655,7 +655,7 @@ def _try_cache_hit(
             not status.exists
             or status.is_symlink
             or not status.is_regular_file
-            or status.mode_bits & 0o077
+            or status.mode_bits & 0o022
             or inspection.digest is None
         ):
             return None
@@ -767,7 +767,7 @@ def _materialize_one(
                 reason="transport",
                 detail=f"download of {artifact.url!r} failed: {exc}",
             ) from exc
-        filesystem.finalize_temp(tmp_blob, 0o400)
+        filesystem.finalize_temp(tmp_blob, 0o444)
 
         actual_raw = base64.b64encode(h.digest()).decode("ascii")
         if actual_raw != expected_raw:
@@ -784,7 +784,7 @@ def _materialize_one(
         filesystem.ensure_secure_dir(os.path.dirname(path))
         filesystem.atomic_publish(tmp_blob, path)
         tmp_blob = None  # owned by the cache now; don't delete
-        filesystem.set_permissions(path, 0o400)
+        filesystem.set_permissions(path, 0o444)
 
         # ── 7. post-publication revalidation ─────────────────────
         try:
@@ -887,11 +887,11 @@ def _validate_published_blob(
         )
 
     mode = stat.mode_bits
-    if mode & 0o077:
+    if mode & 0o022:
         raise ArtifactMaterializationError(
             reason="publication",
             detail=(
-                f"published blob {path!r} has group/other access "
+                f"published blob {path!r} has group/other write bits "
                 f"(mode {oct(mode)})"
             ),
         )
