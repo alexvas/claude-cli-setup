@@ -15,15 +15,14 @@
 
 ```bash
 ./docker/docker-constructor.py validate
-./docker/docker-constructor.py build
+./docker/docker-constructor.py build -y
 ```
 
-构建不需要项目路径或 `.env`。rootless Docker 的 host gateway 诊断：
+构建不需要项目路径、`.env` 或可访问的 host gateway。gateway 诊断只用于运行时容器到主机的连通性；对于 rootless Docker，请在需要检查或修复该连通性时单独运行 `doctor`：
 
 ```bash
 ./docker/docker-constructor.py doctor
 ./docker/docker-constructor.py doctor --apply-rootless-override -y
-./docker/docker-constructor.py build -y
 ```
 
 显式 Python 版本覆盖方式：

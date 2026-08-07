@@ -3,7 +3,7 @@
 This module owns:
 
 * build inputs → effective projection → build vector rendering
-* gateway diagnosis → rootless-override planning → persistence
+* gateway diagnosis → rootless-override planning → persistence for doctor
 * Docker execution through an injected ``ProcessRunner``
 * explicit repair intent (doctor) with consent enforcement
 
@@ -183,18 +183,16 @@ class BuildRequest:
     """Injected build executor; ``None`` means execution impossible."""
 
     gateway_probe_image: str = "alpine:3.20"
-    """Image used for ephemeral gateway probes."""
+    """Deprecated compatibility field; builds never use gateway probes."""
+
+    _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
+    """Deprecated compatibility injection; builds never invoke it."""
+
+    _persist_gateway: Callable[..., object] | None = None
+    """Deprecated compatibility injection; builds never invoke it."""
 
     repo_root: str | None = None
     """Repository root directory (default: auto-detected from inventory)."""
-
-    # ── injectable networking boundaries (faked in tests) ────────────
-
-    _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
-    """Injectable ``diagnose_gateway`` — returns ``GatewayDiagnosis``."""
-
-    _persist_gateway: Callable[..., PersistenceResult] | None = None
-    """Injectable ``persist_gateway`` — returns ``PersistenceResult``."""
 
     # ── injectable projection boundary (faked in tests) ──────────────
     _publish_projection: Callable[..., PublishResult] | None = None
@@ -250,12 +248,6 @@ class BuildResult:
     process_result: ProcessResult | None = None
     """Captured subprocess outcome when execution was performed."""
 
-    host_gateway_ip: str | None = None
-    """Persisted ``HOST_GATEWAY_IP`` (``None`` when probe failed)."""
-
-    gateway: str | None = None
-    """Selected gateway IP (diagnosis result)."""
-
     publish_result: PublishResult | None = None
     """Publication outcome when projection was written."""
 
@@ -293,6 +285,9 @@ class DoctorResult:
     selected_gateway: str | None = None
     """IP address of the chosen gateway after successful diagnosis."""
 
+    persistence_result: PersistenceResult | None = None
+    """Outcome of persisting the selected gateway for future runs."""
+
 
 @dataclass(frozen=True)
 class DoctorRequest:
@@ -319,12 +314,16 @@ class DoctorRequest:
     probe_timeout: int | None = None
     """Timeout (seconds) for each gateway probe container (1–300)."""
 
+    gateway_env_path: Path | None = None
+    """Environment file that stores the diagnosed gateway for ``run``."""
+
     # -- injectables (all default to ``None`` = use real implementations) --
 
     runner: ProcessRunner | None = None
     """Injected process runner for probe containers / service commands."""
 
     _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
+    _persist_gateway: Callable[..., PersistenceResult] | None = None
     _plan_rootless_override: Callable[..., RootlessOverridePlan] | None = None
     _apply_rootless_override: Callable[..., OverrideFailure | None] | None = None
 
@@ -451,57 +450,21 @@ def execute_build(
     plan: BuildTransactionPlan,
     request: BuildRequest,
 ) -> BuildResult:
-    """Diagnose gateway, persist, publish, and execute Docker.
+    """Publish the effective build projection and execute Docker.
 
     Callers must have already validated ``plan.exit_kind == SUCCESS``
     and confirmed ``request.confirmed is True`` (and that this is not
-    a dry-run).
+    a dry-run). Gateway diagnosis belongs to the explicit ``doctor``
+    transaction and is intentionally not a build precondition.
     """
     build_args = plan.build_args
     display_string = plan.display_string
-
-    # 1. Diagnose gateway
-    diagnose = request._diagnose_gateway or diagnose_gateway
-    try:
-        diagnosis = diagnose(probe_image=request.gateway_probe_image)
-    except Exception as exc:
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"gateway diagnosis failed: {exc}",
-            build_args=build_args,
-            display_string=display_string,
-        )
-    gateway_ip = diagnosis.host_gateway_ip
-    if gateway_ip is None:
-        detail = "no route"
-        if diagnosis.probes:
-            first = diagnosis.probes[0]
-            if first.detail:
-                detail = first.detail
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"no working gateway IP found: {detail}",
-            build_args=build_args,
-            display_string=display_string,
-        )
-
-    # 2. Persist selected gateway
-    persist = request._persist_gateway or persist_gateway
     repo_root = (
         Path(request.repo_root) if request.repo_root
         else Path(request.inventory_path).parent
     )
-    persist_result = persist(repo_root / ".env", gateway_ip)
-    if not persist_result.written:
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"cannot persist gateway: {persist_result.error or 'unknown error'}",
-            build_args=build_args,
-            display_string=display_string,
-            host_gateway_ip=gateway_ip,
-        )
 
-    # 3. Publish effective projection
+    # 1. Publish effective projection
     publish = request._publish_projection
     try:
         if publish is not None:
@@ -519,13 +482,10 @@ def execute_build(
             message=f"failed to publish effective projection: {getattr(exc, 'detail', str(exc))}",
             build_args=build_args,
             display_string=display_string,
-            host_gateway_ip=gateway_ip,
         )
 
-    # 4. Execute Docker build
+    # 2. Execute Docker build
     runner = request.runner or SubprocessBuildExecutor()
-
-    proc: ProcessResult
     try:
         proc = runner.run(build_args)
     except FileNotFoundError as exc:
@@ -534,7 +494,6 @@ def execute_build(
             message=f"docker executable not found: {exc}",
             build_args=build_args,
             display_string=display_string,
-            host_gateway_ip=gateway_ip,
             publish_result=publish_result,
         )
     except OSError as exc:
@@ -543,7 +502,6 @@ def execute_build(
             message=f"docker execution failed: {exc}",
             build_args=build_args,
             display_string=display_string,
-            host_gateway_ip=gateway_ip,
             publish_result=publish_result,
         )
     exit_kind = ExitKind.SUCCESS if proc.return_code == 0 else ExitKind.OPERATIONAL
@@ -557,7 +515,6 @@ def execute_build(
         build_args=build_args,
         display_string=display_string,
         process_result=proc,
-        host_gateway_ip=gateway_ip,
         publish_result=publish_result,
     )
 
@@ -575,7 +532,7 @@ def orchestrate_build(request: BuildRequest) -> BuildResult:
     2. If plan fails: return CONFIG
     3. If dry-run: return plan with SUCCESS
     4. If not confirmed: return SUCCESS cancellation
-    5. Execute — diagnose, persist, publish, Docker
+    5. Execute — publish and invoke Docker
     """
     plan = plan_build(request)
     if plan.exit_kind != ExitKind.SUCCESS:
@@ -600,6 +557,26 @@ def orchestrate_build(request: BuildRequest) -> BuildResult:
         )
 
     return execute_build(plan, request)
+
+
+def _persist_selected_gateway(
+    request: DoctorRequest,
+    gateway: str | None,
+) -> tuple[PersistenceResult | None, str | None]:
+    """Persist a verified gateway so subsequent ``run`` calls use it."""
+    if gateway is None:
+        return None, None
+    path = request.gateway_env_path
+    if path is None:
+        return None, None
+    persist = request._persist_gateway or persist_gateway
+    try:
+        result = persist(path, gateway)
+    except Exception as exc:
+        return None, str(exc)
+    if not result.written:
+        return result, result.error or "unknown error"
+    return result, None
 
 
 def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
@@ -632,6 +609,15 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             message=f"gateway diagnosis failed: {exc}",
         )
     gateway = initial.host_gateway_ip
+    initial_persistence, error = _persist_selected_gateway(request, gateway)
+    if error is not None:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"cannot persist gateway: {error}",
+            initial_diagnosis=initial,
+            selected_gateway=gateway,
+            persistence_result=initial_persistence,
+        )
 
     if gateway is None:
         # Diagnosis-only (no repair intent) → permanently unreachable
@@ -678,6 +664,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             initial_diagnosis=initial,
             override_plan=override_plan,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=False,
         )
 
@@ -689,6 +676,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             initial_diagnosis=initial,
             override_plan=override_plan,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=False,
         )
 
@@ -700,6 +688,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             initial_diagnosis=initial,
             override_plan=override_plan,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=False,
         )
 
@@ -724,6 +713,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             initial_diagnosis=initial,
             override_plan=override_plan,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=False,
         )
 
@@ -738,6 +728,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             initial_diagnosis=initial,
             override_plan=override_plan,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=False,
         )
     if failure is not None:
@@ -748,6 +739,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             override_plan=override_plan,
             repair_failure=failure,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=False,
         )
 
@@ -761,10 +753,23 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             initial_diagnosis=initial,
             override_plan=override_plan,
             selected_gateway=gateway,
+            persistence_result=initial_persistence,
             repair_applied=True,
         )
 
     post_gateway = post.host_gateway_ip
+    persistence, error = _persist_selected_gateway(request, post_gateway)
+    if error is not None:
+        return DoctorResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"cannot persist gateway: {error}",
+            initial_diagnosis=initial,
+            override_plan=override_plan,
+            post_repair_diagnosis=post,
+            selected_gateway=post_gateway,
+            persistence_result=persistence,
+            repair_applied=True,
+        )
     return DoctorResult(
         exit_kind=ExitKind.SUCCESS if post_gateway else ExitKind.OPERATIONAL,
         message=None if post_gateway else "gateway unreachable after repair",
@@ -772,6 +777,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
         override_plan=override_plan,
         post_repair_diagnosis=post,
         selected_gateway=post_gateway,
+        persistence_result=persistence,
         repair_applied=True,
     )
 

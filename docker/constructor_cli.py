@@ -470,10 +470,6 @@ def _real_dispatcher(
                 "build_args": list(result.build_args),
                 "display_string": result.display_string,
             }
-        if result.host_gateway_ip:
-            if data is None:
-                data = {}
-            data["host_gateway_ip"] = result.host_gateway_ip
         if result.publish_result:
             if data is None:
                 data = {}
@@ -517,6 +513,7 @@ def _real_dispatcher(
         doctor_kwargs: dict[str, object] = {
             "apply_override": apply_override,
             "repair_consent": _to_bool(c_args.get("yes", False)),
+            "gateway_env_path": _REPO_ROOT / ".env",
         }
         probe_image = c_args.get("probe_image")
         if probe_image is not None:

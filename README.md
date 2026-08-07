@@ -15,15 +15,14 @@
 
 ```bash
 ./docker/docker-constructor.py validate
-./docker/docker-constructor.py build
+./docker/docker-constructor.py build -y
 ```
 
-Для сборки не нужны путь проекта и `.env`. Диагностика host gateway для rootless Docker:
+Для сборки не нужны путь проекта, `.env` и доступность host gateway. Диагностика gateway нужна только для соединения запущенного контейнера с хостом. Для rootless Docker запускайте `doctor` отдельно, когда это соединение нужно проверить или исправить:
 
 ```bash
 ./docker/docker-constructor.py doctor
 ./docker/docker-constructor.py doctor --apply-rootless-override -y
-./docker/docker-constructor.py build -y
 ```
 
 Явное переопределение версии Python:

@@ -205,14 +205,12 @@ class TestBuildRequestDto(unittest.TestCase):
             build_args=("docker", "build", "."),
             display_string="docker build .",
             process_result=pr,
-            host_gateway_ip="10.0.0.1",
         )
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         self.assertEqual("done", result.message)
         self.assertEqual(("docker", "build", "."), result.build_args)
         self.assertEqual("docker build .", result.display_string)
         self.assertIs(pr, result.process_result)
-        self.assertEqual("10.0.0.1", result.host_gateway_ip)
 
     def test_dtos_are_frozen(self):
         req = BuildRequest(inventory_path="docker-constructor.toml")
@@ -912,86 +910,34 @@ class TestRenderValidationFailures(unittest.TestCase):
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class TestGatewayDiagnosis(unittest.TestCase):
-    """Task 16 — diagnosis result, no gateway, preferred IP, fallback,
-    persisted value, inventory unchanged."""
+class TestBuildGatewayIsolation(unittest.TestCase):
+    """Builds are independent of the legacy gateway callback surface."""
 
-    def test_selected_gateway_surfaces(self):
-        """The gateway IP selected by diagnosis must be reported."""
-        req = BuildRequest(
+    def test_unreachable_gateway_callbacks_are_not_invoked(self):
+        calls: list[str] = []
+
+        def diagnose(**kwargs):
+            calls.append("diagnose")
+            return _diag_unreachable(**kwargs)
+
+        def persist(*args, **kwargs):
+            calls.append("persist")
+            return _persist_fail(*args, **kwargs)
+
+        runner = FakeBuildExecutor()
+        result = orchestrate_build(BuildRequest(
             inventory_path="docker-constructor.toml",
             confirmed=True,
-            _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
+            _diagnose_gateway=diagnose,
+            _persist_gateway=persist,
             _publish_projection=_publish_ok,
-            runner=FakeBuildExecutor(),
-        )
-        result = orchestrate_build(req)
+            runner=runner,
+        ))
+
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertEqual("172.17.0.1", result.host_gateway_ip,
-                         "host gateway IP must be the fake diagnosis value")
-
-    def test_no_working_gateway_fails_operational(self):
-        req = BuildRequest(
-            inventory_path="docker-constructor.toml",
-            confirmed=True,
-            _diagnose_gateway=_diag_unreachable,
-            _persist_gateway=_persist_ok,
-            _publish_projection=_publish_ok,
-        )
-        result = orchestrate_build(req)
-        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
-                         f"expected OPERATIONAL, got {result.exit_kind}")
-        self.assertIsNone(result.host_gateway_ip)
-        self.assertIn("no route", result.message or "",
-                      "message must indicate no route")
-
-    def test_persisted_gateway_receives_exact_selected_value(self):
-        persisted = []
-
-        def record_persist(path, gateway):
-            persisted.append(gateway)
-            return _persist_ok()
-
-        req = BuildRequest(
-            inventory_path="docker-constructor.toml",
-            confirmed=True,
-            _diagnose_gateway=_diag_reachable,
-            _persist_gateway=record_persist,
-            _publish_projection=_publish_ok,
-            runner=FakeBuildExecutor(),
-        )
-        result = orchestrate_build(req)
-        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertGreater(len(persisted), 0, "persist was not called")
-        self.assertEqual("172.17.0.1", persisted[0],
-                         "persisted gateway must match diagnosis")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 17.  Persistence failure (RED)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestPersistenceFailure(unittest.TestCase):
-    """Task 17 — projection may resolve but Docker must not execute."""
-
-    def test_persist_failure_blocks_docker(self):
-        docker_runner = FakeBuildExecutor()
-        req = BuildRequest(
-            inventory_path="docker-constructor.toml",
-            confirmed=True,
-            _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_fail,
-            _publish_projection=_publish_ok,
-            runner=docker_runner,
-        )
-        result = orchestrate_build(req)
-        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
-                         f"expected OPERATIONAL, got {result.exit_kind}")
-        self.assertIn("cannot persist", result.message or "")
-        self.assertEqual(0, len(docker_runner.calls),
-                         "docker must not execute when persistence fails")
+        self.assertEqual([], calls)
+        self.assertEqual(1, len(runner.calls))
+        self.assertFalse(hasattr(result, "host_gateway_ip"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1050,8 +996,6 @@ class TestConfirmation(unittest.TestCase):
                           "no Docker process must have run")
         self.assertEqual(len(result.build_args), 0,
                          "build args must be empty when cancelled")
-        self.assertIsNone(result.gateway,
-                          "no gateway must be selected")
         self.assertIsNone(result.publish_result,
                           "no projection must be published")
 
@@ -1072,42 +1016,31 @@ class TestConfirmation(unittest.TestCase):
         # Real impl returns SUCCESS with process_result; stub returns OPERATIONAL
         self.assertIsInstance(result, BuildResult)
 
-    def test_operation_order_diagnose_persist_publish(self):
-        """Build transaction order: validate → diagnose → persist → publish."""
+    def test_operation_order_publishes_before_execution(self):
+        """Build transaction order is validate → publish → Docker execution."""
         seq = []
-
-        def diagnose(**kw):
-            seq.append("diagnose")
-            return _make_diagnosis()
-
-        def persist(p, g):
-            seq.append("persist")
-            return _persist_ok()
 
         def publish(projection, *, repo_root=None):
             seq.append("publish")
             return PublishResult(published_path="/tmp/eff.toml")
 
-        req = BuildRequest(
+        class RecordingRunner(FakeBuildExecutor):
+            def run(self, argv):
+                seq.append("docker")
+                return super().run(argv)
+
+        result = orchestrate_build(BuildRequest(
             inventory_path="docker-constructor.toml",
             confirmed=True,
-            _diagnose_gateway=diagnose,
-            _persist_gateway=persist,
+            _diagnose_gateway=lambda **kw: (_ for _ in ()).throw(
+                AssertionError("build must not diagnose gateway")),
+            _persist_gateway=lambda *args: (_ for _ in ()).throw(
+                AssertionError("build must not persist gateway")),
             _publish_projection=publish,
-            runner=FakeBuildExecutor(),
-        )
-        result = orchestrate_build(req)
+            runner=RecordingRunner(),
+        ))
         self.assertIsInstance(result, BuildResult)
-        for phase in ("diagnose", "persist", "publish"):
-            self.assertIn(phase, seq,
-                          f"{phase} was never called; stub may be active")
-        diagnose_idx = seq.index("diagnose")
-        persist_idx = seq.index("persist")
-        self.assertLess(diagnose_idx, persist_idx,
-                        f"diagnosis ({diagnose_idx}) must precede persistence ({persist_idx})")
-        publish_idx = seq.index("publish")
-        self.assertGreater(publish_idx, persist_idx,
-                           f"publication ({publish_idx}) must be after persistence ({persist_idx})")
+        self.assertEqual(["publish", "docker"], seq)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1193,8 +1126,6 @@ class TestDryRun(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
-        self.assertIsNone(result.host_gateway_ip,
-                          "dry-run must not persist gateway IP")
 
     # -- publication ---------------------------------------------------
 
@@ -1376,27 +1307,24 @@ class TestBuildBoundaryFailures(unittest.TestCase):
     """Diagnosis, publication, and runner exceptions must produce
     structured results and never escape."""
 
-    # -- diagnosis exceptions -------------------------------------------
+    # -- legacy gateway callbacks --------------------------------------
 
-    def test_diagnosis_exception_returns_operational(self):
-        """A crashing diagnosis must produce OPERATIONAL with the
-        exception detail embedded in the message."""
+    def test_diagnosis_exception_is_not_a_build_failure(self):
+        """A build never invokes the legacy diagnosis callback."""
         def broken_diagnose(**kw):
             raise RuntimeError("Docker socket unreachable")
 
-        req = BuildRequest(
+        runner = FakeBuildExecutor()
+        result = orchestrate_build(BuildRequest(
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=broken_diagnose,
             _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
-            runner=FakeBuildExecutor(),
-        )
-        result = orchestrate_build(req)
-        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
-        self.assertIn("Docker socket unreachable", result.message or "")
-        # Build never runs when diagnosis fails
-        self.assertIsNone(result.process_result)
+            runner=runner,
+        ))
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
+        self.assertEqual(1, len(runner.calls))
 
     # -- publication errors ---------------------------------------------
 
@@ -1417,8 +1345,6 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("disk full", result.message or "")
-        # Gateway was diagnosed and persisted
-        self.assertEqual("172.17.0.1", result.host_gateway_ip)
         # Docker must not run after publication failure
         self.assertIsNone(result.process_result)
 

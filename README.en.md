@@ -15,15 +15,14 @@ Validate the reviewed inventory, then build the image:
 
 ```bash
 ./docker/docker-constructor.py validate
-./docker/docker-constructor.py build
+./docker/docker-constructor.py build -y
 ```
 
-The build needs no project path or `.env`. For rootless Docker host-gateway diagnostics, use:
+The build needs no project path, `.env`, or host-gateway reachability. Gateway diagnostics are only for runtime host connectivity. For rootless Docker, use `doctor` separately when that connectivity needs troubleshooting or repair:
 
 ```bash
 ./docker/docker-constructor.py doctor
 ./docker/docker-constructor.py doctor --apply-rootless-override -y
-./docker/docker-constructor.py build -y
 ```
 
 A deliberate Python override uses:
