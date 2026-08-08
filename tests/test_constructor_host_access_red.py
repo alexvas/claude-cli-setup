@@ -237,6 +237,22 @@ class TestLocalCompanionRed(_InventoryTest):
                 with self.assertRaisesRegex(InventoryError, r"(host-access|cache|local)"):
                     load_local_config(path)
 
+    def test_local_validation_errors_name_the_exact_path_and_recovery(self) -> None:
+        from docker.versioning.inventory import load_local_config
+
+        cases = (
+            ("[host-access]\nfoo = true\n", "local.host-access.foo", "only"),
+            ("[cache]\nfoo = true\n", "local.cache.foo", "only"),
+            ("[host-access]\naddress = 42\n", "local.host-access.address", "IPv4"),
+            ("[cache]\ndir = 42\n", "local.cache.dir", "filesystem path"),
+        )
+        for content, path, guidance in cases:
+            with self.subTest(path=path):
+                with self.assertRaises(InventoryError) as raised:
+                    load_local_config(self.local(content))
+                self.assertIn(path, str(raised.exception))
+                self.assertIn(guidance, str(raised.exception))
+
     def test_external_address_rejects_host_gateway_token(self) -> None:
         from docker.versioning.inventory import load_local_config
 

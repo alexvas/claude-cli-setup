@@ -38,23 +38,23 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### GREEN
 
-- [ ] 1.7 Add immutable model types for host-access enablement, mode, optional proxy port, local host address, and local cache directory.
-- [ ] 1.8 Extend reviewed inventory parsing with the closed optional `[runtime.host-access]` schema and path-specific validation errors required by tasks 1.1–1.2.
-- [ ] 1.9 Implement canonical and custom local-companion path resolution required by task 1.3.
-- [ ] 1.10 Implement strict local TOML loading for the two allowed local fields and errors required by task 1.4.
-- [ ] 1.11 Move cache-directory resolution to local `[cache].dir`, retain reviewed `cache.ttl`, and preserve the XDG fallback required by task 1.5.
-- [ ] 1.12 Remove reviewed `cache.dir` from accepted inventory fields and emit the migration error required by task 1.5.
-- [ ] 1.13 Update effective configuration and serialization boundaries until all projection-exclusion assertions from task 1.6 pass.
+- [x] 1.7 Add immutable model types for host-access enablement, mode, optional proxy port, local host address, and local cache directory.
+- [x] 1.8 Extend reviewed inventory parsing with the closed optional `[runtime.host-access]` schema and path-specific validation errors required by tasks 1.1–1.2.
+- [x] 1.9 Implement canonical and custom local-companion path resolution required by task 1.3.
+- [x] 1.10 Implement strict local TOML loading for the two allowed local fields and errors required by task 1.4.
+- [x] 1.11 Move cache-directory resolution to local `[cache].dir`, retain reviewed `cache.ttl`, and preserve the XDG fallback required by task 1.5.
+- [x] 1.12 Remove reviewed `cache.dir` from accepted inventory fields and emit the migration error required by task 1.5.
+- [x] 1.13 Update effective configuration and serialization boundaries until all projection-exclusion assertions from task 1.6 pass.
 
 ### INTROSPECT
 
-- [ ] 1.14 Inspect every reader of `Inventory`, `RuntimeInventory`, `CacheConfig`, and effective projections; record through assertions or type boundaries that no consumer treats the local companion as a generic inventory overlay.
-- [ ] 1.15 Search maintained production code for direct parsing of local TOML, reviewed `cache.dir`, and duplicated companion-path derivation; consolidate each concern behind its single typed boundary.
+- [x] 1.14 Inspect every reader of `Inventory`, `RuntimeInventory`, `CacheConfig`, and effective projections; record through assertions or type boundaries that no consumer treats the local companion as a generic inventory overlay.
+- [x] 1.15 Search maintained production code for direct parsing of local TOML, reviewed `cache.dir`, and duplicated companion-path derivation; consolidate each concern behind its single typed boundary.
 
 ### VALIDATE
 
-- [ ] 1.16 Run the focused inventory, model, immutable DTO, cache, effective projection, serialization, semantic-source, and custom-inventory test modules and fix all failures.
-- [ ] 1.17 Run project static checks applicable to the changed configuration modules and confirm the Phase 1 deliverables compile and validate without Docker or network access.
+- [x] 1.16 Run the focused inventory, model, immutable DTO, cache, effective projection, serialization, semantic-source, and custom-inventory test modules and fix all failures.
+- [x] 1.17 Run project static checks applicable to the changed configuration modules and confirm the Phase 1 deliverables compile and validate without Docker or network access.
 
 ## 2. Conditional direct-Docker launch
 

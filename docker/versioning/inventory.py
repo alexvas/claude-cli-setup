@@ -6,6 +6,7 @@ dataclasses, re, pathlib, and types.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import re
 import tomllib
 from pathlib import Path
@@ -23,6 +24,10 @@ from .model import (
     ArtifactEntry,
     BaseStage,
     CacheConfig,
+    HostAccessPolicy,
+    LocalCacheConfig,
+    LocalConfig,
+    LocalHostAccess,
     DockerRegistrySource,
     DockerRegistryUpdate,
     FdPrebuiltStage,
@@ -552,7 +557,8 @@ _register(("build", "stages", "runtime", "oh-my-zsh", "source"), "type", "reposi
 _register(("build", "stages", "runtime", "oh-my-zsh", "update"), "provider", "ref")
 
 # Runtime pi-extensions (dynamic — allowed keys defined per entry)
-_register(("runtime",), "pi-extensions")
+_register(("runtime",), "pi-extensions", "host-access")
+_register(("runtime", "host-access"), "enabled", "mode", "proxy-port")
 _register(("runtime", "pi-extensions", "__ANY__"), "version", "source", "update", "artifacts", "validation", "override")
 _register(("runtime", "pi-extensions", "__ANY__", "source"), "type", "package")
 _register(("runtime", "pi-extensions", "__ANY__", "artifacts", "__ANY__"), "url", "integrity")
@@ -886,6 +892,88 @@ def load_inventory(versions_path: Path) -> Inventory:
     return validate_inventory(raw)
 
 
+def resolve_local_companion_path(inventory_path: Path) -> Path:
+    """Return the only local companion permitted for an inventory path."""
+    path = Path(inventory_path)
+    return path.with_name(f"{path.stem}.local.toml")
+
+
+def load_local_config(
+    path: Path,
+    *,
+    host_access_mode: str | None = None,
+) -> LocalConfig:
+    """Load the closed machine-local companion without overlaying inventory."""
+    try:
+        with Path(path).open("rb") as stream:
+            raw = tomllib.load(stream)
+    except tomllib.TOMLDecodeError as exc:
+        raise InventoryError(
+            f"local: malformed TOML; correct the companion file: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise InventoryError("local: expected TOML table")
+    unknown = set(raw) - {"host-access", "cache"}
+    if unknown:
+        key = sorted(unknown)[0]
+        raise InventoryError(
+            f"local.{key}: unknown key; use only [host-access] or [cache]"
+        )
+    host_raw = raw.get("host-access", {})
+    if not isinstance(host_raw, dict):
+        raise InventoryError("local.host-access: expected table; use [host-access].address")
+    unknown_host = set(host_raw) - {"address"}
+    if unknown_host:
+        key = sorted(unknown_host)[0]
+        raise InventoryError(
+            f"local.host-access.{key}: unknown key; use only local.host-access.address"
+        )
+    address = host_raw.get("address")
+    if address is not None:
+        if not isinstance(address, str):
+            raise InventoryError(
+                "local.host-access.address: expected string; set an IPv4 or IPv6 address"
+            )
+        if address == "host-gateway" and host_access_mode == "docker-gateway":
+            pass
+        else:
+            try:
+                ipaddress.ip_address(address)
+            except ValueError as exc:
+                raise InventoryError(
+                    "local.host-access.address: expected IPv4 or IPv6 address; correct [host-access].address"
+                ) from exc
+    cache_raw = raw.get("cache", {})
+    if not isinstance(cache_raw, dict):
+        raise InventoryError("local.cache: expected table; use [cache].dir")
+    unknown_cache = set(cache_raw) - {"dir"}
+    if unknown_cache:
+        key = sorted(unknown_cache)[0]
+        raise InventoryError(
+            f"local.cache.{key}: unknown key; use only local.cache.dir"
+        )
+    cache_dir = cache_raw.get("dir")
+    if cache_dir is not None and not isinstance(cache_dir, str):
+        raise InventoryError(
+            "local.cache.dir: expected string; set [cache].dir to a filesystem path"
+        )
+    return LocalConfig(LocalHostAccess(address), LocalCacheConfig(cache_dir))
+
+
+def load_local_config_for_inventory(
+    inventory_path: Path,
+    *,
+    repository_root: Path | None = None,
+    host_access_mode: str | None = None,
+) -> LocalConfig:
+    """Load only the selected inventory's companion; never repository fallback."""
+    del repository_root  # explicit boundary: custom inventory controls its companion
+    companion = resolve_local_companion_path(inventory_path)
+    if not companion.exists():
+        return LocalConfig()
+    return load_local_config(companion, host_access_mode=host_access_mode)
+
+
 def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     """Validate raw TOML data and return an Inventory."""
     r = _PathReader(raw)
@@ -1099,8 +1187,9 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     _check_unknown_keys(r.tbl(("build", "stages", "runtime", "oh-my-zsh", "source",)), ("build", "stages", "runtime", "oh-my-zsh", "source",))
     _check_unknown_keys(r.tbl(("build", "stages", "runtime", "oh-my-zsh", "update",)), ("build", "stages", "runtime", "oh-my-zsh", "update",))
 
-    # --- pi extensions ---
+    # --- pi extensions and reviewed launch policy ---
     _check_unknown_keys(r.tbl(("runtime",)), ("runtime",))
+    host_access = _load_host_access_policy(raw)
     pi_ext_data = r.tbl(("runtime", "pi-extensions"))
     extensions: dict[str, PiExtensionEntry] = {}
     _ext_identities: dict[tuple[str, str], str] = {}  # (family, identity) → first path
@@ -1248,6 +1337,7 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
         stages=stages,
         runtime_pi_extensions=MappingProxyType(extensions),
         cache=_load_cache_config(raw),
+        host_access=host_access,
     )
 
 
@@ -1255,22 +1345,48 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
 # Cache config loader
 # ---------------------------------------------------------------------------
 
+def _load_host_access_policy(raw: Mapping[str, object]) -> HostAccessPolicy:
+    runtime = raw.get("runtime")
+    assert isinstance(runtime, dict)  # validated by validate_inventory
+    policy = runtime.get("host-access")
+    if policy is None:
+        return HostAccessPolicy()
+    if not isinstance(policy, dict):
+        raise InventoryError("runtime.host-access: expected table")
+    _check_unknown_keys(policy, ("runtime", "host-access"))
+    enabled = policy.get("enabled")
+    if not isinstance(enabled, bool):
+        raise InventoryError("runtime.host-access.enabled: expected boolean")
+    mode = policy.get("mode")
+    port = policy.get("proxy-port")
+    if not enabled:
+        if mode is not None:
+            raise InventoryError("runtime.host-access.mode: forbidden when enabled is false")
+        if port is not None:
+            raise InventoryError("runtime.host-access.proxy-port: forbidden when enabled is false")
+        return HostAccessPolicy(enabled=False)
+    if mode not in ("docker-gateway", "external-address"):
+        raise InventoryError("runtime.host-access.mode: expected 'docker-gateway' or 'external-address'")
+    if port is not None and (not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535):
+        raise InventoryError("runtime.host-access.proxy-port: expected integer from 1 through 65535")
+    return HostAccessPolicy(enabled=True, mode=mode, proxy_port=port)
+
+
 def _load_cache_config(raw: Mapping[str, object]) -> CacheConfig | None:
-    """Parse and validate the optional ``[cache]`` section."""
+    """Parse and validate the optional reviewed ``[cache]`` policy."""
     cache_raw = raw.get("cache")
     if cache_raw is None:
         return None
     if not isinstance(cache_raw, dict):
         raise InventoryError("cache: must be a table")
 
-    cache_dir: str | None = None
     cache_ttl: int | None = None
 
     for key, val in cache_raw.items():
         if key == "dir":
-            if not isinstance(val, str):
-                raise InventoryError("cache.dir: must be a string")
-            cache_dir = val
+            raise InventoryError(
+                "cache.dir: retired reviewed field; move it to [cache].dir in the local companion"
+            )
         elif key == "ttl":
             if not isinstance(val, int) or val <= 0:
                 raise InventoryError("cache.ttl: must be a positive integer")
@@ -1278,7 +1394,7 @@ def _load_cache_config(raw: Mapping[str, object]) -> CacheConfig | None:
         else:
             raise InventoryError(f"cache: unknown key {key!r}")
 
-    return CacheConfig(dir=cache_dir, ttl=cache_ttl)
+    return CacheConfig(ttl=cache_ttl)
 
 
 # ---------------------------------------------------------------------------

@@ -621,10 +621,35 @@ class Stages:
 
 
 @dataclass(frozen=True)
-class CacheConfig:
-    """Validated ``[cache]`` section from docker-constructor.toml."""
+class HostAccessPolicy:
+    """Reviewed, immutable runtime host-access policy."""
+    enabled: bool = False
+    mode: str | None = None
+    proxy_port: int | None = None
+
+
+@dataclass(frozen=True)
+class LocalHostAccess:
+    """Machine-local host address; never an inventory overlay."""
+    address: str | None = None
+
+
+@dataclass(frozen=True)
+class LocalCacheConfig:
+    """Machine-local cache directory; never reviewed policy."""
     dir: str | None = None
-    """Custom cache directory path."""
+
+
+@dataclass(frozen=True)
+class LocalConfig:
+    """Closed local companion state."""
+    host_access: LocalHostAccess = LocalHostAccess()
+    cache: LocalCacheConfig = LocalCacheConfig()
+
+
+@dataclass(frozen=True)
+class CacheConfig:
+    """Reviewed portable cache policy from docker-constructor.toml."""
     ttl: int | None = None
     """Default TTL in seconds (positive integer)."""
 
@@ -647,8 +672,9 @@ class BuildInventory:
 
 @dataclass(frozen=True)
 class RuntimeInventory:
-    """Immutable container for runtime-phase Pi extensions."""
+    """Immutable container for runtime dependencies and launch policy."""
     pi_extensions: Mapping[str, PiExtensionEntry]
+    host_access: HostAccessPolicy = HostAccessPolicy()
 
     def __post_init__(self):
         # Always copy into a fresh dict and wrap in MappingProxyType.
@@ -674,6 +700,7 @@ class Inventory:
     stages: Stages
     runtime_pi_extensions: Mapping[str, PiExtensionEntry]
     cache: CacheConfig | None = None
+    host_access: HostAccessPolicy = HostAccessPolicy()
 
     def __post_init__(self):
         # Normalize runtime_pi_extensions so direct construction
@@ -699,7 +726,10 @@ class Inventory:
     @property
     def runtime(self) -> RuntimeInventory:
         """Canonical phase container for runtime Pi extensions."""
-        return RuntimeInventory(pi_extensions=self.runtime_pi_extensions)
+        return RuntimeInventory(
+            pi_extensions=self.runtime_pi_extensions,
+            host_access=self.host_access,
+        )
 
 
 # ---------------------------------------------------------------------------

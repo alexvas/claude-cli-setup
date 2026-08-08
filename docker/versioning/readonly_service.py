@@ -198,14 +198,21 @@ def _handle_check_updates(
     from docker.versioning.providers.base import ProviderContext
 
     # --- resolve transports (production http / git) ---
+    from docker.versioning.inventory import load_local_config_for_inventory
     from docker.versioning.transports import build_transports
 
     inventory_cache = getattr(inventory, "cache", None)
+    inventory_path = command_args.get("_inventory_path")
+    local_config = (
+        load_local_config_for_inventory(Path(inventory_path))
+        if isinstance(inventory_path, (str, Path)) else None
+    )
     config = build_transports(
         no_cache=bool(command_args.get("no_cache", False)),
         cache_ttl=command_args.get("cache_ttl"),
         cache_dir=command_args.get("cache_dir"),
         inventory_cache=inventory_cache,
+        local_config=local_config,
         suggest_mode=bool(command_args.get("suggest", False)),
     )
 
@@ -320,7 +327,9 @@ def dispatch(
         )
 
     try:
-        return handler(inventory, command_args)
+        handler_args = dict(command_args)
+        handler_args["_inventory_path"] = inventory_path
+        return handler(inventory, handler_args)
     except (VersionConfigError, InventoryError, EffectiveConfigError,
             UpdateError) as exc:
         return CommandResult(

@@ -21,6 +21,13 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class CacheSettings:
+    """Resolved cache settings from reviewed TTL and local directory."""
+    directory: Path
+    ttl: int | None
+
+
+@dataclass(frozen=True)
 class TransportConfig:
     """Resolved transport/fetch configuration for provider checks.
 
@@ -46,12 +53,24 @@ class TransportConfig:
         object.__setattr__(self, "tokens", deep_freeze(self.tokens))
 
 
+def resolve_cache_settings(inventory_cache: object | None, local_config: object | None) -> CacheSettings:
+    """Combine portable reviewed TTL with machine-local cache directory."""
+    from .cache import _default_cache_dir
+    from .model import CacheConfig, LocalConfig
+    ttl = inventory_cache.ttl if isinstance(inventory_cache, CacheConfig) else None
+    directory = None
+    if isinstance(local_config, LocalConfig):
+        directory = local_config.cache.dir
+    return CacheSettings(Path(directory) if directory is not None else _default_cache_dir(), ttl)
+
+
 def build_transports(
     *,
     no_cache: bool = False,
     cache_ttl: int | None = None,
     cache_dir: str | None = None,
     inventory_cache: object | None = None,
+    local_config: object | None = None,
     suggest_mode: bool = False,
 ) -> TransportConfig:
     """Construct production HTTP/Git transports and collect auth tokens.
@@ -138,10 +157,10 @@ def build_transports(
         resolved_cache_dir = cache_dir
 
         if inventory_cache is not None and isinstance(inventory_cache, CacheConfig):
-            if resolved_cache_dir is None and inventory_cache.dir is not None:
-                resolved_cache_dir = inventory_cache.dir
             if resolved_cache_ttl is None and inventory_cache.ttl is not None:
                 resolved_cache_ttl = inventory_cache.ttl
+        if resolved_cache_dir is None:
+            resolved_cache_dir = resolve_cache_settings(inventory_cache, local_config).directory
 
         if suggest_mode:
             disk = None

@@ -327,6 +327,9 @@ def to_plain_data(value: object) -> object:
             if field.name == "runtime_pi_extensions":
                 runtime = result.setdefault("runtime", {})
                 runtime["pi-extensions"] = to_plain_data(v)
+            elif field.name == "host_access":
+                runtime = result.setdefault("runtime", {})
+                runtime["host-access"] = to_plain_data(v)
             elif field.name == "stages":
                 build = result.setdefault("build", {})
                 build["stages"] = to_plain_data(v)
