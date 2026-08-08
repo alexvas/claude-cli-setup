@@ -29,12 +29,12 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### RED
 
-- [ ] 1.1 Add failing inventory tests proving an absent `[runtime.host-access]` defaults to disabled and `enabled = false` rejects `mode` and `proxy-port`.
-- [ ] 1.2 Add failing inventory tests proving enabled host access requires exactly `docker-gateway` or `external-address` and accepts only integer proxy ports from 1 through 65535.
-- [ ] 1.3 Add failing local-config tests proving `docker-constructor.toml` resolves `docker-constructor.local.toml` and `/path/custom.toml` resolves `/path/custom.local.toml` without repository fallback.
-- [ ] 1.4 Add failing local-config tests proving the closed schema accepts only `[host-access].address` and `[cache].dir` and rejects malformed TOML, unknown keys, non-string cache paths, and invalid addresses.
-- [ ] 1.5 Add failing cache tests proving reviewed `cache.dir` is rejected with migration guidance, local `[cache].dir` is used, reviewed `cache.ttl` remains effective, and absent local state preserves the XDG default.
-- [ ] 1.6 Add failing effective-projection tests proving reviewed host-access policy, local host address, local cache directory, proxy port, and companion path never enter build or runtime dependency projections.
+- [x] 1.1 Add failing inventory tests proving an absent `[runtime.host-access]` defaults to disabled and `enabled = false` rejects `mode` and `proxy-port`.
+- [x] 1.2 Add failing inventory tests proving enabled host access requires exactly `docker-gateway` or `external-address` and accepts only integer proxy ports from 1 through 65535.
+- [x] 1.3 Add failing local-config tests proving `docker-constructor.toml` resolves `docker-constructor.local.toml` and `/path/custom.toml` resolves `/path/custom.local.toml` without repository fallback.
+- [x] 1.4 Add failing local-config tests proving the closed schema accepts only `[host-access].address` and `[cache].dir` and rejects malformed TOML, unknown keys, non-string cache paths, and invalid addresses.
+- [x] 1.5 Add failing cache tests proving reviewed `cache.dir` is rejected with migration guidance, local `[cache].dir` is used, reviewed `cache.ttl` remains effective, and absent local state preserves the XDG default.
+- [x] 1.6 Add failing effective-projection tests proving reviewed host-access policy, local host address, local cache directory, proxy port, and companion path never enter build or runtime dependency projections.
 
 ### GREEN
 
