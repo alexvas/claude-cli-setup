@@ -319,11 +319,12 @@ The project SHALL expose `docker/docker-constructor.py` as a directly executable
 - **THEN** imports SHALL continue to delegate to the same implementation without executing the command entry point
 
 ### Requirement: Separate image builds from runtime project selection
-The canonical direct Docker image-build operation SHALL resolve versioned build inputs without requiring runtime-only project paths, generated fragments, or host bind-mount configuration.
+The canonical direct Docker image-build operation SHALL resolve versioned build inputs without requiring runtime-only project paths, generated fragments, host bind-mount configuration, host gateway reachability, or operational gateway state.
 
 #### Scenario: Building without runtime configuration
 - **WHEN** a user runs `./docker/docker-constructor.py build` with no dotenv file or `PROJECT_PATH_*`
 - **THEN** the resolver SHALL build the tagged Pi runtime image using the validated build section of `docker-constructor.toml`
+- **AND** SHALL NOT probe `host.docker.internal`, require a reachable host gateway, read or write `HOST_GATEWAY_IP`, or mutate `.env`
 - **AND** SHALL NOT require a real host project directory merely to evaluate the build
 
 #### Scenario: Preserving required version inputs
