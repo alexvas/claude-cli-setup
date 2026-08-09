@@ -150,6 +150,62 @@ class BuildRenderInputs:
 
 
 @dataclass(frozen=True)
+class RunHostAccess:
+    """Immutable host-access rendering inputs for ``docker run``.
+
+    Constructors are intentionally closed:
+
+    * ``RunHostAccess.disabled()`` — no host mapping or environment.
+    * ``RunHostAccess(address=..., mode="docker-gateway", proxy_port=None)``
+    * ``RunHostAccess(address=..., mode="external-address", proxy_port=None)``
+
+    ``address`` must be a plain IPv4 or IPv6 address; ``host-gateway``
+    and empty addresses are rejected.  ``proxy_port``, when set, must
+    be an integer in 1–65535.  ``mode`` must match the reviewed policy.
+    """
+
+    address: str | None = None
+    mode: str | None = None
+    proxy_port: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.address is None and self.mode is None and self.proxy_port is None:
+            return  # disabled — all fields None
+        if not self.address or not isinstance(self.address, str):
+            raise ValueError("RunHostAccess.address must be a non-empty IP address")
+        if self.address == "host-gateway":
+            raise ValueError(
+                "RunHostAccess.address must be a resolved IP address, "
+                "not the Docker host-gateway token"
+            )
+        if self.mode not in ("docker-gateway", "external-address"):
+            raise ValueError(
+                f"RunHostAccess.mode must be 'docker-gateway' or "
+                f"'external-address', got {self.mode!r}"
+            )
+        if self.mode == "external-address" and self.address == "host-gateway":
+            raise ValueError(
+                "external-address mode rejects host-gateway; supply a "
+                "resolved IPv4 or IPv6 address"
+            )
+        if self.proxy_port is not None:
+            if not isinstance(self.proxy_port, int) or not (1 <= self.proxy_port <= 65535):
+                raise ValueError(
+                    f"proxy_port must be an integer 1–65535, got {self.proxy_port!r}"
+                )
+
+    @staticmethod
+    def disabled() -> "RunHostAccess":
+        """Return a disabled sentinel — no host mapping or environment."""
+        return RunHostAccess()
+
+    @property
+    def is_enabled(self) -> bool:
+        """True when host access is enabled (non-None address)."""
+        return self.address is not None
+
+
+@dataclass(frozen=True)
 class RunRenderInputs:
     """Immutable input for ``docker run`` command rendering.
 
@@ -194,8 +250,9 @@ class RunRenderInputs:
     ``PROJECT_PATH_3``, etc.
     """
 
-    gateway: str = "host-gateway"
-    """Value for ``--add-host host.docker.internal:<value>``."""
+    host_access: RunHostAccess = RunHostAccess()
+    """Policy-derived host-access inputs.  Default is ``RunHostAccess.disabled()``
+    which suppresses ``--add-host`` and every host-access environment variable."""
 
     tty: bool = True
     """Allocate a pseudo-TTY (``--tty``)."""
@@ -653,8 +710,12 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     if inputs.chown_on_start is not None:
         args.extend(("--env", f"CHOWN_WORK_ON_START={inputs.chown_on_start}"))
 
-    # Gateway
-    args.extend(("--add-host", f"host.docker.internal:{inputs.gateway}"))
+    # Host access — conditionally emitted
+    if inputs.host_access.is_enabled:
+        args.extend(("--add-host", f"host.docker.internal:{inputs.host_access.address}"))
+        args.extend(("--env", f"HOST_ACCESS_ADDRESS={inputs.host_access.address}"))
+        if inputs.host_access.proxy_port is not None:
+            args.extend(("--env", f"HOST_PROXY_PORT={inputs.host_access.proxy_port}"))
 
     # Image
     args.append(inputs.image)

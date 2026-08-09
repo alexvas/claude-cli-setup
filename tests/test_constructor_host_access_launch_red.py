@@ -48,7 +48,7 @@ class TestConditionalHostAccessRenderingRed(unittest.TestCase):
 
     def test_proxy_port_is_neutral_and_does_not_create_proxy_urls(self):
         from docker.versioning.rendering import RunHostAccess
-        args = _render(RunHostAccess(address="192.0.2.10", proxy_port=1080))
+        args = _render(RunHostAccess(address="192.0.2.10", mode="external-address", proxy_port=1080))
         self.assertIn("HOST_PROXY_PORT=1080", args)
         forbidden = ("PI_PROXY_URL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "://")
         self.assertFalse(any(token in arg for arg in args for token in forbidden))
@@ -103,8 +103,16 @@ class TestHostAccessPlanningRed(unittest.TestCase):
         from docker.launcher import orchestrate_run
 
         policy = '[runtime.host-access]\nenabled = true\nmode = "docker-gateway"\n'
-        for local_bytes in (None, b"not = ["):
-            with self.subTest(local_bytes=local_bytes), tempfile.TemporaryDirectory() as root:
+
+        cases: list[tuple[bytes | None, str]] = [
+            (None, "missing"),
+            (b"not = [", "malformed TOML"),
+            (b"[host-access]\nunknown_key = true\n", "unknown key"),
+            (b"[host-access]\naddress = \"not-an-ip\"\n", "expected IPv4"),
+            (b"[cache]\ndir = 42\n[host-access]\naddress = \"10.0.0.1\"\n", "local.cache.dir: expected string"),
+        ]
+        for local_bytes, expected_fragment in cases:
+            with self.subTest(local_bytes=local_bytes, expected=expected_fragment), tempfile.TemporaryDirectory() as root:
                 root_path = Path(root)
                 inventory = self._inventory(root_path, policy)
                 companion = root_path / "custom.local.toml"
@@ -120,7 +128,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
                 with patch("docker.launcher.artifact_cache.materialize_selected_artifacts", bomb_materialize):
                     result = orchestrate_run(req)
                 self.assertEqual(result.exit_kind.value, "config")
-                self.assertRegex(result.message or "", "doctor|local")
+                self.assertIn(expected_fragment, result.message or "")
                 self.assertEqual(effects, [])
 
     def test_orchestrate_dry_run_renders_policy_and_never_mutates_companion(self):

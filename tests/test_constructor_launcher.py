@@ -607,7 +607,6 @@ class TestLaunchVectorContract(unittest.TestCase):
         projection_container_path: str = (
             "/run/pi-cli/docker-constructor.runtime.toml"
         ),
-        gateway: str = "host-gateway",
         tty: bool = True,
         stdin_open: bool = True,
         chown_on_start: str | None = None,
@@ -620,7 +619,6 @@ class TestLaunchVectorContract(unittest.TestCase):
             pi_home_host=pi_home_host,
             projection_host_path=projection_host_path,
             projection_container_path=projection_container_path,
-            gateway=gateway,
             tty=tty,
             stdin_open=stdin_open,
             chown_on_start=chown_on_start,
@@ -780,11 +778,17 @@ class TestLaunchVectorContract(unittest.TestCase):
             "PROJECT_PATH_* must be consecutive with no gaps",
         )
 
-    # ── gateway ──────────────────────────────────────────────────
+    # ── host access ─────────────────────────────────────────────
 
-    def test_gateway_in_add_host(self) -> None:
+    def test_enabled_host_access_in_add_host(self) -> None:
+        from dataclasses import replace
+
+        from docker.versioning.rendering import RunHostAccess
         sel = ProjectSelection(main_project="/work/p1")
-        inputs = self._build_inputs(sel, gateway="192.168.1.1")
+        inputs = replace(
+            self._build_inputs(sel),
+            host_access=RunHostAccess(address="192.168.1.1", mode="external-address"),
+        )
         args = self._vector(inputs)
         self.assertIn("--add-host", args)
         host_idx = args.index("--add-host")
@@ -1217,24 +1221,18 @@ class TestRunTransaction(unittest.TestCase):
         self.assertIn("readonly", spec,
                       "runtime projection must be mounted read-only")
 
-    # ── gateway mapping ──────────────────────────────────────────
+    # ── host access ─────────────────────────────────────────────
 
-    def test_gateway_passed_to_add_host(self) -> None:
-        """The persisted operational gateway must appear in
-        ``--add-host`` exactly, not a default or fallback."""
+    def test_disabled_host_access_no_mapping_by_default(self) -> None:
+        """When the inventory has no ``[runtime.host-access]``, host
+        access is disabled and no ``--add-host`` is rendered."""
         req = self._request(
-            gateway="192.0.2.77",
             executor=FakeRunExecutor(returncode=0),
             inspector=FakeContainerNameInspector(set()),
         )
         result = self._run(req)
-        self.assertIn("--add-host", result.run_args)
-        host_idx = result.run_args.index("--add-host")
-        self.assertEqual(
-            result.run_args[host_idx + 1],
-            "host.docker.internal:192.0.2.77",
-            "gateway must be used exactly, not silently defaulted",
-        )
+        self.assertNotIn("--add-host", result.run_args,
+                         "disabled host access must not emit --add-host")
 
     # ── TTY modes ────────────────────────────────────────────────
 
@@ -3918,7 +3916,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
         "validate_and_plan",
         "materialize",
         "projection_publish",
-        "gateway_rendered",
+        "vector_rendered",
         "docker_execute",
         "projection_cleanup",
     ]
@@ -4076,20 +4074,17 @@ class TestOrchestrationOrdering(unittest.TestCase):
 
         return _mat
 
-    def _gateway_render_patch(self) -> object:
+    def _render_patch(self) -> object:
         """Return a side-effect that delegates to the real
-        ``render_run_vector``, verifies the result contains the
-        gateway mapping, then records ``"gateway_rendered"``."""
+        ``render_run_vector`` and records ``"vector_rendered"``."""
         from docker.versioning.rendering import render_run_vector as _real
 
-        def _gateway(inputs):
+        def _rendered(inputs):
             rv = _real(inputs)
-            self.assertIn("--add-host", rv)
-            self.assertIn("host.docker.internal:host-gateway", rv)
-            self._event_log.append("gateway_rendered")
+            self._event_log.append("vector_rendered")
             return rv
 
-        return _gateway
+        return _rendered
 
     # ── happy-path order ──────────────────────────────────────
 
@@ -4113,7 +4108,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             side_effect=self._materialize_patch(),
         ), mock.patch(
             "docker.versioning.rendering.render_run_vector",
-            side_effect=self._gateway_render_patch(),
+            side_effect=self._render_patch(),
         ):
             result = self._run(req)
 
@@ -4189,7 +4184,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             side_effect=_failing_materialize,
         ), mock.patch(
             "docker.versioning.rendering.render_run_vector",
-            side_effect=self._gateway_render_patch(),
+            side_effect=self._render_patch(),
         ):
             result = self._run(req)
 
@@ -4224,7 +4219,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             side_effect=self._materialize_patch(),
         ), mock.patch(
             "docker.versioning.rendering.render_run_vector",
-            side_effect=self._gateway_render_patch(),
+            side_effect=self._render_patch(),
         ):
             result = self._run(req)
 
@@ -4263,7 +4258,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             side_effect=self._materialize_patch(),
         ), mock.patch(
             "docker.versioning.rendering.render_run_vector",
-            side_effect=self._gateway_render_patch(),
+            side_effect=self._render_patch(),
         ):
             result = self._run(req)
 
@@ -4297,7 +4292,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             side_effect=self._materialize_patch(),
         ), mock.patch(
             "docker.versioning.rendering.render_run_vector",
-            side_effect=self._gateway_render_patch(),
+            side_effect=self._render_patch(),
         ):
             self._run(req)
 

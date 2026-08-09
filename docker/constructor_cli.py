@@ -687,9 +687,6 @@ def _real_dispatcher(
             key, _, value = raw.partition("=")
             overrides[key.strip()] = value.strip()
 
-        # ── gateway ────────────────────────────────────────────
-        gateway = _read_operational_gateway()
-
         # ── remaining flags ────────────────────────────────────
         image = c_args.get("image") or "pi-cli-pi:latest"
         dry_run = bool(c_args.get("dry_run", False))
@@ -719,7 +716,6 @@ def _real_dispatcher(
             image=image,
             selection=selection,
             pi_home_host=str(Path.home() / ".pi"),
-            gateway=gateway,
             overrides=overrides,
             tty=tty,
             stdin_open=stdin_open,

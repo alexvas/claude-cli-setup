@@ -256,13 +256,16 @@ def build_run_inputs(
     pi_home_host: str,
     projection_host_path: str,
     projection_container_path: str,
-    gateway: str = "host-gateway",
     tty: bool = True,
     stdin_open: bool = True,
     chown_on_start: str | None = None,
 ) -> RunRenderInputs:
     """Build :class:`~docker.versioning.rendering.RunRenderInputs`
     from a resolved :class:`ProjectSelection` and runtime parameters.
+
+    Host-access inputs are always disabled — callers that need host
+    access must construct ``RunRenderInputs`` with an explicit
+    ``host_access`` argument.
     """
     return RunRenderInputs(
         image=image,
@@ -272,7 +275,6 @@ def build_run_inputs(
         projection_container_path=projection_container_path,
         main_project=selection.main_project,
         optional_projects=selection.optional_projects,
-        gateway=gateway,
         tty=tty,
         stdin_open=stdin_open,
         chown_on_start=chown_on_start,
@@ -371,10 +373,6 @@ class RunRequest:
     pi_home_host: str
     """Host path to the Pi home directory."""
 
-    gateway: str = "host-gateway"
-    """Persisted operational gateway for ``--add-host``
-    (resolved IP or ``host-gateway`` raw string)."""
-
     overrides: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}),
     )
@@ -456,6 +454,55 @@ class RunResult:
     """Artifact IDs not yet materialized in the cache (dry-run only)."""
 
 
+def _resolve_host_access(
+    policy: object | None,
+    inventory_path: Path,
+) -> "RunHostAccess | None":
+    """Resolve host-access rendering inputs from reviewed policy
+    and the local companion.
+
+    Returns ``None`` when the policy is enabled but the local
+    companion is missing or its ``[host-access].address`` is absent.
+    The caller must translate ``None`` into a config-failure
+    ``RunResult``.
+
+    Raises ``InventoryError`` (from ``load_local_config_for_inventory``)
+    when the companion exists but is malformed, contains unknown keys,
+    or holds an invalid address — carrying the path-specific Phase 1
+    diagnostic.
+    """
+    from docker.versioning.inventory import load_local_config_for_inventory
+    from docker.versioning.rendering import RunHostAccess
+
+    if policy is None:
+        return RunHostAccess.disabled()
+    enabled = getattr(policy, "enabled", False)
+    if not enabled:
+        return RunHostAccess.disabled()
+
+    mode = getattr(policy, "mode", None)
+    proxy_port = getattr(policy, "proxy_port", None)
+    if not mode:
+        return RunHostAccess.disabled()
+
+    try:
+        local = load_local_config_for_inventory(inventory_path)
+    except FileNotFoundError:
+        return None
+
+    if local is None:
+        return None
+
+    addr = getattr(local.host_access, "address", None) if local.host_access else None
+    if not addr or not isinstance(addr, str):
+        return None
+
+    try:
+        return RunHostAccess(address=addr, mode=mode, proxy_port=proxy_port)
+    except ValueError:
+        return None
+
+
 def orchestrate_run(request: RunRequest) -> RunResult:
     """Execute the full run transaction.
 
@@ -482,8 +529,11 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         OverrideValidationError,
         UnsupportedOverrideError,
     )
-    from docker.versioning.inventory import load_inventory
-    from docker.versioning.rendering import render_run_vector
+    from docker.versioning.inventory import (
+        load_inventory,
+        load_local_config_for_inventory,
+    )
+    from docker.versioning.rendering import RunHostAccess, render_run_vector
 
     # ── Step 1: load inventory ──────────────────────────────
     try:
@@ -492,6 +542,27 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         return RunResult(
             exit_kind=ExitKind.CONFIG,
             message=f"Failed to load inventory: {exc}",
+        )
+
+    # ── Step 1b: resolve host-access policy ─────────────────
+    from docker.versioning.inventory import InventoryError
+    try:
+        host_access = _resolve_host_access(
+            getattr(inventory.runtime, "host_access", None),
+            Path(request.inventory_path),
+        )
+    except InventoryError as exc:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+    if host_access is None:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message="Host access is enabled but the local companion "
+                    "is missing or has no [host-access] address. "
+                    "Run 'doctor' first or set [host-access].address "
+                    "in the local companion.",
         )
 
     # ── Step 2: apply overrides ──────────────────────────────
@@ -570,7 +641,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 projection_container_path=projection_container_path,
                 main_project=request.selection.main_project,
                 optional_projects=request.selection.optional_projects,
-                gateway=request.gateway,
+                host_access=host_access,
                 tty=request.tty,
                 stdin_open=request.stdin_open,
                 command=request.command,
@@ -699,7 +770,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 projection_container_path=projection_container_path,
                 main_project=request.selection.main_project,
                 optional_projects=request.selection.optional_projects,
-                gateway=request.gateway,
+                host_access=host_access,
                 tty=request.tty,
                 stdin_open=request.stdin_open,
                 command=request.command,

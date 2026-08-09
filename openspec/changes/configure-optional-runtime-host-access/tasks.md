@@ -73,21 +73,21 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### GREEN
 
-- [ ] 2.7 Replace unconditional gateway fields in run request/render DTOs with typed optional host-access inputs derived from Phase 1 policy and local state.
-- [ ] 2.8 Resolve and validate enabled host-access state at the start of run planning before any side-effect boundary.
-- [ ] 2.9 Make run-vector rendering omit host-access arguments when disabled and emit the exact mapping and address variable required by tasks 2.1–2.3 when enabled.
-- [ ] 2.10 Add conditional `HOST_PROXY_PORT` rendering without proxy URL derivation as required by task 2.4.
-- [ ] 2.11 Propagate the same policy-aware host-access inputs through dry-run and real execution paths until tasks 2.5–2.6 pass.
+- [x] 2.7 Replace unconditional gateway fields in run request/render DTOs with typed optional host-access inputs derived from Phase 1 policy and local state.
+- [x] 2.8 Resolve and validate enabled host-access state at the start of run planning before any side-effect boundary.
+- [x] 2.9 Make run-vector rendering omit host-access arguments when disabled and emit the exact mapping and address variable required by tasks 2.1–2.3 when enabled.
+- [x] 2.10 Add conditional `HOST_PROXY_PORT` rendering without proxy URL derivation as required by task 2.4.
+- [x] 2.11 Propagate the same policy-aware host-access inputs through dry-run and real execution paths until tasks 2.5–2.6 pass.
 
 ### INTROSPECT
 
-- [ ] 2.12 Inspect all constructors of `RunRequest` and `RunRenderInputs`; remove obsolete defaults that can silently re-enable host mapping.
-- [ ] 2.13 Inspect the rendered Docker environment surface and prove no `.env`, `--env-file`, `PI_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` coupling was introduced.
+- [x] 2.12 Inspect all constructors of `RunRequest` and `RunRenderInputs`; remove obsolete defaults that can silently re-enable host mapping.
+- [x] 2.13 Inspect the rendered Docker environment surface and prove no `.env`, `--env-file`, `PI_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` coupling was introduced.
 
 ### VALIDATE
 
-- [ ] 2.14 Run focused rendering, launcher, facade-run, dry-run, artifact-side-effect-order, IPv4, IPv6, and custom-inventory tests and fix all failures.
-- [ ] 2.15 Run static checks for launcher and rendering modules and confirm every Phase 2 vector is deterministic and shell-free.
+- [x] 2.14 Run focused rendering, launcher, facade-run, dry-run, artifact-side-effect-order, IPv4, IPv6, and custom-inventory tests and fix all failures.
+- [x] 2.15 Run static checks for launcher and rendering modules and confirm every Phase 2 vector is deterministic and shell-free.
 
 ## 3. Mode-aware doctor and atomic local persistence
 

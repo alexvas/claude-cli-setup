@@ -26,13 +26,16 @@ def _render(*,
             pi_home_host: str = "/home/alice/.pi",
             main_project: str = "/home/dev/work/my-project",
             optional_projects: tuple[str, ...] = (),
-            gateway: str = "host-gateway",
+            host_access = None,
             tty: bool = True,
             stdin_open: bool = True,
             command: tuple[str, ...] = (),
             chown_on_start: str | None = None,
             artifact_mounts: tuple = (),
             ) -> tuple[str, ...]:
+    from docker.versioning.rendering import RunHostAccess
+    if host_access is None:
+        host_access = RunHostAccess.disabled()
     return render_run_vector(RunRenderInputs(
         image=image,
         container_name=container_name,
@@ -41,7 +44,7 @@ def _render(*,
         pi_home_host=pi_home_host,
         main_project=main_project,
         optional_projects=optional_projects,
-        gateway=gateway,
+        host_access=host_access,
         tty=tty,
         stdin_open=stdin_open,
         command=command,
@@ -207,18 +210,25 @@ class TestEnvironment(unittest.TestCase):
 
 
 class TestGatewayMapping(unittest.TestCase):
-    """Assert --add-host for host.docker.internal."""
+    """Assert --add-host for host.docker.internal only when enabled."""
 
-    def test_gateway_host_gateway(self):
-        args = _render(gateway="host-gateway")
+    def test_gateway_docker_gateway_mode(self):
+        from docker.versioning.rendering import RunHostAccess
+        args = _render(host_access=RunHostAccess(address="172.17.0.1", mode="docker-gateway"))
         self.assertIn("--add-host", args)
         idx = args.index("--add-host")
-        self.assertEqual(args[idx + 1], "host.docker.internal:host-gateway")
+        self.assertEqual(args[idx + 1], "host.docker.internal:172.17.0.1")
 
-    def test_gateway_explicit_ip(self):
-        args = _render(gateway="10.0.2.2")
+    def test_gateway_external_address_mode(self):
+        from docker.versioning.rendering import RunHostAccess
+        args = _render(host_access=RunHostAccess(address="10.0.2.2", mode="external-address"))
         idx = args.index("--add-host")
         self.assertEqual(args[idx + 1], "host.docker.internal:10.0.2.2")
+
+    def test_gateway_disabled_has_no_mapping(self):
+        from docker.versioning.rendering import RunHostAccess
+        args = _render(host_access=RunHostAccess.disabled())
+        self.assertNotIn("--add-host", args)
 
 
 # ---------------------------------------------------------------------------
