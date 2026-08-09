@@ -64,12 +64,12 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### RED
 
-- [ ] 2.1 Add failing renderer tests proving disabled host access emits no `--add-host`, `HOST_ACCESS_ADDRESS`, or `HOST_PROXY_PORT` arguments.
-- [ ] 2.2 Add failing renderer tests proving Docker-gateway mode emits exactly one `host.docker.internal:<address>` mapping and one matching `HOST_ACCESS_ADDRESS` variable.
-- [ ] 2.3 Add failing renderer tests proving external-address mode supports validated IPv4 and IPv6 mappings and rejects `host-gateway` as an external address.
-- [ ] 2.4 Add failing renderer tests proving a configured proxy port emits only `HOST_PROXY_PORT=<port>` and does not synthesize any proxy URL or standard proxy variable.
-- [ ] 2.5 Add failing launcher tests proving missing or malformed enabled-mode local state fails before cache download, artifact publication, projection creation, container inspection, or Docker execution.
-- [ ] 2.6 Add failing dry-run tests proving host-access arguments are complete when enabled, absent when disabled, and local state remains read-only.
+- [x] 2.1 Add failing renderer tests proving disabled host access emits no `--add-host`, `HOST_ACCESS_ADDRESS`, or `HOST_PROXY_PORT` arguments.
+- [x] 2.2 Add failing renderer tests proving Docker-gateway mode emits exactly one `host.docker.internal:<address>` mapping and one matching `HOST_ACCESS_ADDRESS` variable.
+- [x] 2.3 Add failing renderer tests proving external-address mode supports validated IPv4 and IPv6 mappings and rejects `host-gateway` as an external address.
+- [x] 2.4 Add failing renderer tests proving a configured proxy port emits only `HOST_PROXY_PORT=<port>` and does not synthesize any proxy URL or standard proxy variable.
+- [x] 2.5 Add failing launcher tests proving missing or malformed enabled-mode local state fails before cache download, artifact publication, projection creation, container inspection, or Docker execution.
+- [x] 2.6 Add failing dry-run tests proving host-access arguments are complete when enabled, absent when disabled, and local state remains read-only.
 
 ### GREEN
 
