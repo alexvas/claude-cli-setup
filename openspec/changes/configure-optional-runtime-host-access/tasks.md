@@ -130,10 +130,10 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### RED
 
-- [ ] 4.1 Add failing runtime-verification tests proving enabled host access requires exact `host.docker.internal` resolution and exact `HOST_ACCESS_ADDRESS` equality.
-- [ ] 4.2 Add failing runtime-verification tests proving configured `HOST_PROXY_PORT` must match and omitted proxy port creates no positive port requirement.
-- [ ] 4.3 Add failing runtime-verification tests proving disabled host access skips positive hostname resolution and fails if constructor-set `HOST_ACCESS_ADDRESS` or `HOST_PROXY_PORT` is present.
-- [ ] 4.4 Add failing facade verification tests proving expectations come from the selected reviewed inventory and its matching local companion, including custom inventory names.
+- [x] 4.1 Add failing runtime-verification tests proving enabled host access requires exact `host.docker.internal` resolution and exact `HOST_ACCESS_ADDRESS` equality.
+- [x] 4.2 Add failing runtime-verification tests proving configured `HOST_PROXY_PORT` must match and omitted proxy port creates no positive port requirement.
+- [x] 4.3 Add failing runtime-verification tests proving disabled host access skips positive hostname resolution and fails if constructor-set `HOST_ACCESS_ADDRESS` or `HOST_PROXY_PORT` is present.
+- [x] 4.4 Add failing facade verification tests proving expectations come from the selected reviewed inventory and its matching local companion, including custom inventory names.
 
 ### GREEN
 
