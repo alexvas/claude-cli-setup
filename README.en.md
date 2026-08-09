@@ -33,6 +33,72 @@ A deliberate Python override uses:
 
 Override constraints accept only `==, >, >=, <, <=` with complete `X.Y.Z` versions. Wildcards, incomplete versions, OR expressions, and prerelease values are rejected unless policy explicitly allows them. The inventory pins reviewed non-Debian inputs, but Debian repositories and BuildKit metadata mean byte-identical OCI output is not guaranteed.
 
+## Host access (optional)
+
+Ordinary builds and runs do not need host connectivity. Host access is **disabled by default**: omit `[runtime.host-access]` and do not create a local companion unless you want a custom cache directory.
+
+To let a container reach a host service, enable one of the two reviewed policies in `docker-constructor.toml`:
+
+```toml
+[runtime.host-access]
+enabled = true
+mode = "docker-gateway" # or "external-address"
+# proxy-port = 1080      # optional; integer 1–65535
+```
+
+Both modes make the configured address available as `host.docker.internal` and `HOST_ACCESS_ADDRESS`. After configuration, run normally; no special `run` option is needed.
+
+### docker-gateway: let doctor select the Docker gateway
+
+Use this mode when Docker's gateway is the correct route to the host. Run doctor once to diagnose the gateway and save its selected concrete address:
+
+```bash
+./docker/docker-constructor.py doctor --inventory docker-constructor.toml
+```
+
+Doctor writes `[host-access].address` to `docker-constructor.local.toml`, beside `docker-constructor.toml`. If the address later becomes stale, run doctor again. A missing address makes `run` fail with instructions to run doctor; ordinary `run` never probes Docker or changes local state. Doctor performs gateway diagnosis, persistence, and repair only in `docker-gateway` mode: it does not diagnose, overwrite, persist, or repair state for `external-address` or disabled host access.
+
+### external-address: provide an address yourself
+
+Use this mode when the host service is reachable through a known host-interface IP. Set that IP yourself in the local companion; doctor does not discover, replace, persist, or repair external-address state:
+
+```toml
+# docker-constructor.toml
+[runtime.host-access]
+enabled = true
+mode = "external-address"
+
+# docker-constructor.local.toml
+[host-access]
+address = "192.0.2.10"
+```
+
+`address` must be an IP address in this mode; `host-gateway` is not accepted. A service reached through `HOST_ACCESS_ADDRESS` must listen on an interface reachable from that address. A loopback-only service can remain unreachable, and firewall rules still apply.
+
+### Local companion and custom inventories
+
+The local companion contains machine-specific state only; it cannot override reviewed policy, dependencies, or `cache.ttl`. The canonical inventory `docker-constructor.toml` uses `docker-constructor.local.toml`. A selected custom inventory such as `--inventory /work/custom.toml` uses `/work/custom.local.toml` beside it in the same directory; it never falls back to repository-root local state.
+
+### Optional proxy port and environment variables
+
+Set `proxy-port` only when applications need to know a host-side port. The constructor then sets `HOST_PROXY_PORT=<port>`; both modes set `HOST_ACCESS_ADDRESS=<address>`. These are neutral address/port variables: the constructor does not select a proxy protocol, construct a proxy URL, or set `PI_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
+
+### Cache settings
+
+Keep portable cache policy in the reviewed inventory and machine-specific paths in the local companion:
+
+```toml
+# docker-constructor.toml
+[cache]
+ttl = 3600
+
+# docker-constructor.local.toml
+[cache]
+dir = "/home/dev/.cache/pi-docker"
+```
+
+`cache.ttl` belongs in `docker-constructor.toml`; `cache.dir` belongs only in `docker-constructor.local.toml`. When `[cache].dir` is absent, the existing XDG cache-directory default is used. Host access does not need to be enabled to use a local cache directory.
+
 ## 2. Launch the environment
 
 Open the interactive project selector:

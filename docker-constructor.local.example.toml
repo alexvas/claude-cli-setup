@@ -1,0 +1,20 @@
+# Example local companion to docker-constructor.toml.
+#
+# This file is tracked for reference only — your actual local companion
+# (docker-constructor.local.toml) is ignored by git and never committed.
+#
+# Fields written by `./docker/docker-constructor.py doctor`:
+#
+#   [host-access]
+#   address = "10.0.2.2"   # concrete gateway IP (docker-gateway mode)
+#
+# Fields you may add manually:
+#
+#   [cache]
+#   dir = "/path/to/cache"  # overrides the XDG default cache location
+
+[host-access]
+address = "10.0.2.2"
+
+[cache]
+dir = "/home/dev/.cache/pi-docker"

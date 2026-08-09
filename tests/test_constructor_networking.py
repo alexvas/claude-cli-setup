@@ -41,10 +41,8 @@ from docker.networking import (
     detect_docker_mode,
     detect_lan_ip,
     diagnose_gateway,
-    persist_gateway,
     plan_rootless_override,
     probe_gateway,
-    update_env_file,
 )
 
 # Re-use the in-memory fake from the GREEN‑phase suite so RED tests never
@@ -665,7 +663,7 @@ class TestDiagnosisOrchestration(unittest.TestCase):
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         self.assertEqual(d.chosen_gateway, "192.168.1.5")
-        self.assertEqual(d.host_gateway_ip, "10.9.9.9")
+        self.assertEqual(d.resolved_address, "10.9.9.9")
 
     def test_all_fail_yields_no_gateway(self):
         def run(cmd):
@@ -682,7 +680,7 @@ class TestDiagnosisOrchestration(unittest.TestCase):
             _host_probe_factory=lambda: FakeHostProbeServer(token="X"),
         )
         self.assertIsNone(d.chosen_gateway)
-        self.assertIsNone(d.host_gateway_ip)
+        self.assertIsNone(d.resolved_address)
         self.assertEqual(len(d.probes), 2)
         self.assertFalse(d.probes[0].ok)
         self.assertFalse(d.probes[1].ok)
@@ -792,12 +790,12 @@ class TestImmutableDtos(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 14. host_gateway_ip resolution
+# 14. resolved_address resolution
 # ---------------------------------------------------------------------------
 
 
 class TestHostGatewayIpResolution(unittest.TestCase):
-    """Requirement 14 — host_gateway_ip precedence chain."""
+    """Requirement 14 — resolved_address precedence chain."""
 
     def test_resolved_ip_when_available(self):
         d = GatewayDiagnosis(
@@ -807,7 +805,7 @@ class TestHostGatewayIpResolution(unittest.TestCase):
             chosen_gateway="host-gateway",
             override_installed=False, override_needed=False,
         )
-        self.assertEqual(d.host_gateway_ip, "10.0.0.1")
+        self.assertEqual(d.resolved_address, "10.0.0.1")
 
     def test_fallback_to_candidate(self):
         d = GatewayDiagnosis(
@@ -817,7 +815,7 @@ class TestHostGatewayIpResolution(unittest.TestCase):
             chosen_gateway="host-gateway",
             override_installed=False, override_needed=False,
         )
-        self.assertEqual(d.host_gateway_ip, "host-gateway")
+        self.assertEqual(d.resolved_address, "host-gateway")
 
     def test_none_when_no_candidate_succeeds(self):
         d = GatewayDiagnosis(
@@ -827,7 +825,7 @@ class TestHostGatewayIpResolution(unittest.TestCase):
             chosen_gateway=None,
             override_installed=False, override_needed=False,
         )
-        self.assertIsNone(d.host_gateway_ip)
+        self.assertIsNone(d.resolved_address)
 
     def test_none_when_chosen_but_not_ok(self):
         """Edge case: chosen_gateway is set but its ProbeResult is not ok."""
@@ -838,7 +836,7 @@ class TestHostGatewayIpResolution(unittest.TestCase):
             chosen_gateway="host-gateway",
             override_installed=False, override_needed=False,
         )
-        self.assertIsNone(d.host_gateway_ip)
+        self.assertIsNone(d.resolved_address)
 
     def test_chosen_probe_matches(self):
         d = GatewayDiagnosis(
@@ -1549,75 +1547,6 @@ class TestApplicationFailures(unittest.TestCase):
 # ======================================================================
 # 7.2 — Operational persistence (requirement 22)
 # ======================================================================
-
-
-class TestPersistenceRequirements(unittest.TestCase):
-    """Requirement 22: ``update_env_file`` persistence contracts."""
-
-    ENV = Path("/fake/.env")
-    CONSTRUCTOR = Path("/fake/docker-constructor.toml")
-
-    def setUp(self):
-        from tests.test_networking import FakeFilesystem
-        self.fs = FakeFilesystem()
-
-    def test_preserves_unrelated_keys(self):
-        self.fs._files[str(self.ENV)] = "BASE_IMAGE=alpine\n"
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=self.fs)
-        self.assertIn("BASE_IMAGE=alpine", self.fs.read_text(self.ENV))
-
-    def test_replaces_existing_gateway_key_without_duplication(self):
-        self.fs._files[str(self.ENV)] = "HOST_GATEWAY_IP=10.0.0.1\n"
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.99", content)
-        self.assertNotIn("10.0.0.1", content)
-
-    def test_appends_gateway_when_absent(self):
-        self.fs._files[str(self.ENV)] = "OTHER=val\n"
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertIn("OTHER=val", content)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.1", content)
-
-    def test_deterministic_newline_behavior(self):
-        self.fs._files[str(self.ENV)] = "A=1"  # no trailing newline
-        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertTrue(content.endswith("\n"),
-                        "output must end with exactly one newline")
-
-    def test_publishes_atomically_via_rename(self):
-        update_env_file(self.ENV, {"X": "1"}, _fs=self.fs)
-        self.assertEqual(len(self.fs.renames), 1)
-        self.assertEqual(self.fs.renames[0][1], self.ENV)
-
-    def test_rejects_empty_gateway_value(self):
-        with self.assertRaises(ValueError):
-            update_env_file(self.ENV, {"HOST_GATEWAY_IP": ""}, _fs=self.fs)
-
-    def test_rejects_missing_gateway_key_with_empty_value(self):
-        with self.assertRaises(ValueError):
-            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "   "}, _fs=self.fs)
-
-    def test_never_modifies_docker_constructor_toml(self):
-        """Dotenv writes must never touch the constructor config."""
-        self.fs._files[str(self.CONSTRUCTOR)] = "[build]\n"
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=self.fs)
-        self.assertEqual(self.fs.read_text(self.CONSTRUCTOR), "[build]\n",
-                         "docker-constructor.toml must be untouched")
-
-    def test_propagates_filesystem_failures_structurally(self):
-        class _FailingFS(FakeFilesystem):
-            def write_text(self, path, content, encoding="utf-8"):
-                raise OSError("io error")
-
-        fs = _FailingFS(files={str(self.ENV): "SAFE=1\n"})
-        with self.assertRaises(OSError) as ctx:
-            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"}, _fs=fs)
-        self.assertIn("io error", str(ctx.exception))
-        self.assertEqual(fs.read_text(self.ENV), "SAFE=1\n")
-
 
 # ======================================================================
 # 7.3 — Fake-boundary contracts (requirements 24–27)

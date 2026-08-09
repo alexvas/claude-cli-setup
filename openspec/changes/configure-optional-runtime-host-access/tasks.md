@@ -166,21 +166,21 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### GREEN
 
-- [ ] 5.4 Remove obsolete `HOST_GATEWAY_IP` readers, writers, DTO/result fields, `.env.example` entries, and unconditional gateway wording from maintained production sources.
-- [ ] 5.5 Add the local companion ignore rule and tracked `docker-constructor.local.example.toml` required by task 5.2.
-- [ ] 5.6 Update README.md with the opt-in host-access workflows, external-service binding caveat, neutral environment variables, doctor scope, and cache-dir migration.
-- [ ] 5.7 Apply equivalent supported commands and semantics to README.en.md and README.zh.md without introducing translation-specific behavior.
-- [ ] 5.8 Update maintained semantic-source assertions and module documentation to match the final policy/local-state boundary.
+- [x] 5.4 Remove obsolete `HOST_GATEWAY_IP` readers, writers, DTO/result fields, `.env.example` entries, and unconditional gateway wording from maintained production sources.
+- [x] 5.5 Add the local companion ignore rule and tracked `docker-constructor.local.example.toml` required by task 5.2.
+- [x] 5.6 Update README.md with the opt-in host-access workflows, external-service binding caveat, neutral environment variables, doctor scope, and cache-dir migration.
+- [x] 5.7 Apply equivalent supported commands and semantics to README.en.md and README.zh.md without introducing translation-specific behavior.
+- [x] 5.8 Update maintained semantic-source assertions and module documentation to match the final policy/local-state boundary.
 
 ### INTROSPECT
 
-- [ ] 5.9 Search all maintained non-archived sources for `HOST_GATEWAY_IP`, unconditional `host.docker.internal`, reviewed `cache.dir`, Compose gateway assumptions, and duplicated proxy URL construction; classify or remove every hit.
-- [ ] 5.10 Compare README command sets, configuration keys, defaults, mode semantics, and maintenance guidance across all three translations and resolve every mismatch.
+- [x] 5.9 Search all maintained non-archived sources for `HOST_GATEWAY_IP`, unconditional `host.docker.internal`, reviewed `cache.dir`, Compose gateway assumptions, and duplicated proxy URL construction; classify or remove every hit.
+- [x] 5.10 Compare README command sets, configuration keys, defaults, mode semantics, and maintenance guidance across all three translations and resolve every mismatch.
 
 ### VALIDATE
 
-- [ ] 5.11 Run semantic-source, documentation, configuration-template, readonly-command, CLI-help, and migration tests and fix all failures.
-- [ ] 5.12 Run `openspec validate configure-optional-runtime-host-access` and confirm proposal, design, delta specs, and this binding task contract remain consistent.
+- [x] 5.11 Run semantic-source, documentation, configuration-template, readonly-command, CLI-help, and migration tests and fix all failures.
+- [x] 5.12 Run `openspec validate configure-optional-runtime-host-access` and confirm proposal, design, delta specs, and this binding task contract remain consistent.
 
 ## 6. Integrated acceptance and release boundary
 

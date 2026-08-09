@@ -9,10 +9,11 @@
 schema = 1
 
 [cache]
-# Custom directory for disk-backed HTTP cache (default: $XDG_CACHE_HOME/pi-cli/versioning)
-# dir = "/path/to/cache"
 # Default TTL in seconds (can be overridden with --cache-ttl)
 # ttl = 3600
+#
+# The cache directory is configured in docker-constructor.local.toml,
+# not here.  See docker-constructor.local.example.toml for the schema.
 
 # ---------------------------------------------------------------------------
 # Base image

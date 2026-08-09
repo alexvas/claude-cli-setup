@@ -17,16 +17,13 @@ from unittest.mock import patch
 # Helpers — keep minimal; reuse production wiring.
 # ---------------------------------------------------------------------------
 
-
 _REAL_INVENTORY = (Path(__file__).resolve().parents[1] / "docker-constructor.toml").read_text()
-
 
 def _write_inventory(root: Path, *, policy: str = "") -> Path:
     """Create a minimal inventory with optional [runtime.host-access]."""
     inventory = root / "docker-constructor.toml"
     inventory.write_text(_REAL_INVENTORY + "\n" + policy)
     return inventory
-
 
 class TestDoctorModeAwareRed(unittest.TestCase):
     """3.1–3.3: Doctor dispatch by host-access mode.
@@ -87,7 +84,6 @@ class TestDoctorModeAwareRed(unittest.TestCase):
                 repair_consent=False,
                 inventory_path=inv,
                 _diagnose_gateway=bomb_diagnose,
-                _persist_gateway=bomb_persist,
                 _plan_rootless_override=bomb_plan,
             )
 
@@ -315,7 +311,6 @@ class TestDoctorModeAwareRed(unittest.TestCase):
             # Must not add reviewed-only fields
             self.assertNotIn("enabled", after)
             self.assertNotIn("mode", after)
-
 
 class TestAtomicPersistenceRed(unittest.TestCase):
     """3.4–3.5, 3.13: Atomic local companion writes.
@@ -678,7 +673,6 @@ class TestAtomicPersistenceRed(unittest.TestCase):
             self.assertIn('[cache]', after)
             self.assertIn('dir = "/tmp/c"', after)
 
-
 class TestDoctorConsentRed(unittest.TestCase):
     """3.6: Rootless override consent remains explicit.
 
@@ -867,7 +861,6 @@ class TestDoctorConsentRed(unittest.TestCase):
             )
             result = orchestrate_doctor(req)
             self.assertFalse(result.repair_applied)
-
 
 if __name__ == "__main__":
     unittest.main()

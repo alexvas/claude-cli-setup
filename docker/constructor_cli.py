@@ -248,30 +248,6 @@ def _discover_project_paths_from_container(
     return tuple(Path(p) for _, p in parsed)
 
 
-def _read_operational_gateway() -> str:
-    """Read the persisted operational gateway from the repo ``.env``.
-
-    Returns ``"host-gateway"`` when the file is missing or the key
-    is absent — matching the default in ``RunRenderInputs``.
-    """
-    env_path = _REPO_ROOT / ".env"
-    if not env_path.is_file():
-        return "host-gateway"
-    try:
-        for line in env_path.read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#") or "=" not in stripped:
-                continue
-            key, _, value = stripped.partition("=")
-            if key.strip() == "HOST_GATEWAY_IP":
-                val = value.strip()
-                if val:
-                    return val
-    except OSError:
-        pass
-    return "host-gateway"
-
-
 def _resolve_verify_host_access(
     inv_path: str,
 ) -> tuple[object, str | None, str | None]:
@@ -601,8 +577,8 @@ def _real_dispatcher(
         if result.repair_applied:
             lines.append("Rootless override applied")
             post = result.post_repair_diagnosis
-            if post is not None and post.host_gateway_ip:
-                lines.append(f"Post-repair gateway: {post.host_gateway_ip}")
+            if post is not None and post.resolved_address:
+                lines.append(f"Post-repair gateway: {post.resolved_address}")
         if result.repair_failure is not None:
             lines.append(f"Repair failed: {result.repair_failure.detail}")
         if msg:
@@ -648,7 +624,7 @@ def _real_dispatcher(
         # -- post-repair diagnosis ------------------------------------
         post = result.post_repair_diagnosis
         if post is not None:
-            post_gw = post.host_gateway_ip
+            post_gw = post.resolved_address
             post_data: dict[str, object] = {
                 "gateway": post_gw,
                 "mode": post.mode.value,

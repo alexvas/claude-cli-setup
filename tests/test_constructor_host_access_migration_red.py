@@ -527,11 +527,10 @@ _README_REQUIREMENTS: tuple[
           "不能", "不运行", "不诊断", "不覆盖", "不修复"),),
     ),
     (
-        "cache.dir migration from reviewed inventory to local companion",
+        "cache.dir local companion and cache.ttl reviewed policy",
         ("cache.dir",),
-        (("migration", "migrate", "move", "local", "companion",
-           "миграция", "перенести", "локальный",
-           "迁移", "移动", "本地"),),
+        (("cache.ttl",),
+         ("local", "companion", "локальный", "本地")),
     ),
 )
 

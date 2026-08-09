@@ -23,16 +23,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-
 # ── helpers ────────────────────────────────────────────────────────────
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
-
 def _load_mod() -> Any:
     from docker import constructor_cli
     return constructor_cli
-
 
 def _run(
     mod: Any,
@@ -65,10 +62,8 @@ def _run(
         )
     return rc, out.getvalue(), err.getvalue()
 
-
 def _strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
-
 
 def _make_fake_dispatcher(mod: Any, **kw: object) -> Any:
     """Return a callable that returns a single fixed CommandResult."""
@@ -89,7 +84,6 @@ def _make_fake_dispatcher(mod: Any, **kw: object) -> Any:
 
     return _dispatch
 
-
 def _make_fake_process_runner(
     return_code: int = 0,
     stdout: str = "",
@@ -106,7 +100,6 @@ def _make_fake_process_runner(
             )
 
     return _Runner()
-
 
 def _make_recording_runner(
     return_code: int = 0,
@@ -128,9 +121,7 @@ def _make_recording_runner(
 
     return _Rec(), calls
 
-
 # ── Evidence bundle assertions ─────────────────────────────────────────
-
 
 def _assert_evidence_bundle_complete(
     test_case: unittest.TestCase,
@@ -246,9 +237,7 @@ def _assert_evidence_bundle_complete(
         "command_count": len(cmd_lines),
     }
 
-
 # ── Scripted Docker runner ─────────────────────────────────────────────
-
 
 class _ScriptedProcessRunner:
     """A ``ProcessRunner`` that returns scripted responses based on
@@ -297,7 +286,6 @@ class _ScriptedProcessRunner:
     def called(self) -> tuple[tuple[str, ...], ...]:
         """Commands seen by this runner, in call order."""
         return tuple(self._called)
-
 
 def _build_happy_runtime_runner(
     container: str,
@@ -370,7 +358,6 @@ def _build_happy_runtime_runner(
            rc=1)
     return r
 
-
 def _make_runtime_fixture() -> tuple[str, str, str, str]:
     """Create a temporary directory with the files needed for runtime
     verification and return (dir_path, inventory_path, projection_path,
@@ -398,11 +385,9 @@ version = "0.9.1"
 
     return td, str(td_p / "docker-constructor.toml"), str(proj), proj_hash
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Failed build (real orchestration, injected runner)
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestBuildFailureDiagnostics(unittest.TestCase):
     """Build failures exercised through :func:`orchestrate_build`
@@ -449,7 +434,7 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
         from docker.networking import PersistenceResult
         def _fake_persist(_path: Any, _ip: str, **__: Any) -> PersistenceResult:
             return PersistenceResult(
-                path=_path, gateway=_ip, written=True,
+                path=_path, address=_ip, written=True,
             )
         return _fake_persist
 
@@ -486,7 +471,6 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             dry_run=False,
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
-            _persist_gateway=self._make_fake_persist(),
             _publish_projection=self._make_fake_publish(),
         )
         result = orchestrate_build(req)
@@ -520,7 +504,6 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             dry_run=False,
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
-            _persist_gateway=self._make_fake_persist(),
             _publish_projection=self._make_fake_publish(),
         )
         result = orchestrate_build(req)
@@ -551,7 +534,6 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             dry_run=False,
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
-            _persist_gateway=self._make_fake_persist(),
             _publish_projection=self._make_fake_publish(),
         )
         result = orchestrate_build(req)
@@ -579,7 +561,6 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             dry_run=True,
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
-            _persist_gateway=self._make_fake_persist(),
             _publish_projection=self._make_fake_publish(),
         )
         result = orchestrate_build(req)
@@ -591,11 +572,9 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
         self.assertIsNone(result.process_result)
         self.assertEqual((), runner.called)
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Failed run
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestRunFailureDiagnostics(unittest.TestCase):
     """Run failures exercised through :func:`orchestrate_run`
@@ -1307,11 +1286,9 @@ class TestRunFailureDiagnostics(unittest.TestCase):
             f"must fit within MAX_RUN_DIAGNOSTIC_BYTES ({_MAX})",
         )
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Mismatched image expectations (verify build)
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
     """``verify --scope build`` with mismatched versions produces
@@ -1448,11 +1425,9 @@ class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
         self.assertIn("rust", plain.lower(),
                        "rust observation must be present")
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Bad runtime mounts / exposed paths / extension failures
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestVerifyRuntimeMountDiagnostics(unittest.TestCase):
     """``verify --scope runtime`` exercises the real verification
@@ -1851,11 +1826,9 @@ class TestVerifyRuntimeMountDiagnostics(unittest.TestCase):
         self.assertIn(self._proj_hash[:12], plain,
                        "must include host hash prefix")
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Project errors
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestProjectErrorDiagnostics(unittest.TestCase):
     """Project-level misconfigurations must leave clear diagnostics."""
@@ -1900,11 +1873,9 @@ class TestProjectErrorDiagnostics(unittest.TestCase):
         self.assertEqual(3, rc)
         self.assertIn("/tmp/proj1", _strip_ansi(err))
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.2  Cross-cutting evidence assertions
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestEvidenceCompleteness(unittest.TestCase):
     """Every simulated failure provides enough evidence for diagnosis
@@ -2070,11 +2041,9 @@ class TestEvidenceCompleteness(unittest.TestCase):
             import shutil
             shutil.rmtree(td, ignore_errors=True)
 
-
 # ════════════════════════════════════════════════════════════════════════
 # 14.2-e  Truncation and redaction of captured evidence output
 # ════════════════════════════════════════════════════════════════════════
-
 
 class TestStaticEvidenceNormalization(unittest.TestCase):
     """Pre-captured verification output is normalised through the same

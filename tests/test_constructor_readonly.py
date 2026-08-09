@@ -968,7 +968,7 @@ class TestAllExecutionBoundariesGuarded(unittest.TestCase):
         try:
             import docker.networking
             for fn in ("diagnose_gateway", "probe_gateway",
-                       "apply_rootless_override", "persist_gateway"):
+                       "apply_rootless_override"):
                 patches.append(
                     patch.object(docker.networking, fn,
                                  side_effect=_bomb))

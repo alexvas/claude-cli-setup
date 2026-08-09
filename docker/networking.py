@@ -75,7 +75,7 @@ class GatewayDiagnosis:
     """Structured result of a full gateway diagnosis run.
 
     Immutable: callers cannot mutate fields after construction.
-    ``host_gateway_ip`` resolves to the successful probe's resolved IP,
+    ``resolved_address`` resolves to the successful probe's resolved IP,
     falling back to the candidate string when the resolved IP is
     unavailable.  Returns ``None`` when no candidate succeeded.
     """
@@ -95,7 +95,7 @@ class GatewayDiagnosis:
         return self.mode is DockerMode.ROOTLESS
 
     @property
-    def host_gateway_ip(self) -> Optional[str]:
+    def resolved_address(self) -> Optional[str]:
         """Concrete IP for the chosen gateway (if one succeeded)."""
         if self.chosen_gateway is None:
             return None
@@ -172,9 +172,9 @@ class OverrideFailure:
 
 @dataclass(frozen=True)
 class PersistenceResult:
-    """Result of persisting a gateway IP to the environment file."""
+    """Result of persisting a host-access address to the local companion."""
     path: Path
-    gateway: str
+    address: str
     written: bool
     error: Optional[str] = None
 
@@ -607,16 +607,6 @@ _PROBE_OK_LINE = re.compile(r'(?m)^PROBE_OK$')
 
 # Gateway values must be "host-gateway" or a valid IPv4/IPv6 address.
 
-def _is_valid_gateway(value: str) -> bool:
-    if value == "host-gateway":
-        return True
-    try:
-        ipaddress.ip_address(value)
-        return True
-    except ValueError:
-        return False
-
-
 def probe_gateway(
     candidate: str,
     probe_port: int,
@@ -752,114 +742,10 @@ def diagnose_gateway(
         server.stop()
 
 
-# ---------------------------------------------------------------------------
-# Operational persistence
-# ---------------------------------------------------------------------------
-
-
-def update_env_file(
-    path: Path,
-    updates: dict[str, str],
-    *,
-    remove_keys: Iterable[str] = (),
-    _fs: Optional[Filesystem] = None,
-    _tmp_suffix: Optional[str] = None,
-) -> None:
-    """Persist operational key=value pairs to a dotenv file.
-
-    Preserves existing non-removed entries, overwrites matching keys,
-    and appends new keys at the end.  Writes to a unique temporary
-    file in the same directory, then atomically renames onto ``path``
-    so concurrent callers never share a temporary file.  The temporary
-    file is cleaned up in a ``finally`` block even when the rename
-    fails.
-
-    Raises ``ValueError`` when ``HOST_GATEWAY_IP`` is set to an empty
-    or whitespace-only value.
-    """
-    # Validate gateway value before touching the filesystem
-    gateway = updates.get("HOST_GATEWAY_IP")
-    if gateway is not None and not gateway.strip():
-        raise ValueError("HOST_GATEWAY_IP must be non-empty")
-    fs = _fs or Filesystem()
-    unique = (
-        _tmp_suffix
-        if _tmp_suffix is not None
-        else f"{os.getpid()}.{int(time.time() * 1_000_000)}"
-    )
-    tmp = path.with_name(f"{path.name}.tmp.{unique}")
-
-    lines: list[str] = []
-    if fs.is_file(path):
-        lines = fs.read_text(path).splitlines()
-
-    remove = set(remove_keys)
-    seen: set[str] = set()
-    new_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        key = ""
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-        if key in remove:
-            continue
-        if key in updates:
-            new_lines.append(f"{key}={updates[key]}")
-            seen.add(key)
-        else:
-            new_lines.append(line)
-
-    for key, value in updates.items():
-        if key not in seen:
-            new_lines.append(f"{key}={value}")
-
-    content = "\n".join(new_lines) + "\n"
-
-    try:
-        fs.write_text(tmp, content)
-        fs.rename(tmp, path)
-    finally:
-        if fs.is_file(tmp):
-            try:
-                fs.delete(tmp)
-            except OSError:
-                pass
-
-
-def persist_gateway(
-    path: Path,
-    gateway: str,
-    *,
-    _fs: Optional[Filesystem] = None,
-) -> PersistenceResult:
-    """Persist the operational gateway IP to an env file.
-
-    Thin wrapper around ``update_env_file`` that returns a
-    ``PersistenceResult`` instead of raising on invalid input.
-
-    The gateway value must be a single non-empty token — no whitespace,
-    newlines, ``=``, or ``#`` — to prevent dotenv entry injection.
-    """
-    if not gateway or not gateway.strip():
-        return PersistenceResult(
-            path=path, gateway=gateway, written=False,
-            error="gateway must be non-empty",
-        )
-    # Reject values that are neither host-gateway nor a valid IP address.
-    if not _is_valid_gateway(gateway):
-        return PersistenceResult(
-            path=path, gateway=gateway, written=False,
-            error=f"gateway is not a valid IP or 'host-gateway': {gateway!r}",
-        )
-    try:
-        update_env_file(path, {"HOST_GATEWAY_IP": gateway}, _fs=_fs)
-    except (OSError, ValueError) as exc:
-        return PersistenceResult(
-            path=path, gateway=gateway, written=False,
-            error=str(exc),
-        )
-    return PersistenceResult(path=path, gateway=gateway, written=True)
+# ════════════════════════════════════════════════════════════════════
+# Operational persistence (deprecated — preserved for
+# _persist_host_access_address in build_orchestration.py)
+# ════════════════════════════════════════════════════════════════════
 
 
 # Backward-compatible alias — prefer ``plan_rootless_override``.

@@ -2,3 +2,4 @@
 .docker-generated/
 __pycache__/
 .claude/
+docker-constructor.local.toml

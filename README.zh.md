@@ -33,6 +33,72 @@
 
 约束只接受完整 `X.Y.Z` 版本上的 `==, >, >=, <, <=`。通配符、不完整版本、OR 和 prerelease 会被拒绝，除非策略明确允许。清单固定已审核的非 Debian 输入，但 Debian 仓库和 BuildKit 元数据意味着不能保证逐字节相同的 OCI 镜像。
 
+## 主机访问（可选）
+
+普通构建和运行不需要连接主机。主机访问**默认禁用**：省略 `[runtime.host-access]`；除非需要自定义缓存目录，否则无需创建本地伴生文件。
+
+若容器需要访问主机上的服务，请在 `docker-constructor.toml` 中启用以下两种已审核策略之一：
+
+```toml
+[runtime.host-access]
+enabled = true
+mode = "docker-gateway" # 或 "external-address"
+# proxy-port = 1080      # 可选；整数 1–65535
+```
+
+两种模式都会将所配地址提供为 `host.docker.internal` 和 `HOST_ACCESS_ADDRESS`。配置完成后正常执行 `run` 即可，不需要额外的 `run` 选项。
+
+### docker-gateway：让 doctor 选择 Docker 网关
+
+当 Docker 网关是连接主机的正确路径时使用此模式。运行一次 doctor 来诊断网关并保存选中的具体地址：
+
+```bash
+./docker/docker-constructor.py doctor --inventory docker-constructor.toml
+```
+
+Doctor 会将 `[host-access].address` 写入位于 `docker-constructor.toml` 同一目录的 `docker-constructor.local.toml`。如果网络变化导致地址失效，请再次运行 doctor。地址缺失时，`run` 会失败并提示运行 doctor；普通 `run` 从不探测 Docker，也不修改本地状态。Doctor 只在 `docker-gateway` 模式执行网关诊断、保存和修复；对于 `external-address` 和禁用的主机访问，它不诊断、不覆盖、不保存也不修复状态。
+
+### external-address：自行提供地址
+
+当主机服务可通过已知的主机接口 IP 访问时使用此模式。请自行在本地伴生文件中指定该 IP；doctor 不会发现、替换、保存或修复 external-address 状态：
+
+```toml
+# docker-constructor.toml
+[runtime.host-access]
+enabled = true
+mode = "external-address"
+
+# docker-constructor.local.toml
+[host-access]
+address = "192.0.2.10"
+```
+
+此模式中的 `address` 必须是 IP 地址，不能使用 `host-gateway`。通过 `HOST_ACCESS_ADDRESS` 访问的服务必须监听可从该地址到达的接口。仅绑定到 loopback 的服务可能仍无法访问，防火墙规则同样适用。
+
+### 本地伴生文件与自定义清单
+
+本地伴生文件只包含机器相关状态，不能覆盖已审核的策略、依赖项或 `cache.ttl`。标准清单 `docker-constructor.toml` 使用 `docker-constructor.local.toml`。所选自定义清单（例如 `--inventory /work/custom.toml`）使用同一目录中的 `/work/custom.local.toml`；绝不会回退到仓库根目录的本地状态。
+
+### 可选代理端口和环境变量
+
+只有当应用程序需要知道主机端口时才设置 `proxy-port`。此时构造器会设置 `HOST_PROXY_PORT=<port>`；两种模式都会设置 `HOST_ACCESS_ADDRESS=<address>`。它们是中性的地址/端口变量：构造器不会选择代理协议、构造代理 URL，也不会设置 `PI_PROXY_URL`、`HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`。
+
+### 缓存设置
+
+将可移植的缓存策略保留在已审核的清单中，将机器相关路径放入本地伴生文件：
+
+```toml
+# docker-constructor.toml
+[cache]
+ttl = 3600
+
+# docker-constructor.local.toml
+[cache]
+dir = "/home/dev/.cache/pi-docker"
+```
+
+`cache.ttl` 属于 `docker-constructor.toml`；`cache.dir` 只能位于 `docker-constructor.local.toml`。未设置 `[cache].dir` 时，仍使用现有的 XDG 默认缓存目录。使用本地缓存目录不需要启用主机访问。
+
 ## 2. 启动环境
 
 打开交互式项目选择器：

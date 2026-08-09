@@ -35,10 +35,8 @@ from docker.networking import (
     apply_rootless_override,
     candidate_gateways,
     diagnose_gateway,
-    persist_gateway,
     plan_rootless_override,
     probe_gateway,
-    update_env_file,
 )
 
 
@@ -511,162 +509,6 @@ class TestApplyRootlessOverrideInMemory(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestUpdateEnvFile(unittest.TestCase):
-    """Operational dotenv persistence through ``Filesystem`` fake."""
-
-    ENV = Path("/fake/project/.env")
-
-    def setUp(self):
-        self.fs = FakeFilesystem(files={})
-
-    def test_creates_new_file_with_updates(self):
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.55"}, _fs=self.fs)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.55", self.fs.read_text(self.ENV))
-
-    def test_overwrites_existing_key(self):
-        self.fs._files[str(self.ENV)] = "HOST_GATEWAY_IP=10.0.0.1\n"
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.99", content)
-        self.assertNotIn("10.0.0.1", content)
-
-    def test_preserves_unrelated_keys(self):
-        self.fs._files[str(self.ENV)] = (
-            "PI_HOME=/home/dev/.pi\nHOST_GATEWAY_IP=10.0.0.1\n"
-        )
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertIn("PI_HOME=/home/dev/.pi", content)
-
-    def test_removes_requested_keys(self):
-        self.fs._files[str(self.ENV)] = (
-            "SOCKS_HOST=localhost:1080\nHOST_GATEWAY_IP=10.0.0.1\n"
-        )
-        update_env_file(self.ENV, {}, remove_keys=["SOCKS_HOST"], _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertNotIn("SOCKS_HOST", content)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.1", content)
-
-    def test_ignores_comments_and_empty_lines(self):
-        self.fs._files[str(self.ENV)] = (
-            "# comment\n\nHOST_GATEWAY_IP=10.0.0.1\n"
-        )
-        update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.99"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        lines = content.splitlines()
-        self.assertIn("# comment", lines)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.99", content)
-
-    def test_appends_new_keys(self):
-        self.fs._files[str(self.ENV)] = "OLD_KEY=val\n"
-        update_env_file(self.ENV, {"NEW_KEY": "new_val"}, _fs=self.fs)
-        content = self.fs.read_text(self.ENV)
-        self.assertIn("OLD_KEY=val", content)
-        self.assertIn("NEW_KEY=new_val", content)
-
-    # -- concurrency-safe temp files ----------------------------------------
-
-    def test_temp_file_is_namespaced_per_call(self):
-        """Successive calls use distinct tmp names — no shared fixed suffix."""
-        self.fs.clear_writes()
-        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs, _tmp_suffix="pid1")
-        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs, _tmp_suffix="pid2")
-        tmp_paths = {r[0] for r in self.fs.renames}
-        self.assertEqual(len(tmp_paths), 2,
-                         "each call must write to a unique temporary path")
-
-    def test_concurrent_writers_do_not_collide(self):
-        """Two writers with distinct suffixes never overwrite each other's
-        temp file, and both updates land in the final file."""
-        self.fs._files[str(self.ENV)] = "INIT=0\n"
-        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs, _tmp_suffix="w1")
-        # Second writer uses a different suffix — its tmp path is unique
-        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs, _tmp_suffix="w2")
-        content = self.fs.read_text(self.ENV)
-        self.assertIn("A=1", content)
-        self.assertIn("B=2", content)
-        self.assertIn("INIT=0", content)
-
-    def test_collision_same_suffix_still_converges(self):
-        """Even when two writers share the same suffix (simulated race),
-        the last rename wins and temp debris is cleaned."""
-        self.fs._files[str(self.ENV)] = "INIT=0\n"
-        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs, _tmp_suffix="same")
-        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs, _tmp_suffix="same")
-        content = self.fs.read_text(self.ENV)
-        # Last writer wins, but both writes succeed without crashing
-        self.assertIn("B=2", content)
-        # Temp file cleaned up after final call
-        tmp = self.ENV.with_name(f"{self.ENV.name}.tmp.same")
-        self.assertFalse(self.fs.is_file(tmp),
-                         "temp file must be cleaned up")
-
-    def test_default_suffix_differs_between_calls(self):
-        """Without ``_tmp_suffix`` injection, real calls use a
-        unique per-process+timestamp suffix."""
-        update_env_file(self.ENV, {"A": "1"}, _fs=self.fs)
-        # A second call should succeed — it generates a fresh suffix
-        update_env_file(self.ENV, {"B": "2"}, _fs=self.fs)
-        self.assertIn("A=1", self.fs.read_text(self.ENV))
-        self.assertIn("B=2", self.fs.read_text(self.ENV))
-
-    # -- failure cleanup ----------------------------------------------------
-
-    def test_temp_file_cleaned_on_rename_failure(self):
-        """When ``fs.rename`` raises, the temp file is deleted in the
-        ``finally`` block and the original file is untouched."""
-
-        class RenameFailingFs(FakeFilesystem):
-            def rename(self, src, dest):
-                self.renames.append((src, dest))
-                raise OSError("cross-device link")
-
-        self.fs._files[str(self.ENV)] = "SAFE=data\n"
-        fs = RenameFailingFs(files={str(self.ENV): "SAFE=data\n"})
-        with self.assertRaises(OSError):
-            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"},
-                            _fs=fs, _tmp_suffix="rxfail")
-        # Original untouched
-        self.assertEqual(fs.read_text(self.ENV), "SAFE=data\n")
-        # Temp debris removed
-        tmp = self.ENV.with_name(f"{self.ENV.name}.tmp.rxfail")
-        self.assertFalse(fs.is_file(tmp), "temp file must be cleaned up on rename failure")
-
-    def test_write_failure_cleanup_is_noop(self):
-        """When ``fs.write_text`` itself fails, no temp file exists to
-        clean up — but the ``finally`` block must not raise."""
-
-        class WriteFailingFs(FakeFilesystem):
-            def write_text(self, path, content, encoding="utf-8"):
-                raise OSError("disk full")
-
-        self.fs._files[str(self.ENV)] = "SAFE=data\n"
-        fs = WriteFailingFs(files={str(self.ENV): "SAFE=data\n"})
-        with self.assertRaises(OSError):
-            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"},
-                            _fs=fs, _tmp_suffix="wfail")
-        self.assertEqual(fs.read_text(self.ENV), "SAFE=data\n")
-
-    def test_delete_failure_inside_finally_is_suppressed(self):
-        """If ``fs.delete`` itself raises, the original ``rename``
-        error is not masked."""
-
-        class NastyFs(FakeFilesystem):
-            def rename(self, src, dest):
-                self.renames.append((src, dest))
-                raise OSError("rename failed")
-
-            def delete(self, path):
-                raise PermissionError("cannot delete")
-
-        fs = NastyFs(files={str(self.ENV): "SAFE=data\n"})
-        with self.assertRaises(OSError) as ctx:
-            update_env_file(self.ENV, {"HOST_GATEWAY_IP": "10.0.0.1"},
-                            _fs=fs, _tmp_suffix="nasty")
-        # The original (rename) error propagates
-        self.assertIn("rename failed", str(ctx.exception))
-
-
 # ---------------------------------------------------------------------------
 # 7.3 — Full diagnosis with injected boundaries
 # ---------------------------------------------------------------------------
@@ -715,7 +557,7 @@ class TestDiagnoseGateway(unittest.TestCase):
         self.assertIs(d.mode, DockerMode.ROOTFUL)
         self.assertEqual(d.lan_ip, "192.168.1.10")
         self.assertEqual(d.chosen_gateway, "host-gateway")
-        self.assertEqual(d.host_gateway_ip, "172.17.0.1")
+        self.assertEqual(d.resolved_address, "172.17.0.1")
         self.assertEqual(len(d.probes), 2)
 
     def test_rootless_diagnosis_with_override_needed(self):
@@ -761,7 +603,7 @@ class TestDiagnoseGateway(unittest.TestCase):
             _fs=FakeFilesystem(),
         )
         self.assertIsNone(d.chosen_gateway)
-        self.assertIsNone(d.host_gateway_ip)
+        self.assertIsNone(d.resolved_address)
 
     def test_server_stops_after_diagnosis(self):
         fake = FakeHostProbeServer()
@@ -866,93 +708,6 @@ class TestImportBoundary(unittest.TestCase):
                 if isinstance(node.func, ast.Attribute):
                     if "ArgumentParser" in getattr(node.func, "attr", ""):
                         self.fail("must not create ArgumentParser")
-
-
-class TestPersistGateway(unittest.TestCase):
-    """``persist_gateway`` writes HOST_GATEWAY_IP and returns result."""
-
-    def setUp(self):
-        self.path = Path("/tmp/test.env")
-
-    def test_writes_gateway_and_reports_success(self):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, "10.0.0.1", _fs=fs)
-        self.assertTrue(result.written)
-        self.assertEqual(result.gateway, "10.0.0.1")
-        self.assertEqual(result.path, self.path)
-        self.assertIsNone(result.error)
-        self.assertIn("HOST_GATEWAY_IP=10.0.0.1", fs.read_text(self.path))
-
-    def test_empty_gateway_returns_error_not_raises(self):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, "", _fs=fs)
-        self.assertFalse(result.written)
-        self.assertEqual(result.gateway, "")
-        self.assertIsNotNone(result.error)
-        self.assertIn("non-empty", result.error)
-
-    def test_whitespace_gateway_returns_error(self):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, "   ", _fs=fs)
-        self.assertFalse(result.written)
-        self.assertIn("non-empty", result.error)
-
-    # -- dotenv injection / semantic rejection ------------------------------
-
-    def _assert_gateway_rejected(self, value: str):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, value, _fs=fs)
-        self.assertFalse(result.written,
-                         f"gateway {value!r} must be rejected")
-        self.assertIn("not a valid IP", result.error or "")
-        # Filesystem must be untouched.
-        self.assertEqual(fs.writes, [], f"no writes for {value!r}")
-        self.assertEqual(fs.renames, [], f"no renames for {value!r}")
-
-    def test_newline_in_gateway_rejected(self):
-        self._assert_gateway_rejected("10.0.0.1\nHOST_GATEWAY_IP=evil")
-
-    def test_equals_in_gateway_rejected(self):
-        self._assert_gateway_rejected("10.0.0.1 = foo")
-
-    def test_hash_in_gateway_rejected(self):
-        self._assert_gateway_rejected("10.0.0.1  # comment")
-
-    def test_internal_whitespace_rejected(self):
-        self._assert_gateway_rejected("10.0.0.1 extra")
-
-    def test_tab_rejected(self):
-        self._assert_gateway_rejected("10.0.0.1\textra")
-
-    def test_dollar_home_rejected(self):
-        self._assert_gateway_rejected("$HOME")
-
-    def test_subshell_rejected(self):
-        self._assert_gateway_rejected("$(whoami)")
-
-    def test_semicolon_injection_rejected(self):
-        self._assert_gateway_rejected("10.0.0.1;foo")
-
-    def test_arbitrary_text_rejected(self):
-        self._assert_gateway_rejected("something-else")
-
-    # -- valid gateways accepted --------------------------------------------
-
-    def test_host_gateway_literal_accepted(self):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, "host-gateway", _fs=fs)
-        self.assertTrue(result.written)
-        self.assertIsNone(result.error)
-
-    def test_ipv4_accepted(self):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, "192.168.1.1", _fs=fs)
-        self.assertTrue(result.written)
-
-    def test_ipv6_accepted(self):
-        fs = FakeFilesystem()
-        result = persist_gateway(self.path, "::1", _fs=fs)
-        self.assertTrue(result.written)
 
 
 class TestProbeTimeoutParameter(unittest.TestCase):

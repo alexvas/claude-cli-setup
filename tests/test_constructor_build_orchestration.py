@@ -39,11 +39,9 @@ from docker.versioning.build_orchestration import (
 )
 from docker.versioning.dispatch_types import ExitKind
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # Fakes — injectable, no Docker/systemd/fs/network
 # ═══════════════════════════════════════════════════════════════════════
-
 
 def _make_diagnosis(
     *,
@@ -69,7 +67,6 @@ def _make_diagnosis(
         override_needed=False,
     )
 
-
 class FakeBuildExecutor:
     """Recording build executor matching ``BuildExecutor`` Protocol."""
 
@@ -90,17 +87,13 @@ class FakeBuildExecutor:
             stderr="" if self.returncode == 0 else "build error",
         )
 
-
 # ── Convenience factories (inject into BuildRequest fields) ──────────
-
-
 
 def _diag_reachable(**kw):
     return _make_diagnosis(
         mode=DockerMode.ROOTFUL,
-        chosen_gateway="172.17.0.1",
+        chosen_address="172.17.0.1",
     )
-
 
 def _diag_unreachable(**kw):
     return _make_diagnosis(
@@ -108,32 +101,27 @@ def _diag_unreachable(**kw):
         chosen_gateway=None,
     )
 
-
 def _persist_ok(path=None, gateway=None):
     return PersistenceResult(
         path=Path("/tmp/.env"),
-        gateway="172.17.0.1",
+        address="172.17.0.1",
         written=True,
     )
-
 
 def _persist_fail(path=None, gateway=None):
     return PersistenceResult(
         path=Path("/tmp/.env"),
-        gateway="172.17.0.1",
+        address="172.17.0.1",
         written=False,
         error="EACCES",
     )
 
-
 def _publish_ok(projection, *, repo_root=None):
     return PublishResult(published_path="/tmp/effective.toml")
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # 7.  DTO expectations (GREEN — these test the DTOs, not the stub)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestBuildRequestDto(unittest.TestCase):
     """Task 7 — immutable BuildRequest fields."""
@@ -158,7 +146,6 @@ class TestBuildRequestDto(unittest.TestCase):
         self.assertEqual("alpine:3.20", req.gateway_probe_image)
         self.assertIsNone(req.repo_root)
         self.assertIsNone(req._diagnose_gateway)
-        self.assertIsNone(req._persist_gateway)
         self.assertIsNone(req._publish_projection)
 
     def test_all_fields_assignable(self):
@@ -181,7 +168,6 @@ class TestBuildRequestDto(unittest.TestCase):
             gateway_probe_image="busybox:1.36",
             repo_root="/tmp",
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         self.assertEqual("linux-arm64", req.platform)
@@ -275,11 +261,9 @@ class TestBuildRequestDto(unittest.TestCase):
         be = FakeBuildExecutor()
         self.assertNotIsInstance(be, ProcessRunner)
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 8.  Injectables wired through BuildRequest
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestInjectablesWired(unittest.TestCase):
     """Task 8 — all side-effecting boundaries injectable through BuildRequest."""
@@ -291,20 +275,16 @@ class TestInjectablesWired(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             runner=runner,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         # Just verify the slots are populated
         self.assertIs(runner, req.runner)
         self.assertIs(_diag_reachable, req._diagnose_gateway)
-        self.assertIs(_persist_ok, req._persist_gateway)
         self.assertIs(_publish_ok, req._publish_projection)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # 9.  Default-build tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestDefaultBuild(unittest.TestCase):
     """Task 9 — canonical image, target runtime, platform, deterministic,
@@ -316,7 +296,6 @@ class TestDefaultBuild(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -329,7 +308,6 @@ class TestDefaultBuild(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -353,7 +331,6 @@ class TestDefaultBuild(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -376,7 +353,6 @@ class TestDefaultBuild(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -390,7 +366,6 @@ class TestDefaultBuild(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         r1 = orchestrate_build(req)
@@ -398,11 +373,9 @@ class TestDefaultBuild(unittest.TestCase):
         self.assertEqual(r1.build_args, r2.build_args,
                          "build vector must be deterministic")
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 10.  Build override tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestBuildOverrides(unittest.TestCase):
     """Task 10 — accepted build override, unsupported rejected,
@@ -419,7 +392,6 @@ class TestBuildOverrides(unittest.TestCase):
                 "build.stages.toolchain.python.version": "3.15.0",
             }),
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -438,7 +410,6 @@ class TestBuildOverrides(unittest.TestCase):
                 "build.nonexistent.thing": "val",
             }),
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -454,18 +425,15 @@ class TestBuildOverrides(unittest.TestCase):
                 "runtime.pi-extensions.x.version": "1.0.0",
             }),
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG for runtime override, got {result.exit_kind}")
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 11.  Platform tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestPlatformSelection(unittest.TestCase):
     """Task 11 — AMD64/ARM64 resolution, command platform matches projection,
@@ -477,7 +445,6 @@ class TestPlatformSelection(unittest.TestCase):
             platform="linux-amd64",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -492,7 +459,6 @@ class TestPlatformSelection(unittest.TestCase):
             platform="linux-arm64",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -513,7 +479,6 @@ class TestPlatformSelection(unittest.TestCase):
             inventory_path="/nonexistent/inventory.toml",
             platform="linux-arm64",
             _diagnose_gateway=record_diag,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -522,11 +487,9 @@ class TestPlatformSelection(unittest.TestCase):
         self.assertEqual(0, len(diag_called),
                          "must not call gateway diagnosis on missing inventory")
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 12.  Projection tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestProjectionPublication(unittest.TestCase):
     """Task 12 — resolve from validated inventory.build, publish canonical
@@ -545,7 +508,6 @@ class TestProjectionPublication(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=record_publish,
             runner=FakeBuildExecutor(),
         )
@@ -561,11 +523,9 @@ class TestProjectionPublication(unittest.TestCase):
         self.assertIsInstance(pr.published_path, str)
         self.assertGreater(len(pr.published_path), 0)
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 13.  Cache / control tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestCacheControls(unittest.TestCase):
     """Task 13 — cache, pull, progress, custom tag, UID/GID, context, Dockerfile."""
@@ -576,7 +536,6 @@ class TestCacheControls(unittest.TestCase):
             cache=False,
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -590,7 +549,6 @@ class TestCacheControls(unittest.TestCase):
             pull=True,
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -604,7 +562,6 @@ class TestCacheControls(unittest.TestCase):
             progress="plain",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -623,7 +580,6 @@ class TestCacheControls(unittest.TestCase):
             tag="pi-cli-pi:latest",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -638,7 +594,6 @@ class TestCacheControls(unittest.TestCase):
             gid=1000,
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -656,7 +611,6 @@ class TestCacheControls(unittest.TestCase):
             dockerfile="Dockerfile.custom",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -664,11 +618,9 @@ class TestCacheControls(unittest.TestCase):
         self.assertIn("/custom/context", result.build_args)
         self.assertIn("Dockerfile.custom", result.build_args)
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 14–15.  Failure-order tests — zero side effects (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class _RecordingFakes:
     """Records every fake call for zero-side-effect assertions."""
@@ -693,13 +645,11 @@ class _RecordingFakes:
         _RecordingFakes.docker_calls += 1
         return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
 
-
 def _reset_recording():
     _RecordingFakes.diagnose_calls = 0
     _RecordingFakes.persist_calls = 0
     _RecordingFakes.docker_calls = 0
     _RecordingFakes.publish_calls = 0
-
 
 class TestFailureOrdering(unittest.TestCase):
     """Tasks 14–15 — every pre-validate failure means zero side effects."""
@@ -722,7 +672,6 @@ class TestFailureOrdering(unittest.TestCase):
         req = BuildRequest(
             inventory_path="/nonexistent/inventory.toml",
             _diagnose_gateway=self.fakes.diagnose,
-            _persist_gateway=self.fakes.persist,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
         )
@@ -735,7 +684,6 @@ class TestFailureOrdering(unittest.TestCase):
         req = BuildRequest(
             inventory_path="README.md",  # not TOML
             _diagnose_gateway=self.fakes.diagnose,
-            _persist_gateway=self.fakes.persist,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
         )
@@ -749,7 +697,6 @@ class TestFailureOrdering(unittest.TestCase):
         req = BuildRequest(
             inventory_path="pyproject.toml",  # valid TOML but not inventory
             _diagnose_gateway=self.fakes.diagnose,
-            _persist_gateway=self.fakes.persist,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
         )
@@ -764,7 +711,6 @@ class TestFailureOrdering(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             overrides=MappingProxyType({"not.a.real.path.at.all": "val"}),
             _diagnose_gateway=self.fakes.diagnose,
-            _persist_gateway=self.fakes.persist,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
         )
@@ -780,7 +726,6 @@ class TestFailureOrdering(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             platform="nonexistent/cpu",
             _diagnose_gateway=self.fakes.diagnose,
-            _persist_gateway=self.fakes.persist,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
         )
@@ -789,11 +734,9 @@ class TestFailureOrdering(unittest.TestCase):
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
         self._assert_zero()
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 15a.  Render-validation failures (Stage 9.3 hardening)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestRenderValidationFailures(unittest.TestCase):
     """Invalid render inputs (negative UID/GID, empty tag, etc.)
@@ -808,7 +751,6 @@ class TestRenderValidationFailures(unittest.TestCase):
             uid=-5,
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -824,7 +766,6 @@ class TestRenderValidationFailures(unittest.TestCase):
             gid=-3,
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -841,7 +782,6 @@ class TestRenderValidationFailures(unittest.TestCase):
             uid=-1,
             confirmed=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -860,7 +800,6 @@ class TestRenderValidationFailures(unittest.TestCase):
             tag="",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -877,7 +816,6 @@ class TestRenderValidationFailures(unittest.TestCase):
             context="",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -904,11 +842,9 @@ class TestRenderValidationFailures(unittest.TestCase):
         def run(self, argv: tuple[str, ...]):
             raise RuntimeError("runner must NOT be called for render failure")
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 16.  Gateway tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestBuildGatewayIsolation(unittest.TestCase):
     """Builds are independent of the legacy gateway callback surface."""
@@ -929,7 +865,6 @@ class TestBuildGatewayIsolation(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=diagnose,
-            _persist_gateway=persist,
             _publish_projection=_publish_ok,
             runner=runner,
         ))
@@ -937,13 +872,11 @@ class TestBuildGatewayIsolation(unittest.TestCase):
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         self.assertEqual([], calls)
         self.assertEqual(1, len(runner.calls))
-        self.assertFalse(hasattr(result, "host_gateway_ip"))
-
+        self.assertFalse(hasattr(result, "resolved_address"))
 
 # ═══════════════════════════════════════════════════════════════════════
 # 18–19.  Confirmation / consent (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestConfirmation(unittest.TestCase):
     """Tasks 18–19 — confirmation flag (consent callbacks removed).
@@ -983,7 +916,6 @@ class TestConfirmation(unittest.TestCase):
             confirmed=False,
             dry_run=False,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -1008,7 +940,6 @@ class TestConfirmation(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
             runner=docker_runner,
         )
@@ -1034,19 +965,15 @@ class TestConfirmation(unittest.TestCase):
             confirmed=True,
             _diagnose_gateway=lambda **kw: (_ for _ in ()).throw(
                 AssertionError("build must not diagnose gateway")),
-            _persist_gateway=lambda *args: (_ for _ in ()).throw(
-                AssertionError("build must not persist gateway")),
             _publish_projection=publish,
             runner=RecordingRunner(),
         ))
         self.assertIsInstance(result, BuildResult)
         self.assertEqual(["publish", "docker"], seq)
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 20.  Dry-run tests (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestDryRun(unittest.TestCase):
     """Task 20 — complete shell-escaped display, no Docker, no probe
@@ -1083,7 +1010,6 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -1102,7 +1028,6 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -1119,7 +1044,6 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -1135,7 +1059,6 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -1151,7 +1074,6 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
-            _persist_gateway=self._bomb_persist,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
         )
@@ -1169,7 +1091,6 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -1186,18 +1107,15 @@ class TestDryRun(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 21.  Direct execution — tuple, shell=False (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestDirectExecution(unittest.TestCase):
     """Task 21 — runner receives exact tuple, shell=False, display string
@@ -1211,7 +1129,6 @@ class TestDirectExecution(unittest.TestCase):
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -1228,7 +1145,6 @@ class TestDirectExecution(unittest.TestCase):
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -1237,11 +1153,9 @@ class TestDirectExecution(unittest.TestCase):
             cmd = runner.calls[0]
             self.assertEqual("docker", cmd[0])
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 22.  Subprocess outcome (RED)
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestSubprocessOutcomes(unittest.TestCase):
     """Task 22 — zero=success, nonzero=operational failure, stderr bounded,
@@ -1254,7 +1168,6 @@ class TestSubprocessOutcomes(unittest.TestCase):
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -1272,7 +1185,6 @@ class TestSubprocessOutcomes(unittest.TestCase):
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -1288,7 +1200,6 @@ class TestSubprocessOutcomes(unittest.TestCase):
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
@@ -1297,11 +1208,9 @@ class TestSubprocessOutcomes(unittest.TestCase):
         # Message should surface stderr content or exit code
         self.assertIn("build error", result.message or "")
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # 23a.  Boundary failure tests — Stage 9.3 hardening
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestBuildBoundaryFailures(unittest.TestCase):
     """Diagnosis, publication, and runner exceptions must produce
@@ -1319,7 +1228,6 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=broken_diagnose,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
             runner=runner,
         ))
@@ -1338,7 +1246,6 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
         )
@@ -1358,7 +1265,6 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
         )
@@ -1380,7 +1286,6 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
             runner=MissingDockerRunner(),
         )
@@ -1399,7 +1304,6 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path="docker-constructor.toml",
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
-            _persist_gateway=_persist_ok,
             _publish_projection=_publish_ok,
             runner=DeniedDockerRunner(),
         )
@@ -1408,11 +1312,9 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         self.assertIn("permission denied", result.message or "")
         self.assertIsNone(result.process_result)
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # Stage 9.4 — public API tests
 # ═══════════════════════════════════════════════════════════════════════
-
 
 class TestPublicDoctorAPI(unittest.TestCase):
     """``diagnose_doctor`` and ``repair_rootless`` public functions."""
@@ -1433,7 +1335,6 @@ class TestPublicDoctorAPI(unittest.TestCase):
         result = repair_rootless(consent=False)
         self.assertIsInstance(result, DoctorResult)
         self.assertFalse(result.repair_applied)
-
 
 if __name__ == "__main__":
     unittest.main()

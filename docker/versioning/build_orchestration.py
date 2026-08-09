@@ -36,7 +36,6 @@ from docker.networking import (
     ProcessRunner,
     RootlessOverridePlan,
     diagnose_gateway,
-    persist_gateway,
     plan_rootless_override,
     apply_rootless_override,
 )
@@ -188,9 +187,6 @@ class BuildRequest:
     _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
     """Deprecated compatibility injection; builds never invoke it."""
 
-    _persist_gateway: Callable[..., object] | None = None
-    """Deprecated compatibility injection; builds never invoke it."""
-
     repo_root: str | None = None
     """Repository root directory (default: auto-detected from inventory)."""
 
@@ -317,8 +313,9 @@ class DoctorRequest:
     inventory_path: Path | None = None
     """Resolved inventory path for policy-aware doctor dispatch.
 
-    When ``None`` (legacy or test callers), doctor falls back to the
-    unconditional gateway-diagnosis path."""
+    When ``None``, doctor returns a disabled/no-op result — no
+    implicit gateway diagnosis is performed without a reviewed
+    docker-gateway policy."""
 
     # -- injectables (all default to ``None`` = use real implementations) --
 
@@ -326,7 +323,6 @@ class DoctorRequest:
     """Injected process runner for probe containers / service commands."""
 
     _diagnose_gateway: Callable[..., GatewayDiagnosis] | None = None
-    _persist_gateway: Callable[..., PersistenceResult] | None = None
     _plan_rootless_override: Callable[..., RootlessOverridePlan] | None = None
     _apply_rootless_override: Callable[..., OverrideFailure | None] | None = None
 
@@ -587,13 +583,13 @@ def _persist_host_access_address(
 
     if not address or not address.strip():
         return PersistenceResult(
-            path=companion_path, gateway=address,
+            path=companion_path, address=address,
             written=False, error="address must be non-empty",
         )
 
     if _fs.is_symlink(companion_path):
         return PersistenceResult(
-            path=companion_path, gateway=address,
+            path=companion_path, address=address,
             written=False,
             error="local companion must not be a symlink; replace it with a real file",
         )
@@ -660,7 +656,7 @@ def _persist_host_access_address(
             except OSError:
                 pass
         return PersistenceResult(
-            path=companion_path, gateway=address,
+            path=companion_path, address=address,
             written=False, error=str(exc),
         )
     finally:
@@ -671,7 +667,7 @@ def _persist_host_access_address(
                 pass
 
     return PersistenceResult(
-        path=companion_path, gateway=address, written=True,
+        path=companion_path, address=address, written=True,
     )
 
 
@@ -707,19 +703,16 @@ def _resolve_doctor_host_access(
     * ``error`` is not ``None`` — the inventory was explicitly supplied
       but is unreadable, malformed, or failed validation.  The caller
       must return a ``CONFIG`` ``DoctorResult`` with the error message.
-    * ``mode=None`` — policy is disabled; doctor finishes successfully
-      without probing.
-    * ``mode="docker-gateway"``, ``companion=None`` — legacy callers
-      that do not supply an inventory path; diagnosis runs but the
-      result is not persisted locally.
+    * ``mode=None`` — policy is disabled or inventory was not supplied;
+      doctor finishes successfully without probing.
     * ``mode="docker-gateway"``, ``companion=<Path>`` — normal
       docker-gateway flow with atomic local persistence.
     * ``mode="external-address"`` — no probing; user address is used.
     """
     if inventory_path is None:
-        # Legacy / test callers without an inventory — fall back to
-        # unconditional docker-gateway diagnosis (no local persist).
-        return "docker-gateway", None, None
+        # Without a reviewed inventory the host-access policy cannot
+        # be determined — no implicit gateway diagnosis.
+        return None, None, None
     try:
         inv = load_inventory(inventory_path)
     except Exception as exc:
@@ -812,7 +805,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             exit_kind=ExitKind.OPERATIONAL,
             message=f"gateway diagnosis failed: {exc}",
         )
-    gateway = initial.host_gateway_ip
+    gateway = initial.resolved_address
     initial_persistence, error = _persist_selected_gateway(gateway, companion=companion)
     if error is not None:
         return DoctorResult(
@@ -961,7 +954,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             repair_applied=True,
         )
 
-    post_gateway = post.host_gateway_ip
+    post_gateway = post.resolved_address
     persistence, error = _persist_selected_gateway(post_gateway, companion=companion)
     if error is not None:
         return DoctorResult(
