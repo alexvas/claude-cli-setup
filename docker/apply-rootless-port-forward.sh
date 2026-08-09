@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Solution 2: enable host port reachability from rootless Docker (slirp4netns).
-# Requires rootless Docker (systemctl --user docker.service).
+# Apply rootless-Docker port-forward override and run gateway diagnosis.
+# Requires: rootless Docker (systemctl --user docker.service) and
+# docker-gateway host-access mode enabled in docker-constructor.toml.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

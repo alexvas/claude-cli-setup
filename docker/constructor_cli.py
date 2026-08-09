@@ -509,11 +509,20 @@ def _real_dispatcher(
 
         c_args = _deep_freeze_command_args(c_args)
 
+        # Resolve inventory path
+        try:
+            inv_path = _resolve_inventory_path(request)
+        except OSError as exc:
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"cannot resolve inventory path: {exc}",
+            )
+
         # Build typed DTO
         doctor_kwargs: dict[str, object] = {
             "apply_override": apply_override,
             "repair_consent": _to_bool(c_args.get("yes", False)),
-            "gateway_env_path": _REPO_ROOT / ".env",
+            "inventory_path": inv_path,
         }
         probe_image = c_args.get("probe_image")
         if probe_image is not None:

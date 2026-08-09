@@ -50,8 +50,8 @@ from docker.versioning.errors import (
     UnsupportedOverrideError,
     VersionConfigError,
 )
-from docker.versioning.inventory import load_inventory
-from docker.versioning.model import Inventory
+from docker.versioning.inventory import load_inventory, load_local_config_for_inventory
+from docker.versioning.model import HostAccessPolicy, Inventory
 from docker.versioning.rendering import (
     BuildRenderInputs,
     CacheControls,
@@ -314,8 +314,11 @@ class DoctorRequest:
     probe_timeout: int | None = None
     """Timeout (seconds) for each gateway probe container (1–300)."""
 
-    gateway_env_path: Path | None = None
-    """Environment file that stores the diagnosed gateway for ``run``."""
+    inventory_path: Path | None = None
+    """Resolved inventory path for policy-aware doctor dispatch.
+
+    When ``None`` (legacy or test callers), doctor falls back to the
+    unconditional gateway-diagnosis path."""
 
     # -- injectables (all default to ``None`` = use real implementations) --
 
@@ -559,19 +562,196 @@ def orchestrate_build(request: BuildRequest) -> BuildResult:
     return execute_build(plan, request)
 
 
+def _persist_host_access_address(
+    companion_path: Path,
+    address: str,
+    *,
+    _fs: Any = None,
+    _tmp_suffix: str | None = None,
+) -> PersistenceResult:
+    """Atomically write ``[host-access].address`` to the local companion.
+
+    Preserves all other recognised sections (including ``[cache]``),
+    comments, and blank lines.  Never adds reviewed-policy fields
+    (``enabled``, ``mode``, ``proxy-port``).
+
+    Returns a ``PersistenceResult`` — callers inspect ``.written`` to
+    decide whether the operation succeeded.
+    """
+    import os
+    import time
+
+    if _fs is None:
+        from docker.networking import Filesystem as _Fs
+        _fs = _Fs()
+
+    if not address or not address.strip():
+        return PersistenceResult(
+            path=companion_path, gateway=address,
+            written=False, error="address must be non-empty",
+        )
+
+    if _fs.is_symlink(companion_path):
+        return PersistenceResult(
+            path=companion_path, gateway=address,
+            written=False,
+            error="local companion must not be a symlink; replace it with a real file",
+        )
+
+    unique = (
+        _tmp_suffix
+        if _tmp_suffix is not None
+        else f"{os.getpid()}.{int(time.time() * 1_000_000)}"
+    )
+    tmp = companion_path.with_name(f"{companion_path.name}.tmp.{unique}")
+
+    # Read-and-update existing content, preserving everything except
+    # [host-access].address.
+    lines: list[str] = []
+    if _fs.is_file(companion_path):
+        lines = _fs.read_text(companion_path).splitlines()
+
+    new_lines: list[str] = []
+    in_host_access = False
+    address_written = False
+
+    for line in lines:
+        stripped = line.strip()
+        # Detect section headers — tolerate trailing inline comments
+        section_name = _parse_toml_section_header(stripped)
+        if section_name is not None:
+            in_host_access = (section_name == "host-access")
+            new_lines.append(line)
+            if in_host_access and not address_written:
+                new_lines.append(f'address = "{address}"')
+                address_written = True
+            continue
+
+        # Skip comment lines — must not trigger key detection
+        if stripped.startswith("#"):
+            new_lines.append(line)
+            continue
+
+        if in_host_access and _is_toml_key_line(stripped, "address"):
+            # Replace existing address line only when not already written
+            if not address_written:
+                new_lines.append(f'address = "{address}"')
+                address_written = True
+            # else: skip duplicate address lines — section header
+            # insertion already handled it
+            continue
+
+        new_lines.append(line)
+
+    if not address_written:
+        new_lines.append("")
+        new_lines.append("[host-access]")
+        new_lines.append(f'address = "{address}"')
+
+    content = "\n".join(new_lines) + "\n"
+
+    try:
+        _fs.write_text(tmp, content)
+        _fs.rename(tmp, companion_path)
+    except OSError as exc:
+        if _fs.is_file(tmp):
+            try:
+                _fs.delete(tmp)
+            except OSError:
+                pass
+        return PersistenceResult(
+            path=companion_path, gateway=address,
+            written=False, error=str(exc),
+        )
+    finally:
+        if _fs.is_file(tmp):
+            try:
+                _fs.delete(tmp)
+            except OSError:
+                pass
+
+    return PersistenceResult(
+        path=companion_path, gateway=address, written=True,
+    )
+
+
+def _is_toml_key_line(stripped: str, key: str) -> bool:
+    """True when *stripped* is a TOML assignment to *key*."""
+    if "=" not in stripped:
+        return False
+    left = stripped.split("=", 1)[0].strip()
+    return left == key
+
+
+def _parse_toml_section_header(stripped: str) -> str | None:
+    """Return the section name if *stripped* is a TOML section header.
+
+    Handles trailing inline comments: ``[host-access] # comment``.
+    Returns ``None`` when *stripped* is not a section header.
+    """
+    # TOML inline comments start with # outside a string.
+    # Section headers have no string values, so splitting on # is safe.
+    bare = stripped.split("#", 1)[0].strip()
+    if bare.startswith("[") and bare.endswith("]"):
+        return bare[1:-1].strip()
+    return None
+
+
+def _resolve_doctor_host_access(
+    inventory_path: Path | None,
+) -> tuple[str | None, Path | None, str | None]:
+    """Resolve the host-access mode and companion path for doctor.
+
+    Returns ``(mode, companion_path, error)``.
+
+    * ``error`` is not ``None`` — the inventory was explicitly supplied
+      but is unreadable, malformed, or failed validation.  The caller
+      must return a ``CONFIG`` ``DoctorResult`` with the error message.
+    * ``mode=None`` — policy is disabled; doctor finishes successfully
+      without probing.
+    * ``mode="docker-gateway"``, ``companion=None`` — legacy callers
+      that do not supply an inventory path; diagnosis runs but the
+      result is not persisted locally.
+    * ``mode="docker-gateway"``, ``companion=<Path>`` — normal
+      docker-gateway flow with atomic local persistence.
+    * ``mode="external-address"`` — no probing; user address is used.
+    """
+    if inventory_path is None:
+        # Legacy / test callers without an inventory — fall back to
+        # unconditional docker-gateway diagnosis (no local persist).
+        return "docker-gateway", None, None
+    try:
+        inv = load_inventory(inventory_path)
+    except Exception as exc:
+        return None, None, f"cannot load inventory: {exc}"
+    ha = getattr(inv.runtime, "host_access", None)
+    if ha is None:
+        return None, None, None
+    if not isinstance(ha, HostAccessPolicy):
+        return None, None, None
+    if not ha.enabled:
+        return None, None, None
+    mode = ha.mode
+    if not mode:
+        return None, None, None
+    from docker.versioning.inventory import resolve_local_companion_path
+    companion = resolve_local_companion_path(inventory_path)
+    return mode, companion, None
+
+
 def _persist_selected_gateway(
-    request: DoctorRequest,
     gateway: str | None,
+    *,
+    companion: Path | None = None,
 ) -> tuple[PersistenceResult | None, str | None]:
-    """Persist a verified gateway so subsequent ``run`` calls use it."""
+    """Persist a verified gateway to the local companion."""
     if gateway is None:
         return None, None
-    path = request.gateway_env_path
+    path = companion
     if path is None:
         return None, None
-    persist = request._persist_gateway or persist_gateway
     try:
-        result = persist(path, gateway)
+        result = _persist_host_access_address(path, gateway)
     except Exception as exc:
         return None, str(exc)
     if not result.written:
@@ -583,7 +763,11 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
     """Orchestrate a complete doctor (gateway diagnosis + optional repair).
 
     Flow:
-    1. Initial diagnosis (always)
+    0. Resolve host-access mode from reviewed inventory.
+       - disabled / absent → success, no probing
+       - external-address → success, no probing, preserve local address
+       - docker-gateway → continue to step 1
+    1. Initial diagnosis (only for docker-gateway mode)
     2. Derive override plan (always, even without repair)
     3. If ``apply_override`` and ``repair_consent`` and not rootful:
        a. Skip apply when plan state is MATCHING (already no-op)
@@ -592,6 +776,26 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
     4. If ``apply_override`` but rootful: return POLICY
     5. Otherwise return diagnosis-only result
     """
+    # 0. Mode-aware dispatch
+    mode, companion, resolve_error = _resolve_doctor_host_access(request.inventory_path)
+    if resolve_error is not None:
+        return DoctorResult(
+            exit_kind=ExitKind.CONFIG,
+            message=resolve_error,
+        )
+    if mode is None:
+        return DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            message="Host access is disabled — no gateway diagnosis needed.",
+        )
+    if mode == "external-address":
+        return DoctorResult(
+            exit_kind=ExitKind.SUCCESS,
+            message="Host access is external-address — no gateway diagnosis needed. "
+                    "The locally configured address is used as-is.",
+        )
+    # docker-gateway mode continues below
+
     # 1. Initial diagnosis
     diagnose = request._diagnose_gateway or diagnose_gateway
     diagnose_kwargs: dict[str, object] = {}
@@ -609,7 +813,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
             message=f"gateway diagnosis failed: {exc}",
         )
     gateway = initial.host_gateway_ip
-    initial_persistence, error = _persist_selected_gateway(request, gateway)
+    initial_persistence, error = _persist_selected_gateway(gateway, companion=companion)
     if error is not None:
         return DoctorResult(
             exit_kind=ExitKind.OPERATIONAL,
@@ -758,7 +962,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
         )
 
     post_gateway = post.host_gateway_ip
-    persistence, error = _persist_selected_gateway(request, post_gateway)
+    persistence, error = _persist_selected_gateway(post_gateway, companion=companion)
     if error is not None:
         return DoctorResult(
             exit_kind=ExitKind.OPERATIONAL,

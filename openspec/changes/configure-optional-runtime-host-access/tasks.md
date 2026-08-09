@@ -97,30 +97,30 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### RED
 
-- [ ] 3.1 Add failing doctor tests proving disabled host access performs no gateway probe, rootless planning, repair, or local write.
-- [ ] 3.2 Add failing doctor tests proving external-address mode preserves the user address and performs no gateway probe, rootless planning, repair, or local write.
-- [ ] 3.3 Add failing doctor tests proving Docker-gateway mode diagnoses candidates and atomically writes the successful concrete address to `[host-access].address` in the resolved companion.
-- [ ] 3.4 Add failing persistence tests proving successful doctor updates preserve recognized `[cache].dir` and never add unknown or reviewed-policy fields.
-- [ ] 3.5 Add failing failure-path tests proving diagnosis, repair, serialization, and atomic-rename failures leave the previous local file byte-for-byte intact.
-- [ ] 3.6 Add failing consent tests proving rootless override application remains explicit and cannot be implied by diagnosis, `--yes`, or enabled host access alone.
+- [x] 3.1 Add failing doctor tests proving disabled host access performs no gateway probe, rootless planning, repair, or local write.
+- [x] 3.2 Add failing doctor tests proving external-address mode preserves the user address and performs no gateway probe, rootless planning, repair, or local write.
+- [x] 3.3 Add failing doctor tests proving Docker-gateway mode diagnoses candidates and atomically writes the successful concrete address to `[host-access].address` in the resolved companion.
+- [x] 3.4 Add failing persistence tests proving successful doctor updates preserve recognized `[cache].dir` and never add unknown or reviewed-policy fields.
+- [x] 3.5 Add failing failure-path tests proving diagnosis, repair, serialization, and atomic-rename failures leave the previous local file byte-for-byte intact.
+- [x] 3.6 Add failing consent tests proving rootless override application remains explicit and cannot be implied by diagnosis, `--yes`, or enabled host access alone.
 
 ### GREEN
 
-- [ ] 3.7 Make doctor load reviewed host-access mode and dispatch disabled, external-address, and Docker-gateway behavior required by tasks 3.1–3.3.
-- [ ] 3.8 Replace `.env` gateway persistence with an atomic typed local-companion update that preserves `[cache].dir` as required by task 3.4.
-- [ ] 3.9 Preserve prior local bytes across every failure boundary required by task 3.5.
-- [ ] 3.10 Retain explicit rootless repair consent and post-repair re-diagnosis required by task 3.6.
-- [ ] 3.11 Update `docker/apply-rootless-port-forward.sh` to invoke only the supported Docker-gateway doctor workflow.
+- [x] 3.7 Make doctor load reviewed host-access mode and dispatch disabled, external-address, and Docker-gateway behavior required by tasks 3.1–3.3.
+- [x] 3.8 Replace `.env` gateway persistence with an atomic typed local-companion update that preserves `[cache].dir` as required by task 3.4.
+- [x] 3.9 Preserve prior local bytes across every failure boundary required by task 3.5.
+- [x] 3.10 Retain explicit rootless repair consent and post-repair re-diagnosis required by task 3.6.
+- [x] 3.11 Update `docker/apply-rootless-port-forward.sh` to invoke only the supported Docker-gateway doctor workflow.
 
 ### INTROSPECT
 
-- [ ] 3.12 Inspect networking and doctor call graphs; prove builds, ordinary runs, disabled mode, and external-address mode cannot reach gateway probe, persistence, or systemd mutation boundaries.
-- [ ] 3.13 Inspect local update code for symlink, temporary-file, unknown-key, and partial-write hazards and add a focused regression assertion for each reachable hazard.
+- [x] 3.12 Inspect networking and doctor call graphs; prove builds, ordinary runs, disabled mode, and external-address mode cannot reach gateway probe, persistence, or systemd mutation boundaries.
+- [x] 3.13 Inspect local update code for symlink, temporary-file, unknown-key, and partial-write hazards and add a focused regression assertion for each reachable hazard.
 
 ### VALIDATE
 
-- [ ] 3.14 Run focused networking, doctor orchestration, facade-doctor, local persistence, rootless repair, helper-script, and failure-injection tests and fix all failures.
-- [ ] 3.15 Run static and shell checks applicable to networking, orchestration, and the rootless helper and confirm Phase 3 introduces no build dependency.
+- [x] 3.14 Run focused networking, doctor orchestration, facade-doctor, local persistence, rootless repair, helper-script, and failure-injection tests and fix all failures.
+- [x] 3.15 Run static and shell checks applicable to networking, orchestration, and the rootless helper and confirm Phase 3 introduces no build dependency.
 
 ## 4. Conditional runtime verification
 

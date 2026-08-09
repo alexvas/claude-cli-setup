@@ -325,41 +325,22 @@ class TestDoctorRequestDto(unittest.TestCase):
 class TestDiagnosisOnly(unittest.TestCase):
     """Task 27 — diagnosis without repair intent."""
 
-    def test_successful_diagnosis_persists_gateway_for_fresh_run(self):
-        """A later run reads the mapping produced by a fresh doctor."""
-        from docker.constructor_cli import _read_operational_gateway
-        from docker.versioning.rendering import (
-            RunRenderInputs,
-            render_run_vector,
-        )
+    def test_successful_diagnosis_reports_gateway(self):
+        """A successful diagnosis reports the selected gateway.
+        Without an inventory path (legacy), no local persistence is
+        performed."""
 
         with tempfile.TemporaryDirectory() as tmp:
-            env_path = Path(tmp) / ".env"
             result = orchestrate_doctor(DoctorRequest(
-                gateway_env_path=env_path,
+                inventory_path=None,
                 _diagnose_gateway=_diag_reachable,
                 _plan_rootless_override=_plan_not_needed,
             ))
 
             self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
             self.assertEqual("172.17.0.1", result.selected_gateway)
-            self.assertIsNotNone(result.persistence_result)
-            self.assertTrue(result.persistence_result.written)
-            self.assertEqual("HOST_GATEWAY_IP=172.17.0.1\n",
-                             env_path.read_text())
-            with mock.patch("docker.constructor_cli._REPO_ROOT", Path(tmp)):
-                gateway = _read_operational_gateway()
-            run_args = render_run_vector(RunRenderInputs(
-                image="pi-cli-pi:latest",
-                container_name="pi-1",
-                projection_host_path="/tmp/.docker-generated/runtime/projection.toml",
-                projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-                pi_home_host="/tmp/pi-home",
-                main_project="/tmp/project",
-                gateway=gateway,
-                validate_artifact_sources=False,
-            ))
-            self.assertIn("host.docker.internal:172.17.0.1", run_args)
+            # Legacy callers (inventory_path=None) get diagnosis only
+            self.assertIsNone(result.persistence_result)
 
     # -- successful diagnosis -------------------------------------------
 
@@ -667,14 +648,13 @@ class TestOperationOrder(unittest.TestCase):
 class TestRepairFailure(unittest.TestCase):
     """Task 31 — structured repair failures."""
 
-    def test_initial_gateway_persists_before_repair_failure(self):
-        """A failed repair must not discard a reachable gateway."""
+    def test_initial_gateway_diagnosed_before_repair_failure(self):
+        """A failed repair must not discard the diagnosed gateway."""
         with tempfile.TemporaryDirectory() as tmp:
-            env_path = Path(tmp) / ".env"
             result = orchestrate_doctor(DoctorRequest(
                 apply_override=True,
                 repair_consent=True,
-                gateway_env_path=env_path,
+                inventory_path=None,
                 _diagnose_gateway=_diag_rootless_reachable,
                 _plan_rootless_override=_plan_needed,
                 _apply_rootless_override=_apply_fail_mkdir,
@@ -683,10 +663,8 @@ class TestRepairFailure(unittest.TestCase):
             self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
             self.assertIsNotNone(result.repair_failure)
             self.assertEqual("10.0.2.2", result.selected_gateway)
-            self.assertIsNotNone(result.persistence_result)
-            self.assertTrue(result.persistence_result.written)
-            self.assertEqual("HOST_GATEWAY_IP=10.0.2.2\n",
-                             env_path.read_text())
+            # Legacy callers (inventory_path=None) get diagnosis only
+            self.assertIsNone(result.persistence_result)
 
     def test_source_missing(self):
         req = DoctorRequest(
