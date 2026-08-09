@@ -272,6 +272,57 @@ def _read_operational_gateway() -> str:
     return "host-gateway"
 
 
+def _resolve_verify_host_access(
+    inv_path: str,
+) -> tuple[object, str | None, str | None]:
+    """Resolve host-access expectations for runtime verification.
+
+    Returns ``(host_access, address, error)``.
+
+    * ``error`` is not ``None`` — inventory or companion
+      unreadable/malformed/missing; caller must report CONFIG.
+    * ``host_access=None``, ``address=None`` — disabled.
+    * ``host_access=...``, ``address=...`` — enabled with addr.
+    """
+    from pathlib import Path
+    from docker.versioning.inventory import (
+        load_inventory,
+        load_local_config_for_inventory,
+        resolve_local_companion_path,
+    )
+    from docker.versioning.model import HostAccessPolicy
+
+    _p = Path(inv_path)
+    try:
+        inv = load_inventory(_p)
+    except Exception as exc:
+        return None, None, f"cannot load inventory {_p}: {exc}"
+    ha = getattr(inv.runtime, "host_access", None)
+    if not isinstance(ha, HostAccessPolicy) or not ha.enabled:
+        return None, None, None
+    mode = ha.mode
+    if not mode:
+        return None, None, None
+    companion_path = resolve_local_companion_path(_p)
+    if not companion_path.is_file():
+        return None, None, (
+            f"host access enabled ({mode}) but local companion "
+            f"{companion_path} missing; run 'doctor' or create it"
+        )
+    try:
+        local = load_local_config_for_inventory(_p)
+        if local.host_access.address and local.host_access.address.strip():
+            address = local.host_access.address.strip()
+    except Exception as exc:
+        return None, None, f"cannot load {companion_path}: {exc}"
+    if not address:
+        return None, None, (
+            f"host access enabled ({mode}) but {companion_path} "
+            f"has no [host-access].address; run 'doctor'"
+        )
+    return ha, address, None
+
+
 def _read_env_key(key: str) -> str | None:
     """Read a single value from the repo ``.env`` file.
 
@@ -844,6 +895,13 @@ def _real_dispatcher(
                 all_ok = False
 
         if scope in ("runtime", "all"):
+            _verify_ha, _verify_ha_addr, _verify_ha_err = \
+                _resolve_verify_host_access(inv_path)
+            if _verify_ha_err is not None:
+                return CommandResult(
+                    exit_kind=ExitKind.CONFIG,
+                    message=_verify_ha_err,
+                )
             # Resolve the operating container.
             container = c_args.get("container")
             if not container:
@@ -954,7 +1012,11 @@ def _real_dispatcher(
 
             if container:
                 _container_pi_home: Path = Path("/home/dev/.pi")
-                _gateway: str = _read_operational_gateway()
+
+                # Derive host-access expectations from inventory + local companion
+                # Host-access pre-resolved above
+                _host_access = _verify_ha
+                _host_access_addr = _verify_ha_addr
 
                 # _runner is already resolved above
 
@@ -963,8 +1025,9 @@ def _real_dispatcher(
                     runtime_projection_path=runtime_proj_path,
                     project_paths=_proj_paths,
                     container_pi_home=_container_pi_home,
-                    expected_gateway=_gateway,
                     runner=_runner,
+                    host_access=_host_access,
+                    host_access_address=_host_access_addr,
                 ))
                 results["runtime"] = {
                     "all_ok": r_result.all_ok,

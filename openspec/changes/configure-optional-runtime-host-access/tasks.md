@@ -137,20 +137,20 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### GREEN
 
-- [ ] 4.5 Replace unconditional expected-gateway verification inputs with typed policy-derived host-access expectations.
-- [ ] 4.6 Implement enabled hostname, address-variable, and optional port-variable checks required by tasks 4.1–4.2.
-- [ ] 4.7 Implement disabled constructor-variable absence checks and removal of the unconditional gateway failure required by task 4.3.
-- [ ] 4.8 Wire canonical and custom local companion resolution into facade verification as required by task 4.4.
+- [x] 4.5 Replace unconditional expected-gateway verification inputs with typed policy-derived host-access expectations.
+- [x] 4.6 Implement enabled hostname, address-variable, and optional port-variable checks required by tasks 4.1–4.2.
+- [x] 4.7 Implement disabled constructor-variable absence checks and removal of the unconditional gateway failure required by task 4.3.
+- [x] 4.8 Wire canonical and custom local companion resolution into facade verification as required by task 4.4.
 
 ### INTROSPECT
 
-- [ ] 4.9 Inspect every runtime check key and reporting adapter; remove stale wording that claims gateway mapping is a build result or universal runtime invariant.
-- [ ] 4.10 Prove through code inspection and tests that verification does not connect to the proxy port or assume SOCKS, HTTP, HTTPS, Ollama, or Pi-proxy semantics.
+- [x] 4.9 Inspect every runtime check key and reporting adapter; remove stale wording that claims gateway mapping is a build result or universal runtime invariant.
+- [x] 4.10 Prove through code inspection and tests that verification does not connect to the proxy port or assume SOCKS, HTTP, HTTPS, Ollama, or Pi-proxy semantics.
 
 ### VALIDATE
 
-- [ ] 4.11 Run focused runtime-verification, facade-verify, launcher-to-verifier acceptance, JSON output, and custom-inventory tests and fix all failures.
-- [ ] 4.12 Run static checks for verification modules and confirm Phase 4 reports deterministic policy-derived expectations without mutating local state.
+- [x] 4.11 Run focused runtime-verification, facade-verify, launcher-to-verifier acceptance, JSON output, and custom-inventory tests and fix all failures.
+- [x] 4.12 Run static checks for verification modules and confirm Phase 4 reports deterministic policy-derived expectations without mutating local state.
 
 ## 5. Migration, semantic cleanup, and documentation
 

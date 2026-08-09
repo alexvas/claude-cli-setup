@@ -27,6 +27,7 @@ from docker.versioning.effective import (
 from docker.versioning.model import (
     EffectivePiExtensionEntry,
     EffectiveRuntimeProjection,
+    HostAccessPolicy,
     NpmArtifact,
     NpmSource,
     NpmUpdate,
@@ -43,6 +44,12 @@ from docker.versioning.runtime_verification import (
     VerifyRuntimeRequest,
     verify_runtime,
 )
+
+# Module-level enabled policy shared by all docker-gateway verification tests
+_ENABLED_POLICY = HostAccessPolicy(
+    enabled=True, mode="docker-gateway", proxy_port=None,
+)
+_DEFAULT_ADDR = "192.168.65.254"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -243,7 +250,7 @@ def _fresh_runtime_handle(suffix: str = ".toml"):
 def _passing_handlers(
     *,
     expected_hash: str,
-    expected_gateway: str = "192.168.65.254",
+    expected_addr: str = "192.168.65.254",
     project_paths: tuple[str, ...] = ("/tmp/p1",),
     extensions: dict[str, tuple[str, str]] | None = None,
 ) -> dict[tuple[str, ...], tuple[int, str, str]]:
@@ -277,7 +284,7 @@ def _passing_handlers(
         ("test", "-w", "/home/dev/.pi"): (0, "", ""),
         # gateway.mapping — must resolve to the exact expected address
         ("getent", "hosts", "host.docker.internal"):
-            (0, f"{expected_gateway}  host.docker.internal\n", ""),
+            (0, f"{expected_addr}  host.docker.internal\n", ""),
         # forbidden.paths
         ("test", "-f", "/run/pi-cli/docker-constructor.toml"): (1, "", ""),
         ("test", "-f", "/run/pi-cli/docker-constructor.build.effective.toml"): (1, "", ""),
@@ -375,7 +382,7 @@ class TestRuntimeProjectionIdentity(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         identity = next(c for c in result.checks
@@ -394,7 +401,7 @@ class TestRuntimeProjectionIdentity(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         identity = next(c for c in result.checks
@@ -414,7 +421,7 @@ class TestRuntimeProjectionIdentity(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         identity = next(c for c in result.checks
@@ -437,7 +444,7 @@ class TestRuntimeReadonlyMount(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         ro = next(c for c in result.checks
@@ -458,7 +465,7 @@ class TestRuntimeReadonlyMount(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         ro = next(c for c in result.checks
@@ -483,7 +490,7 @@ class TestRuntimeReadonlyMount(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         ro = next(c for c in result.checks
@@ -505,7 +512,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         per_extension = [c for c in result.checks
@@ -531,7 +538,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         per_extension = [c for c in result.checks
@@ -555,7 +562,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         per_extension = [c for c in result.checks
@@ -585,7 +592,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
                 runtime_projection_path=alt_handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         ext = next(c for c in result.checks
@@ -625,7 +632,7 @@ class TestRuntimeProjects(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=tuple(Path(p) for p in project_paths),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
@@ -652,7 +659,7 @@ class TestRuntimeProjects(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=tuple(Path(p) for p in project_paths),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
@@ -675,7 +682,7 @@ class TestRuntimeProjects(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=tuple(Path(p) for p in project_paths),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
@@ -699,7 +706,7 @@ class TestRuntimeProjects(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=tuple(Path(p) for p in project_paths),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
@@ -724,7 +731,7 @@ class TestRuntimeProjects(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=tuple(Path(p) for p in project_paths),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         proj = next(c for c in result.checks
@@ -745,7 +752,7 @@ class TestRuntimeWorkingDirectory(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         wd = next(c for c in result.checks
@@ -764,7 +771,7 @@ class TestRuntimeWorkingDirectory(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         wd = next(c for c in result.checks
@@ -785,7 +792,7 @@ class TestRuntimeOwnership(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         own = next(c for c in result.checks
@@ -804,7 +811,7 @@ class TestRuntimeOwnership(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         per_owner = [c for c in result.checks
@@ -828,7 +835,7 @@ class TestRuntimePiHome(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         ph = next(c for c in result.checks
@@ -847,7 +854,7 @@ class TestRuntimePiHome(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         ph = next(c for c in result.checks
@@ -864,7 +871,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            expected_gateway=self._GATEWAY,
+            expected_addr=self._GATEWAY,
         )
         runner = _DispatchRunner(_CONTAINER, handlers)
         with handle:
@@ -873,7 +880,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway=self._GATEWAY,
+                host_access=_ENABLED_POLICY, host_access_address=self._GATEWAY,
                 runner=runner,
             ))
         gw = next(c for c in result.checks
@@ -886,7 +893,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            expected_gateway=self._GATEWAY,
+            expected_addr=self._GATEWAY,
         )
         # Container resolves host.docker.internal to a different IP.
         handlers[("getent", "hosts", "host.docker.internal")] = (
@@ -898,7 +905,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway=self._GATEWAY,
+                host_access=_ENABLED_POLICY, host_access_address=self._GATEWAY,
                 runner=runner,
             ))
         gw = next(c for c in result.checks
@@ -910,7 +917,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            expected_gateway=self._GATEWAY,
+            expected_addr=self._GATEWAY,
         )
         handlers[("getent", "hosts", "host.docker.internal")] = (2, "", "")
         runner = _DispatchRunner(_CONTAINER, handlers)
@@ -920,7 +927,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway=self._GATEWAY,
+                host_access=_ENABLED_POLICY, host_access_address=self._GATEWAY,
                 runner=runner,
             ))
         gw = next(c for c in result.checks
@@ -941,7 +948,7 @@ class TestRuntimeForbiddenPaths(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         fp = next(c for c in result.checks
@@ -961,7 +968,7 @@ class TestRuntimeForbiddenPaths(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             ))
         fp = next(c for c in result.checks
@@ -982,7 +989,7 @@ class TestRuntimeVerificationStub(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             )
             result = verify_runtime(req)
@@ -1052,12 +1059,14 @@ class TestVerifyRuntimeRequestModel(unittest.TestCase):
                 runtime_projection_path=handle.path,
                 project_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
-                expected_gateway="192.168.65.254",
+                host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
             )
             self.assertEqual(_CONTAINER, req.container)
             self.assertEqual(Path("/home/dev/.pi"), req.container_pi_home)
-            self.assertEqual("192.168.65.254", req.expected_gateway)
+            self.assertEqual("192.168.65.254", req.host_access_address)
+            self.assertIsNotNone(req.host_access)
+            self.assertEqual("docker-gateway", req.host_access.mode)
             self.assertIs(runner, req.runner)
 
 

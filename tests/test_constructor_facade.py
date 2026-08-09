@@ -2100,12 +2100,11 @@ class TestVerifyBuildWiring(unittest.TestCase):
         )
         # Inventory pointing to the repo root
         self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
-        self._inv_path.write_text(
-            '[meta]\nversion = 1\n'
-            '[environments.pi-local]\n'
-            'provider = "docker"\n'
-            'name = "pi-cli-pi"\n'
-            'tag = "latest"\n'
+        # Copy the real inventory so validation passes.
+        import shutil as _shutil
+        _shutil.copyfile(
+            Path(__file__).resolve().parent.parent / "docker-constructor.toml",
+            self._inv_path,
         )
 
     def tearDown(self) -> None:
@@ -2251,12 +2250,11 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             'sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="\n'
         )
         self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
-        self._inv_path.write_text(
-            '[meta]\nversion = 1\n'
-            '[environments.pi-local]\n'
-            'provider = "docker"\n'
-            'name = "pi-cli-pi"\n'
-            'tag = "latest"\n'
+        # Copy the real inventory so validation passes.
+        import shutil as _shutil
+        _shutil.copyfile(
+            Path(__file__).resolve().parent.parent / "docker-constructor.toml",
+            self._inv_path,
         )
 
     def tearDown(self) -> None:
@@ -2635,12 +2633,11 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
             'sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="\n'
         )
         self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
-        self._inv_path.write_text(
-            '[meta]\nversion = 1\n'
-            '[environments.pi-local]\n'
-            'provider = "docker"\n'
-            'name = "pi-cli-pi"\n'
-            'tag = "latest"\n'
+        # Copy the real inventory so validation passes.
+        import shutil as _shutil
+        _shutil.copyfile(
+            Path(__file__).resolve().parent.parent / "docker-constructor.toml",
+            self._inv_path,
         )
 
     def tearDown(self) -> None:

@@ -34,10 +34,17 @@ Checks
 +--------------------------+-----------------------------------------------------------+
 | ``pi-home.setup``        | ``~/.pi`` exists and is writable by dev.                     |
 +--------------------------+-----------------------------------------------------------+
-| ``gateway.mapping``      | ``host.docker.internal`` resolves to exactly the address    |
-|                          | persisted as ``expected_gateway`` during build.  A          |
-|                          | different resolved address or a resolution failure are both |
-|                          | check failures — there is no fallback.                     |
+| ``gateway.mapping``      | ``host.docker.internal`` resolves to exactly the            |
+|                          | expected address when host access is enabled.  A            |
+|                          | different address or a resolution failure are both         |
+|                          | check failures — there is no fallback.  This check is      |
+|                          | omitted when host access is disabled.                      |
++--------------------------+-----------------------------------------------------------+
+| ``host-access.address``  | ``HOST_ACCESS_ADDRESS`` equals the expected address when    |
+|                          | host access is enabled, or is unset when disabled.         |
++--------------------------+-----------------------------------------------------------+
+| ``host-access.proxy-port`` | ``HOST_PROXY_PORT`` matches the configured port when       |
+|                          | present in policy, or is unset when disabled/omitted.      |
 +--------------------------+-----------------------------------------------------------+
 | ``forbidden.paths``      | ``/run/pi-cli/docker-constructor.toml`` (reviewed inventory)    |
 |                          | and ``/run/pi-cli/docker-constructor.build.effective.toml``     |
@@ -55,7 +62,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from docker.versioning.model import HostAccessPolicy
 
 
 # ── Process boundary (shared contract) ───────────────────────────────
@@ -135,13 +145,18 @@ expectations."""
     All runtime checks use this as the container-side directory — the
     host-side mapping is the launcher's responsibility and is not
     needed for verification."""
-    expected_gateway: str
-    """Gateway address persisted during build (e.g. ``"192.168.65.1"``).
-    The ``gateway.mapping`` check MUST compare ``host.docker.internal``
-    resolution to this exact value — a different address or resolution
-    failure is a check failure."""
     runner: ProcessRunner
     """Injected process boundary for ``docker exec ...`` invocations."""
+    host_access: HostAccessPolicy | None = None
+    """Reviewed host-access policy.  When ``None``, host access is
+    disabled and the verifier checks that no constructor-set
+    host-access variables are present in the container.
+    When enabled, the verifier checks that ``host.docker.internal``
+    resolves to the expected address and that ``HOST_ACCESS_ADDRESS``
+    equals that address."""
+    host_access_address: str | None = None
+    """Expected ``HOST_ACCESS_ADDRESS`` value.  Required when
+    *host_access* is enabled, ``None`` when disabled."""
 
 
 # ── Public API ───────────────────────────────────────────────────────
@@ -342,20 +357,71 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
             _add("pi-home.setup", False,
                  f"{pi_home} exists but is not writable", rw)
 
-    # ── gateway.mapping ──────────────────────────────────────────────
-    r = _exec(("getent", "hosts", "host.docker.internal"))
-    if r.return_code != 0:
-        _add("gateway.mapping", False,
-             f"host.docker.internal resolution failed", r)
-    else:
-        resolved = r.stdout.strip().split()[0] if r.stdout.strip() else ""
-        if resolved == request.expected_gateway:
-            _add("gateway.mapping", True,
-                 f"host.docker.internal → {resolved}", r)
-        else:
+    # ── host-access checks ───────────────────────────────────────────
+    ha = request.host_access
+    if ha is not None and ha.enabled:
+        # 4.6: Enabled hostname + address-variable checks
+        expected_addr = request.host_access_address or ""
+        # gateway.mapping
+        r = _exec(("getent", "hosts", "host.docker.internal"))
+        if r.return_code != 0:
             _add("gateway.mapping", False,
-                 f"host.docker.internal → {resolved!r}, expected"
-                 f" {request.expected_gateway!r}", r)
+                 f"host.docker.internal resolution failed", r)
+        else:
+            resolved = r.stdout.strip().split()[0] if r.stdout.strip() else ""
+            if resolved == expected_addr:
+                _add("gateway.mapping", True,
+                     f"host.docker.internal → {resolved}", r)
+            else:
+                _add("gateway.mapping", False,
+                     f"host.docker.internal → {resolved!r}, expected"
+                     f" {expected_addr!r}", r)
+        # host-access.address
+        r = _exec(("printenv", "HOST_ACCESS_ADDRESS"))
+        if r.return_code != 0:
+            _add("host-access.address", False,
+                 f"HOST_ACCESS_ADDRESS is not set", r)
+        else:
+            actual = r.stdout.strip()
+            if actual == expected_addr:
+                _add("host-access.address", True,
+                     f"HOST_ACCESS_ADDRESS={actual}", r)
+            else:
+                _add("host-access.address", False,
+                     f"HOST_ACCESS_ADDRESS={actual!r}, expected {expected_addr!r}", r)
+        # host-access.proxy-port (only when policy declares a port)
+        if ha.proxy_port is not None:
+            expected_port = str(ha.proxy_port)
+            r = _exec(("printenv", "HOST_PROXY_PORT"))
+            if r.return_code != 0:
+                _add("host-access.proxy-port", False,
+                     f"HOST_PROXY_PORT is not set (expected {expected_port})", r)
+            else:
+                actual_port = r.stdout.strip()
+                if actual_port == expected_port:
+                    _add("host-access.proxy-port", True,
+                         f"HOST_PROXY_PORT={actual_port}", r)
+                else:
+                    _add("host-access.proxy-port", False,
+                         f"HOST_PROXY_PORT={actual_port!r}, expected {expected_port!r}", r)
+    elif ha is None:
+        # 4.7: Disabled — variables must not be present
+        r = _exec(("printenv", "HOST_ACCESS_ADDRESS"))
+        if r.return_code == 0 and r.stdout.strip():
+            _add("host-access.address", False,
+                 f"HOST_ACCESS_ADDRESS is set ({r.stdout.strip()!r})"
+                 f" but host access is disabled", r)
+        else:
+            _add("host-access.address", True,
+                 "HOST_ACCESS_ADDRESS is not set (disabled)", r)
+        r = _exec(("printenv", "HOST_PROXY_PORT"))
+        if r.return_code == 0 and r.stdout.strip():
+            _add("host-access.proxy-port", False,
+                 f"HOST_PROXY_PORT is set ({r.stdout.strip()!r})"
+                 f" but host access is disabled", r)
+        else:
+            _add("host-access.proxy-port", True,
+                 "HOST_PROXY_PORT is not set (disabled)", r)
 
     # ── forbidden.paths ──────────────────────────────────────────────
     forbidden = (
