@@ -160,9 +160,9 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### RED
 
-- [ ] 5.1 Add failing semantic-source tests that reject maintained production references to `.env` gateway persistence, `HOST_GATEWAY_IP`, unconditional run mapping, and reviewed `cache.dir` support.
-- [ ] 5.2 Add failing configuration-template tests requiring `.gitignore` to ignore `docker-constructor.local.toml` and requiring the tracked local example to contain only documented host-address and cache-directory fields.
-- [ ] 5.3 Add failing documentation parity tests requiring all README translations to describe disabled default, both host-access modes, local companion naming, optional proxy port, and `cache.dir` migration equivalently.
+- [x] 5.1 Add failing semantic-source tests that reject maintained production references to `.env` gateway persistence, `HOST_GATEWAY_IP`, unconditional run mapping, and reviewed `cache.dir` support.
+- [x] 5.2 Add failing configuration-template tests requiring `.gitignore` to ignore `docker-constructor.local.toml` and requiring the tracked local example to contain only documented host-address and cache-directory fields.
+- [x] 5.3 Add failing documentation parity tests requiring all README translations to describe disabled default, both host-access modes, local companion naming, optional proxy port, and `cache.dir` migration equivalently.
 
 ### GREEN
 
