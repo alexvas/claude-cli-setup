@@ -7,8 +7,17 @@ The version helper SHALL provide an explicit best-effort `check-updates` operati
 - **WHEN** `./docker/docker-constructor.py check-updates` runs
 - **THEN** it SHALL query each configured provider for stable candidates
 - **AND** SHALL report current, outdated, skipped, unavailable, or incomplete status per dependency
-- **AND** its text output SHALL summarize result statuses and render each dependency's path, provider, current value, candidate, status, kind, applicability, and available detail in a deterministic report
+- **AND** its text output SHALL summarize result statuses and render each dependency's path, provider, current value, candidate, status, kind, applicability, authoritative publication time, and available detail in a deterministic report
+- **AND** SHALL abbreviate a long hexadecimal revision, digest, or checksum in text-mode `CURRENT` and `CANDIDATE` cells to its first five hexadecimal characters followed by `...`, while retaining any `sha256:` prefix
+- **AND** SHALL render `-` rather than repeat a candidate exactly equal to the current value
 - **AND** default execution SHALL not fail solely because an update exists or a provider is unavailable
+
+#### Scenario: Reporting publication time
+- **WHEN** the selected candidate has an authoritative release/version publication time from its provider
+- **THEN** the text report SHALL show it as `YYYY-MM-DD HH:MM:SS GMT`
+- **AND** the structured JSON result SHALL retain the complete UTC RFC 3339 value as an additive optional field
+- **AND** SHALL show `-` when the provider has no authoritative release/version publication time or supplies a malformed value
+- **AND** SHALL NOT infer publication time from response, cache, Git commit, or later supplemental artifact-upload timestamps
 
 #### Scenario: Checking release applicability
 - **WHEN** a provider reports a newer prebuilt release
@@ -26,6 +35,7 @@ The version helper SHALL provide `check-updates --suggest` text output containin
 - **THEN** `--suggest` SHALL print the normal human-readable update report followed by a labelled TOML fragment containing the candidate version, URL, and digest
 - **AND** it SHALL state that the fragment is review-only and is not applied automatically
 - **AND** SHALL leave `docker-constructor.toml` and the working tree unchanged
+- **AND** SHALL retain full unabridged candidate versions, URLs, and digests in the TOML fragment
 
 #### Scenario: Finding no applicable suggestion
 - **WHEN** `--suggest` finds no applicable outdated release

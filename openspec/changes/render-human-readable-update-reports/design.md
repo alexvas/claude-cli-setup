@@ -29,6 +29,16 @@ The implementation SHALL use the update result records to render a stable summar
 
 Alternative: print only outdated entries. Rejected because unavailable, skipped, and inapplicable records provide important review context.
 
+### Compact display identifiers without weakening machine or review values
+
+The text table SHALL shorten a plain hexadecimal revision, digest, or checksum to its first five hexadecimal characters followed by `...`. A `sha256:`-prefixed digest SHALL retain its prefix and shorten only its hexadecimal payload. When the candidate is exactly equal to the current value, the text table SHALL render the candidate as `-` rather than repeat it. These are presentation-only transformations: JSON and reviewable TOML suggestions retain complete values.
+
+### Carry authoritative publication time as optional provenance
+
+Providers MAY supply an authoritative release/version publication time. It SHALL mean the publication time of the selected release or version, not HTTP response time, cache time, Git commit time, or a later supplemental artifact upload time. The canonical structured result carries it as an optional UTC RFC 3339 value and JSON exposes it additively without shortening. Text output renders a known value as `YYYY-MM-DD HH:MM:SS GMT` and an absent, unavailable, or malformed upstream value as `-`; optional time metadata MUST NOT change update selection, applicability, or command success.
+
+GitHub-release and uv-python candidates can use the GitHub release `published_at` value; npm can use the registry version publication time; PyPI can use the earliest upload time for the selected version as that version's publication time. Providers without authoritative version/release publication time report no value.
+
 ### Treat suggestions as review-only TOML
 
 When `--suggest` is present, text output SHALL append a labelled TOML fragment generated only from applicable outdated results. It SHALL state that the fragment is not applied automatically. When no candidate is applicable, it SHALL say so rather than emit an ambiguous blank block.
@@ -37,13 +47,14 @@ Alternative: print the serialized `suggestions` mapping. Rejected because it is 
 
 ## Risks / Trade-offs
 
-- [Long paths can make terminal tables wide] → use deterministic columns and permit normal terminal wrapping rather than truncating data.
-- [Presentation helpers could diverge from JSON] → derive both from the existing canonical serialized/result model and cover both modes with focused tests.
+- [Long paths can make terminal tables wide] → use deterministic columns and permit normal terminal wrapping rather than truncating data; compact only identifier cells in text mode.
+- [Presentation helpers could diverge from JSON] → derive both from the existing canonical serialized/result model and cover both modes with focused tests; JSON and TOML retain complete identifiers.
+- [Publication dates vary by provider] → expose only authoritative release/version dates and render `-` rather than infer one from a response, cache, commit, or artifact timestamp.
 - [A TOML fragment might be mistaken for an automatic update] → label it explicitly as review-only and preserve the no-mutation guarantee.
 
 ## Migration Plan
 
-No data migration is required. Replace only text-mode presentation and add regression tests for default and suggestion output. Rollback consists of reverting the presentation change; JSON payloads and inventory remain untouched.
+No data migration is required. Replace text-mode presentation, add optional publication provenance to structured results, and add regression tests for default and suggestion output. Rollback consists of reverting the presentation change; existing JSON fields and inventory remain untouched.
 
 ## Open Questions
 
