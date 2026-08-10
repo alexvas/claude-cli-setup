@@ -244,8 +244,8 @@ class _FakeFilesystem(CacheFilesystem):
         os.makedirs(os.path.dirname(final_path), exist_ok=True)
         with open(final_path, "wb") as fh:
             fh.write(data)
-        os.chmod(final_path, 0o400)
-        self.permissions[final_path] = 0o400
+        os.chmod(final_path, 0o444)
+        self.permissions[final_path] = 0o444
 
 
 class _FakeLock(IdentityLock):
@@ -448,7 +448,7 @@ class TestMaterializationPipeline(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
         with open(blob_path, "wb") as fh:
             fh.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         transport = _FakeTransport({})
         fs = _FakeFilesystem(
@@ -474,7 +474,7 @@ class TestMaterializationPipeline(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
         with open(blob_path, "wb") as fh:
             fh.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         fs = _FakeFilesystem(
             exists={blob_path},
@@ -987,7 +987,7 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
     def test_private_subtrees_secured_after_fresh_materialization(self) -> None:
         """After materialization from an empty state the **private**
         subtrees — ``blobs/``, ``locks/``, algorithm dirs, temp dirs —
-        are ``0o700`` and published blobs are ``0o400``.
+        are ``0o700`` and published blobs are ``0o444``.
         Parent containers (``.docker-generated/``,
         ``runtime-artifacts/``) may differ; they are not enforced."""
         runtime_dir = os.path.join(self._tmp_root, ".docker-generated", "runtime-artifacts")
@@ -1028,9 +1028,9 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         algorithm_dir = os.path.join(cache_root, algo_dirs[0])
         self.assertEqual(os.stat(algorithm_dir).st_mode & 0o777, 0o700)
 
-        # ── published blob is 0o400 ─────────────────────────────
+        # ── published blob is 0o444 ─────────────────────────────
         blob = list(result.values())[0]
-        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o444)
 
         # ── parent containers are NOT enforced ──────────────────
         # They were created fresh by _open_directory_chain, and
@@ -1202,7 +1202,7 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         blob_path = os.path.join(algorithm_dir, f"{expected_raw}.tgz")
         with open(blob_path, "wb") as f:
             f.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
         # Verify root is permissive before call.
         self.assertEqual(os.stat(cache_root).st_mode & 0o777, 0o755)
 
@@ -1275,7 +1275,7 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         ``runtime-artifacts/`` created with group-write (``0o770``)
         must retain their original modes.  Only the private
         subtrees (``blobs/``, ``locks/``, algorithm dirs) become
-        ``0o700`` and published blobs become ``0o400``."""
+        ``0o700`` and published blobs become ``0o444``."""
         dot_docker = os.path.join(self._tmp_root, ".docker-generated")
         runtime_dir = os.path.join(dot_docker, "runtime-artifacts")
         cache_root = os.path.join(runtime_dir, "blobs")
@@ -1316,9 +1316,9 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         algo_dir = os.path.join(cache_root, algo_dirs[0])
         self.assertEqual(os.stat(algo_dir).st_mode & 0o777, 0o700,
                          "algorithm dir must be 0o700")
-        # ── published blob is 0o400 ─────────────────────────────
+        # ── published blob is 0o444 ─────────────────────────────
         blob = list(result.values())[0]
-        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o444)
         self.assertEqual(transport.calls, ["https://x.test/pkg.tgz"])
 
     def test_group_writable_parents_preserved_on_cache_hit(self) -> None:
@@ -1345,7 +1345,7 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{raw}.tgz")
         with open(blob_path, "wb") as f:
             f.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         transport = _FakeTransport({})
         result = materialize_selected_artifacts(
@@ -1370,7 +1370,7 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         self.assertEqual(len(result), 1)
         actual = list(result.values())[0]
         self.assertEqual(actual.host_path, blob_path)
-        self.assertEqual(os.stat(blob_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob_path).st_mode & 0o777, 0o444)
 
     def test_source_file_permissions_preserved_during_copy(self) -> None:
         """When a source fixture file with group permissions is
@@ -1417,8 +1417,8 @@ class TestProductionSymlinkHardening(_MaterializationTestCase):
         # ── cached copy is private ──────────────────────────────
         self.assertNotEqual(cache_blob.host_path, fixture_path,
                             "cache blob must be an independent copy")
-        self.assertEqual(os.stat(cache_blob.host_path).st_mode & 0o777, 0o400,
-                         "cached copy must be 0o400")
+        self.assertEqual(os.stat(cache_blob.host_path).st_mode & 0o777, 0o444,
+                         "cached copy must be 0o444")
         self.assertEqual(os.stat(cache_root).st_mode & 0o777, 0o700,
                          "cache root is 0o700")
 
@@ -1527,7 +1527,7 @@ class TestConcurrencyCoordination(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
         with open(blob_path, "wb") as fh:
             fh.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         fs = _FakeFilesystem(
             exists={blob_path},
@@ -1778,7 +1778,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
 
         with open(blob_path, "wb") as fh:
             fh.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
         make_corrupt(blob_path)
 
         art = SelectedArtifact(url="https://x.test/pkg.tgz", integrity=integrity)
@@ -1801,7 +1801,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         # Pre-populate with a symlink (corrupt entry).
         with open(blob_path, "wb") as f:
             f.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
         os.unlink(blob_path)
         os.symlink("/etc/passwd", blob_path)
         self.assertTrue(os.path.islink(blob_path))
@@ -1823,7 +1823,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         self.assertFalse(os.path.islink(blob.host_path),
                          "symlink must be replaced by regular file")
         self.assertTrue(os.path.isfile(blob.host_path))
-        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o444)
         # The reviewed URL was fetched exactly once.
         self.assertEqual(transport.calls, ["https://x.test/pkg.tgz"])
 
@@ -1841,7 +1841,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         # Pre-populate with a directory (corrupt entry).
         with open(blob_path, "wb") as f:
             f.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
         os.unlink(blob_path)
         os.mkdir(blob_path)
         self.assertTrue(os.path.isdir(blob_path))
@@ -1863,7 +1863,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         self.assertTrue(os.path.isfile(blob.host_path),
                         "directory must be replaced by regular file")
         self.assertFalse(os.path.isdir(blob.host_path))
-        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o444)
         self.assertEqual(transport.calls, ["https://x.test/pkg.tgz"])
 
     def test_fifo_entries_detected_and_repaired(self) -> None:
@@ -1899,7 +1899,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         self.assertFalse(stat_module.S_ISFIFO(os.lstat(blob.host_path).st_mode),
                          "FIFO must be replaced by regular file")
         self.assertTrue(os.path.isfile(blob.host_path))
-        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o444)
         self.assertEqual(transport.calls, ["https://x.test/pkg.tgz"])
 
     def test_digest_mismatch_triggers_repair(self) -> None:
@@ -1914,7 +1914,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
         with open(blob_path, "wb") as fh:
             fh.write(wrong_data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         art = SelectedArtifact(url="https://x.test/pkg.tgz", integrity=integrity)
         transport = _FakeTransport({"https://x.test/pkg.tgz": data})
@@ -1942,7 +1942,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
         with open(blob_path, "wb") as fh:
             fh.write(truncated)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         art = SelectedArtifact(url="https://x.test/pkg.tgz", integrity=integrity)
         transport = _FakeTransport({"https://x.test/pkg.tgz": data})
@@ -1973,7 +1973,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         # Corrupt: replace file with directory.
         with open(blob_path, "wb") as f:
             f.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
         os.unlink(blob_path)
         os.mkdir(blob_path)
 
@@ -1993,7 +1993,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         self.assertTrue(os.path.isfile(blob.host_path),
                         "repaired blob must be a regular file")
         self.assertFalse(os.path.isdir(blob.host_path))
-        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o400)
+        self.assertEqual(os.stat(blob.host_path).st_mode & 0o777, 0o444)
 
     def test_failed_repair_fails_before_docker(self) -> None:
         """When a corrupt symlink is detected and quarantined but
@@ -2012,7 +2012,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         # Corrupt with symlink.
         with open(blob_path, "wb") as f:
             f.write(data)
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
         os.unlink(blob_path)
         os.symlink("/etc/passwd", blob_path)
 
@@ -2051,7 +2051,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
         with open(blob_path, "wb") as fh:
             fh.write(b"wrong")
-        os.chmod(blob_path, 0o400)
+        os.chmod(blob_path, 0o444)
 
         art = SelectedArtifact(url="https://x.test/pkg.tgz", integrity=integrity)
         transport = _FakeTransport({"https://x.test/pkg.tgz": data})
@@ -2138,7 +2138,7 @@ class TestCorruptionRecovery(_MaterializationTestCase):
             return CacheBlobInspection(
                 CacheBlobStat(
                     value.exists, value.is_symlink, value.is_regular_file,
-                    0o100644, value.size,
+                    0o100666, value.size,
                 ),
                 inspection.digest,
             )

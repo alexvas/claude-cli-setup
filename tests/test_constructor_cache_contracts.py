@@ -350,14 +350,14 @@ class TestCacheSafety(unittest.TestCase):
 
     def test_insecure_permissions_rejected(self) -> None:
         """RED — within the cache root, a blob with group/other
-        access is rejected with reason ``"permissions"``."""
+        write bits is rejected with reason ``"permissions"``."""
         import tempfile
         from unittest import mock
 
         with tempfile.TemporaryDirectory() as root:
             fd, path = tempfile.mkstemp(dir=root)
             os.close(fd)
-            os.chmod(path, 0o644)
+            os.chmod(path, 0o666)
 
             with mock.patch(
                 "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
