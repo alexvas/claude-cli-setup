@@ -190,11 +190,11 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### RED
 
-- [ ] 6.1 Add an acceptance test that starts from absent host-access and local config and proves build and planned run require neither gateway nor local state.
-- [ ] 6.2 Add an acceptance test that configures Docker-gateway mode, records a doctor-selected local address, and proves the later run and verification consume that exact address.
-- [ ] 6.3 Add an acceptance test that configures external-address mode plus proxy port and proves run emits the hostname mapping, `HOST_ACCESS_ADDRESS`, and `HOST_PROXY_PORT` without invoking doctor boundaries.
-- [ ] 6.4 Add an acceptance test that combines custom inventory, custom local companion, reviewed cache TTL, and local cache directory without repository-state fallback.
-- [ ] 6.5 Add an acceptance failure test proving invalid local state causes no download, cache mutation, projection publication, Docker execution, systemd mutation, or reviewed-source mutation.
+- [x] 6.1 Add an acceptance test that starts from absent host-access and local config and proves build and planned run require neither gateway nor local state.
+- [x] 6.2 Add an acceptance test that configures Docker-gateway mode, records a doctor-selected local address, and proves the later run and verification consume that exact address.
+- [x] 6.3 Add an acceptance test that configures external-address mode plus proxy port and proves run emits the hostname mapping, `HOST_ACCESS_ADDRESS`, and `HOST_PROXY_PORT` without invoking doctor boundaries.
+- [x] 6.4 Add an acceptance test that combines custom inventory, custom local companion, reviewed cache TTL, and local cache directory without repository-state fallback.
+- [x] 6.5 Add an acceptance failure test proving invalid local state causes no download, cache mutation, projection publication, Docker execution, systemd mutation, or reviewed-source mutation.
 
 ### GREEN
 

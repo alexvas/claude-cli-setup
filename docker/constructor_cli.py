@@ -285,6 +285,7 @@ def _resolve_verify_host_access(
             f"host access enabled ({mode}) but local companion "
             f"{companion_path} missing; run 'doctor' or create it"
         )
+    address: str | None = None
     try:
         local = load_local_config_for_inventory(_p)
         if local.host_access.address and local.host_access.address.strip():
