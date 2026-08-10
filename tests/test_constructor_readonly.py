@@ -734,6 +734,441 @@ class TestCheckUpdatesSuggestions(unittest.TestCase):
         pass  # exercised via GREEN wiring
 
 
+class TestCheckUpdatesTextRendering(unittest.TestCase):
+    """Text-mode ``check-updates`` produces human-readable reports."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    # ── status summary ────────────────────────────────────────────
+
+    def test_summary_counts_all_statuses(self) -> None:
+        data = {
+            "results": [
+                {"path": "a", "provider": "pypi", "current": "1.0",
+                 "candidate": None, "status": "current", "kind": "version",
+                 "applicable": False, "reason": None},
+                {"path": "b", "provider": "npm", "current": "2.0",
+                 "candidate": "3.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+                {"path": "c", "provider": "gh", "current": "4.0",
+                 "candidate": "5.0", "status": "skipped",
+                 "kind": "version", "applicable": False,
+                 "reason": "prerelease excluded"},
+                {"path": "d", "provider": "docker", "current": "6.0",
+                 "candidate": None, "status": "unavailable",
+                 "kind": "digest-refresh", "applicable": False,
+                 "reason": "timeout"},
+                {"path": "e", "provider": "pypi", "current": "7.0",
+                 "candidate": "8.0", "status": "incomplete",
+                 "kind": "version", "applicable": False,
+                 "reason": "missing sha256"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("1 current, 1 outdated (1 applicable), 1 skipped, 1 unavailable, 1 incomplete", out)
+
+    # ── table columns ─────────────────────────────────────────────
+
+    def test_table_headers_present(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("PATH", out)
+        self.assertIn("PROVIDER", out)
+        self.assertIn("CURRENT", out)
+        self.assertIn("CANDIDATE", out)
+        self.assertIn("STATUS", out)
+        self.assertIn("KIND", out)
+        self.assertIn("APPLICABLE", out)
+        self.assertIn("DETAIL", out)
+
+    def test_table_rows_contain_values(self) -> None:
+        data = {
+            "results": [
+                {"path": "pkg", "provider": "pypi", "current": "1.2",
+                 "candidate": "1.3", "status": "outdated",
+                 "kind": "version", "applicable": True,
+                 "reason": "available"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("pkg", out)
+        self.assertIn("pypi", out)
+        self.assertIn("1.2", out)
+        self.assertIn("1.3", out)
+        self.assertIn("outdated", out)
+        self.assertIn("version", out)
+        self.assertIn("yes", out)
+        self.assertIn("available", out)
+
+    def test_applicable_no_in_output(self) -> None:
+        data = {
+            "results": [
+                {"path": "pkg", "provider": "npm", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": False,
+                 "reason": "incompatible"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("no", out)
+
+    def test_null_candidate_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": None, "status": "unavailable",
+                 "kind": "version", "applicable": False,
+                 "reason": "timeout"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # The dash for null candidate should appear between CURRENT and STATUS
+        self.assertIn("1.0", out)
+        self.assertIn("unavailable", out)
+
+    def test_null_reason_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True,
+                 "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # Detail column ends a row; dash for null reason appears
+        self.assertIn("outdated", out)
+        self.assertIn("yes", out)
+
+    # ── summary: applicable count visible ─────────────────────
+
+    def test_summary_shows_applicable_outdated_separately(self) -> None:
+        data = {
+            "results": [
+                {"path": "a", "provider": "pypi", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+                {"path": "b", "provider": "npm", "current": "3",
+                 "candidate": "4", "status": "outdated",
+                 "kind": "version", "applicable": False,
+                 "reason": "incompatible"},
+                {"path": "c", "provider": "gh", "current": "5",
+                 "candidate": None, "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("1 current, 2 outdated (1 applicable)", out)
+
+    def test_summary_no_applicable_outdated_shows_zero(self) -> None:
+        data = {
+            "results": [
+                {"path": "a", "provider": "pypi", "current": "1",
+                 "candidate": "2", "status": "skipped",
+                 "kind": "version", "applicable": False,
+                 "reason": "prerelease"},
+                {"path": "b", "provider": "npm", "current": "3",
+                 "candidate": None, "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # Zero outdated → no parenthetical needed
+        self.assertIn("1 current, 1 skipped", out)
+
+    def test_summary_zero_applicable_outdated_visible(self) -> None:
+        """Even when zero outdated entries are applicable, the count
+        must appear so applicability is immediately visible."""
+        data = {
+            "results": [
+                {"path": "a", "provider": "pypi", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": False,
+                 "reason": "incompatible major"},
+                {"path": "b", "provider": "npm", "current": "3",
+                 "candidate": "4", "status": "outdated",
+                 "kind": "version", "applicable": False,
+                 "reason": "missing artifact"},
+                {"path": "c", "provider": "gh", "current": "5",
+                 "candidate": None, "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("1 current, 2 outdated (0 applicable)", out)
+
+    # ── None values render as dash ─────────────────────────────
+
+    def test_none_current_renders_as_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "pypi",
+                 "current": None, "candidate": None,
+                 "status": "unavailable", "kind": "version",
+                 "applicable": False, "reason": "timeout"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # current=None must not appear as "None" in output
+        self.assertNotIn("None", out)
+        # Dash appears in the table row
+        self.assertIn("pypi", out)
+        self.assertIn("unavailable", out)
+
+    def test_none_provider_renders_as_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": None,
+                 "current": "1", "candidate": None,
+                 "status": "current", "kind": "version",
+                 "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertNotIn("None", out)
+
+    # ── table robustness: long values, column separation ───────
+
+    def test_long_path_does_not_overflow_into_provider(self) -> None:
+        long_path = "build.stages.toolchain.rust.version.artifact.linux-amd64"
+        data = {
+            "results": [
+                {"path": long_path, "provider": "gh",
+                 "current": "1.0", "candidate": "2.0",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # The long path and provider must both appear, separated
+        self.assertIn(long_path, out)
+        self.assertIn("gh", out)
+        # Provider appears after the path, not glued to it
+        self.assertIn(long_path + "  ", out)
+
+    def test_columns_growth_expands_separator(self) -> None:
+        data_small = {
+            "results": [
+                {"path": "a", "provider": "p", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+        }
+        data_large = {
+            "results": [
+                {"path": "very.long.path.name", "provider": "long-provider",
+                 "current": "99.99.99", "candidate": "100.0.0",
+                 "status": "outdated", "kind": "digest-refresh",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake_small = _make_fake(self.m, exit_kind="success", data=data_small)
+        fake_large = _make_fake(self.m, exit_kind="success", data=data_large)
+        _, out_s, _ = _run(self.m, ["check-updates"], dispatcher=fake_small)
+        _, out_l, _ = _run(self.m, ["check-updates"], dispatcher=fake_large)
+        # Separator line must be wider for the larger data
+        sep_s = [ln for ln in out_s.split("\n") if ln.startswith("---")][0]
+        sep_l = [ln for ln in out_l.split("\n") if ln.startswith("---")][0]
+        self.assertGreater(len(sep_l), len(sep_s))
+
+    # ── deterministic ordering ───────────────────────────────────
+
+    def test_identical_inputs_produce_identical_output(self) -> None:
+        data = {
+            "results": [
+                {"path": "a", "provider": "pypi", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+                {"path": "b", "provider": "npm", "current": "3",
+                 "candidate": "4", "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out1, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        _, out2, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertEqual(out1, out2)
+
+    # ── JSON compatibility ───────────────────────────────────────
+
+    def test_json_output_unchanged(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+            "suggestions": [
+                {"path": "x", "changes": {"version": "2"}},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates", "--suggest"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        self.assertEqual("policy", payload["status"])
+        self.assertIn("results", payload["data"])
+        self.assertIn("suggestions", payload["data"])
+
+    def test_json_no_suggestions_key_when_absent(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": None, "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        # suggest flag absent → suggestions not emitted
+        self.assertNotIn("suggestions", payload.get("data", {}))
+
+
+class TestCheckUpdatesSuggestRendering(unittest.TestCase):
+    """``--suggest`` renders a labelled TOML fragment or a clear no-candidates message."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_suggestions_render_toml_fragment(self) -> None:
+        data = {
+            "results": [
+                {"path": "pkg", "provider": "pypi", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+            "suggest": True,
+            "suggestions": [
+                {"path": "pkg", "changes": {"version": "2.0"}},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--suggest"], dispatcher=fake,
+        )
+        self.assertIn("─── suggestions", out)
+        self.assertIn("review-only", out)
+        self.assertIn("[pkg]", out)
+        self.assertIn('version = "2.0"', out)
+
+    def test_suggestions_label_explicitly_review_only(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+            "suggest": True,
+            "suggestions": [
+                {"path": "x", "changes": {"version": "2"}},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--suggest"], dispatcher=fake,
+        )
+        self.assertIn("review-only", out)
+        self.assertIn("not applied automatically", out)
+
+    def test_no_suggestions_shows_message(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": None, "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+            "suggest": True,
+            "suggestions": [],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data,
+                          message="all current")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--suggest"], dispatcher=fake,
+        )
+        self.assertIn("No applicable outdated candidates", out)
+        self.assertNotIn("[x]", out)  # no TOML block
+
+    def test_suggest_off_no_suggestion_block(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+            "suggest": False,
+            "suggestions": [
+                {"path": "x", "changes": {"version": "2"}},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["check-updates"], dispatcher=fake,
+        )
+        self.assertNotIn("suggestions", out)
+        self.assertNotIn("review-only", out)
+
+    def test_suggestions_non_mutating_no_files_created(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": "2", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+            "suggest": True,
+            "suggestions": [
+                {"path": "x", "changes": {"version": "2"}},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        import tempfile
+        import pathlib
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = os.getcwd()
+            try:
+                os.chdir(tmp)
+                _, out, _ = _run(
+                    self.m, ["check-updates", "--suggest"],
+                    dispatcher=fake,
+                )
+                created = list(pathlib.Path(tmp).rglob("*"))
+                self.assertEqual([], [str(p) for p in created])
+                self.assertIn("[x]", out)
+            finally:
+                os.chdir(orig)
+
+
 class TestCheckUpdatesPolicyExits(unittest.TestCase):
     """``check-updates`` maps domain outcomes to correct exit codes."""
 

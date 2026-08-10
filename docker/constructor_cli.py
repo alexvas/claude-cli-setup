@@ -1234,6 +1234,121 @@ def _coloured(text: str, code: str, color: str, *,
     return f"{code}{text}{_RESET}"
 
 
+def _render_check_updates_text(data: object) -> str:
+    """Render check-updates data as a human-readable update report.
+
+    Produces a deterministic summary line with applicable-outdated
+    counts, a per-dependency table with dynamic column widths, and
+    an optional review-only TOML suggestions block.
+    """
+    if not isinstance(data, dict):
+        return str(data)
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return str(data)
+
+    # ── normalise cells (None → "-") ────────────────────────────
+    rows: list[dict[str, str]] = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+
+        def _cell(key: str) -> str:
+            v = r.get(key)
+            if v is None:
+                return "-"
+            return str(v)
+
+        rows.append({
+            "path": _cell("path"),
+            "provider": _cell("provider"),
+            "current": _cell("current"),
+            "candidate": _cell("candidate"),
+            "status": _cell("status"),
+            "kind": _cell("kind"),
+            "applicable": "yes" if r.get("applicable") else "no",
+            "detail": _cell("reason"),
+        })
+
+    # ── summary (applicable-outdated count made visible) ─────────
+    counts: dict[str, int] = {}
+    applicable_outdated = 0
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        status = r.get("status", "unknown")
+        counts[status] = counts.get(status, 0) + 1
+        if status == "outdated" and r.get("applicable"):
+            applicable_outdated += 1
+
+    status_order = ("current", "outdated", "skipped", "unavailable", "incomplete")
+    parts: list[str] = []
+    for s in status_order:
+        if s in counts:
+            if s == "outdated":
+                parts.append(
+                    f"{counts[s]} outdated ({applicable_outdated} applicable)"
+                )
+            else:
+                parts.append(f"{counts[s]} {s}")
+    summary = "Updates: " + ", ".join(parts) if parts else "No update targets found."
+
+    # ── table (dynamic column widths, guaranteed 2-space gaps) ──
+    col_labels = ("PATH", "PROVIDER", "CURRENT", "CANDIDATE",
+                  "STATUS", "KIND", "APPLICABLE", "DETAIL")
+
+    # Compute min width per column from label + all row values
+    def _col_width(idx: int, label: str) -> int:
+        w = len(label)
+        for row in rows:
+            val = list(row.values())[idx]
+            if len(val) > w:
+                w = len(val)
+        return w
+
+    widths = tuple(_col_width(i, label) for i, label in enumerate(col_labels))
+    header = "  ".join(label.ljust(widths[i]) for i, label in enumerate(col_labels))
+    sep = "-" * len(header)
+    table_lines = [sep, header, sep]
+
+    for row in rows:
+        vals = list(row.values())
+        line = "  ".join(vals[i].ljust(widths[i]) for i in range(len(vals)))
+        table_lines.append(line)
+    table_lines.append(sep)
+
+    out = [summary, "", "\n".join(table_lines)]
+
+    # ── suggestions ──────────────────────────────────────────────
+    suggest_flag = bool(data.get("suggest", False))
+    if suggest_flag:
+        suggestions = data.get("suggestions")
+        if isinstance(suggestions, list) and suggestions:
+            toml_lines: list[str] = []
+            for entry in suggestions:
+                if not isinstance(entry, dict):
+                    continue
+                epath = entry.get("path")
+                changes = entry.get("changes")
+                if not epath or not isinstance(changes, dict):
+                    continue
+                toml_lines.append(f"[{epath}]")
+                for key, val in sorted(changes.items()):
+                    toml_lines.append(f'{key} = "{val}"')
+                toml_lines.append("")
+            if toml_lines:
+                out.append("")
+                out.append("─── suggestions (review-only — not applied automatically) ───")
+                out.append("\n".join(toml_lines).rstrip("\n"))
+        else:
+            out.append("")
+            out.append("─── suggestions ──────────────────────────────────────────────")
+            out.append("No applicable outdated candidates — nothing to suggest.")
+
+    return "\n".join(out)
+
+
 def _render_data_text(data: object) -> str:
     """Render CommandResult data for text-mode display.
 
@@ -1346,7 +1461,11 @@ def _render(
         if result.message:
             target.append(f"{prefix} {result.message}")
         if result.data is not None:
-            rendered = _render_data_text(result.data)
+            rendered = (
+                _render_check_updates_text(result.data)
+                if command == "check-updates"
+                else _render_data_text(result.data)
+            )
             if rendered:
                 if result.message:
                     target.append(f"       data: {rendered}")
