@@ -1,15 +1,15 @@
 # Capability: build-networking
 
 ## Purpose
-Define how the project diagnoses host reachability and prepares Docker builds, especially for rootless Docker.
+Define how the project diagnoses host reachability for Docker-gateway host access and prepares rootless Docker overrides.
 
 ## Requirements
 
 ### Requirement: Provide reusable gateway networking services
-Gateway diagnosis and rootless override behavior SHALL be implemented in a dedicated internal networking module with a reusable programmatic API. The constructor CLI facade SHALL consume this module rather than own or duplicate its networking logic. Image build orchestration SHALL NOT consume gateway diagnosis or persistence services.
+Gateway diagnosis and rootless override behavior SHALL be implemented in a dedicated internal networking module with a reusable programmatic API. The constructor CLI facade SHALL consume this module rather than own or duplicate its networking logic. Image build orchestration and disabled or external-address runtime access SHALL NOT consume gateway diagnosis or persistence services.
 
 #### Scenario: Reusing gateway diagnosis from the CLI
-- **WHEN** `./docker/docker-constructor.py doctor` diagnoses host reachability
+- **WHEN** `./docker/docker-constructor.py doctor` diagnoses explicitly enabled Docker-gateway host access
 - **THEN** the facade SHALL call the dedicated networking module
 - **AND** the module SHALL return structured diagnosis results without parsing CLI arguments or selecting process exit codes
 
@@ -19,14 +19,19 @@ Gateway diagnosis and rootless override behavior SHALL be implemented in a dedic
 - **AND** SHALL NOT require invoking the constructor CLI facade
 
 ### Requirement: Probe host reachability from Docker
-The system SHALL test candidate host gateway mappings from inside a temporary container through the explicit `doctor` command.
+The system SHALL test candidate host gateway mappings from inside a temporary container through the explicit `doctor` command only for Docker-gateway host-access mode.
 
-#### Scenario: Running diagnostics through doctor
-- **WHEN** `./docker/docker-constructor.py doctor` performs gateway diagnosis
+#### Scenario: Running Docker-gateway diagnostics
+- **WHEN** `./docker/docker-constructor.py doctor` runs with reviewed host access enabled in `docker-gateway` mode
 - **THEN** it SHALL start a temporary HTTP probe server on the host
 - **AND** SHALL detect whether Docker is running in rootless mode
 - **AND** SHALL test candidate mappings for `host.docker.internal`
-- **AND** SHALL print probe results and the chosen `HOST_GATEWAY_IP` when a working route is found
+- **AND** SHALL report the probes and chosen address
+
+#### Scenario: Avoiding gateway diagnostics for other policies
+- **WHEN** reviewed host access is disabled or uses `external-address` mode
+- **THEN** `doctor` SHALL NOT probe Docker gateway candidates
+- **AND** SHALL NOT install a rootless override or replace the user-managed external address
 
 ### Requirement: Use different gateway candidates for rootful and rootless Docker
 The system SHALL probe different host gateway candidates depending on Docker mode.
@@ -43,39 +48,31 @@ The system SHALL probe different host gateway candidates depending on Docker mod
 - **AND** also probes `host-gateway`
 
 ### Requirement: Install a rootless Docker override
-The system SHALL be able to install a user-level Docker systemd override for rootless port forwarding through the unified version command surface.
+The system SHALL be able to install a user-level Docker systemd override for explicitly enabled Docker-gateway host access through the constructor facade.
 
 #### Scenario: Applying the override through the unified command
-- **WHEN** the user explicitly requests rootless override application through `docker-constructor.py doctor`
+- **WHEN** the user explicitly requests rootless override application through `docker-constructor.py doctor` in Docker-gateway mode
 - **THEN** the command SHALL copy `docker/rootless-docker.override.conf` to `~/.config/systemd/user/docker.service.d/override.conf`
 - **AND** SHALL reload the user systemd daemon
 - **AND** SHALL restart `docker.service`
 - **AND** SHALL rerun diagnostics
 
 #### Scenario: Applying the override through the helper script
-- **WHEN** `docker/apply-rootless-port-forward.sh` is executed
+- **WHEN** `docker/apply-rootless-port-forward.sh` is executed for enabled Docker-gateway access
 - **THEN** it SHALL install the same override file
 - **AND** SHALL restart rootless Docker
 - **AND** SHALL invoke the constructor facade's `doctor` command
 
-### Requirement: Persist detected host gateway configuration for runtime launch
-The system SHALL make a gateway selected by explicit diagnostics available to direct Docker runtime launches without a separate build wrapper and without placing operational host state in either dependency section. Image build SHALL neither depend on nor persist this state.
+### Requirement: Persist diagnosed gateway in local TOML state
+A successful Docker-gateway diagnosis SHALL atomically persist its selected address in the local TOML companion without modifying the reviewed inventory or unrelated recognized local settings.
 
-#### Scenario: Running the unified build command
-- **WHEN** `./docker/docker-constructor.py build` executes
-- **THEN** it SHALL invoke `docker build` directly with the validated effective build projection
-- **AND** it SHALL NOT diagnose gateway reachability, persist `HOST_GATEWAY_IP`, or modify `docker-constructor.toml` or `.env`
+#### Scenario: Saving a successful diagnosis
+- **WHEN** `doctor` selects a working Docker-gateway address
+- **THEN** it SHALL atomically write that address to `[host-access].address` in the resolved local companion
+- **AND** SHALL preserve other recognized local settings
+- **AND** SHALL NOT modify `docker-constructor.toml` or `.env`
 
-#### Scenario: Launching after gateway configuration
-- **WHEN** the launcher constructs a direct Docker run with an operational gateway configuration
-- **THEN** it SHALL pass that gateway explicitly as `RunRenderInputs.gateway`
-- **AND** `render_run_vector()` SHALL emit that value through Docker's `--add-host` option without reading `.env` or using `--env-file`
-- **AND** it SHALL NOT expose gateway state as runtime dependency metadata
-
-### Requirement: Expose host mapping in direct Docker runs
-The system SHALL inject a host mapping into runtime container launches without Compose.
-
-#### Scenario: Starting the Pi container
-- **WHEN** the launcher constructs a direct `docker run` command
-- **THEN** it SHALL add `host.docker.internal:<resolved-gateway>` through Docker's host-mapping option
-- **AND** the Docker build SHALL NOT receive unused host-proxy arguments
+#### Scenario: Preserving prior state after failure
+- **WHEN** diagnosis, repair, or persistence fails before a new address is safely published
+- **THEN** any prior local companion SHALL remain intact
+- **AND** `doctor` SHALL report an operational failure

@@ -198,16 +198,16 @@ Phase 5 ────────> Phase 6: integrated acceptance
 
 ### GREEN
 
-- [ ] 6.6 Make only integration-level wiring fixes needed for tasks 6.1–6.5; do not add new policy, fallback, compatibility path, or configuration source outside the approved artifacts.
+- [x] 6.6 Make only integration-level wiring fixes needed for tasks 6.1–6.5; do not add new policy, fallback, compatibility path, or configuration source outside the approved artifacts.
 
 ### INTROSPECT
 
-- [ ] 6.7 Review the complete implementation diff against every requirement and scenario in this change; map each scenario to at least one focused or acceptance assertion and close every unmapped scenario.
-- [ ] 6.8 Review public DTOs, CLI output, filesystem writes, environment variables, and Docker vectors for scope expansion; remove any behavior not required by the proposal, design, specs, or tasks.
-- [ ] 6.9 Confirm the final dependency graph respects the phase DAG: build remains independent, run never invokes doctor, verification never mutates state, and local config never overrides reviewed policy or dependencies.
+- [x] 6.7 Review the complete implementation diff against every requirement and scenario in this change; map each scenario to at least one focused or acceptance assertion and close every unmapped scenario.
+- [x] 6.8 Review public DTOs, CLI output, filesystem writes, environment variables, and Docker vectors for scope expansion; remove any behavior not required by the proposal, design, specs, or tasks.
+- [x] 6.9 Confirm the final dependency graph respects the phase DAG: build remains independent, run never invokes doctor, verification never mutates state, and local config never overrides reviewed policy or dependencies.
 
 ### VALIDATE
 
-- [ ] 6.10 Run the complete project test suite and fix every regression attributable to this change.
-- [ ] 6.11 Run all project typecheck, lint, formatting, compile, shell, and build checks and fix every failure attributable to this change.
-- [ ] 6.12 Run OpenSpec validation and `git diff --check`, then record the exact passing commands and results in the implementation report before marking the change complete.
+- [x] 6.10 Run the complete project test suite and fix every regression attributable to this change.
+- [x] 6.11 Run all project typecheck, lint, formatting, compile, shell, and build checks and fix every failure attributable to this change.
+- [x] 6.12 Run OpenSpec validation and `git diff --check`, then record the exact passing commands and results in the implementation report before marking the change complete.

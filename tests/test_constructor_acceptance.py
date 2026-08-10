@@ -365,14 +365,17 @@ def _make_runtime_fixture() -> tuple[str, str, str, str]:
 
     The directory contains:
 
-    * ``docker-constructor.toml`` — minimal inventory
+    * ``docker-constructor.toml`` — reviewed inventory (copied from repo, host access disabled)
     * ``runtime.toml`` — effective runtime projection with one extension
     """
     td = tempfile.mkdtemp(prefix="acc-runtime-")
     td_p = Path(td)
 
-    # Minimal inventory so --inventory resolves to this directory.
-    (td_p / "docker-constructor.toml").write_text("[meta]\nversion = 1\n")
+    # Copy the repository's reviewed inventory (no [runtime.host-access]
+    # → host access disabled).
+    import shutil
+    repo_root = Path(__file__).resolve().parents[1]
+    shutil.copy(repo_root / "docker-constructor.toml", td_p / "docker-constructor.toml")
 
     # Effective runtime projection with one extension.
     proj = td_p / "runtime.toml"
