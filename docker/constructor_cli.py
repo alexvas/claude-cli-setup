@@ -1234,6 +1234,57 @@ def _coloured(text: str, code: str, color: str, *,
     return f"{code}{text}{_RESET}"
 
 
+def _abbreviate_identifier(value: str) -> str:
+    """Abbreviate long hex identifiers for text display.
+
+    Only genuinely long hex strings (≥ 20 chars, e.g. revision digests,
+    checksums) are shortened to their first five characters followed by
+    ``…``.  Short hex strings such as ``12345`` and version-like values
+    are left unchanged.
+
+    - ``sha256:abc123def456...`` → ``sha256:abc12…``
+    - ``deadbeefcafebabe0123456789abcdef012345…`` → ``deadb…``
+    - ``12345`` → ``12345`` (too short)
+    - everything else → unchanged
+    """
+    import re
+    # sha256: prefix — abbreviate only when the entire payload is 20+ hex chars
+    m = re.fullmatch(r"^(sha256:)([0-9a-fA-F]{20,})", value)
+    if m:
+        return m.group(1) + m.group(2)[:5] + "..."
+    # Plain hex string of 20+ chars (revisions, digests, checksums)
+    if re.fullmatch(r"[0-9a-fA-F]{20,}", value):
+        return value[:5] + "..."
+    return value
+
+
+def _format_published_at(published_at: object) -> str:
+    """Render an optional UTC RFC 3339 timestamp as human-readable.
+
+    Known UTC values → ``YYYY-MM-DD HH:MM:SS GMT``.
+    Absent, non-UTC, or unparseable → ``-``.
+    """
+    import re
+    from datetime import datetime
+
+    if not isinstance(published_at, str) or not published_at:
+        return "-"
+
+    # RFC 3339 date-time with Z or +00:00 offset
+    m = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?)"
+        r"(Z|(?:\+00:00))",
+        published_at,
+    )
+    if not m:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(m.group(1))
+    except ValueError:
+        return "-"
+    return dt.strftime("%Y-%m-%d %H:%M:%S GMT")
+
+
 def _render_check_updates_text(data: object) -> str:
     """Render check-updates data as a human-readable update report.
 
@@ -1248,7 +1299,7 @@ def _render_check_updates_text(data: object) -> str:
     if not isinstance(results, list):
         return str(data)
 
-    # ── normalise cells (None → "-") ────────────────────────────
+    # ── normalise cells (None → "-", abbreviate, deduplicate) ────
     rows: list[dict[str, str]] = []
     for r in results:
         if not isinstance(r, dict):
@@ -1260,14 +1311,27 @@ def _render_check_updates_text(data: object) -> str:
                 return "-"
             return str(v)
 
+        current_raw = _cell("current")
+        candidate_raw = _cell("candidate")
+        # Abbreviate hex identifiers in text display only;
+        # compare raw original values for equality check.
+        current = _abbreviate_identifier(current_raw)
+        candidate = _abbreviate_identifier(candidate_raw)
+        # Candidate equal to current (raw) → "-"
+        if candidate_raw != "-" and candidate_raw == current_raw:
+            candidate = "-"
+
+        published = _format_published_at(r.get("published_at"))
+
         rows.append({
             "path": _cell("path"),
             "provider": _cell("provider"),
-            "current": _cell("current"),
-            "candidate": _cell("candidate"),
+            "current": current,
+            "candidate": candidate,
             "status": _cell("status"),
             "kind": _cell("kind"),
             "applicable": "yes" if r.get("applicable") else "no",
+            "published": published,
             "detail": _cell("reason"),
         })
 
@@ -1296,9 +1360,8 @@ def _render_check_updates_text(data: object) -> str:
 
     # ── table (dynamic column widths, guaranteed 2-space gaps) ──
     col_labels = ("PATH", "PROVIDER", "CURRENT", "CANDIDATE",
-                  "STATUS", "KIND", "APPLICABLE", "DETAIL")
+                  "STATUS", "KIND", "APPLICABLE", "PUBLISHED", "DETAIL")
 
-    # Compute min width per column from label + all row values
     def _col_width(idx: int, label: str) -> int:
         w = len(label)
         for row in rows:

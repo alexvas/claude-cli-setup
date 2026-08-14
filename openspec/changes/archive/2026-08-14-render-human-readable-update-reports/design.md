@@ -37,7 +37,7 @@ The text table SHALL shorten a plain hexadecimal revision, digest, or checksum t
 
 Providers MAY supply an authoritative release/version publication time. It SHALL mean the publication time of the selected release or version, not HTTP response time, cache time, Git commit time, or a later supplemental artifact upload time. The canonical structured result carries it as an optional UTC RFC 3339 value and JSON exposes it additively without shortening. Text output renders a known value as `YYYY-MM-DD HH:MM:SS GMT` and an absent, unavailable, or malformed upstream value as `-`; optional time metadata MUST NOT change update selection, applicability, or command success.
 
-GitHub-release and uv-python candidates can use the GitHub release `published_at` value; npm can use the registry version publication time; PyPI can use the earliest upload time for the selected version as that version's publication time. Providers without authoritative version/release publication time report no value.
+GitHub-release and uv-python candidates can use the GitHub release `published_at` value; npm can use the registry version publication time; PyPI can use the earliest upload time for the selected version as that version's publication time. The supported timestamp profile is `YYYY-MM-DDTHH:MM:SS[.fraction](Z|+00:00)`, with one through six fractional digits when present; lowercase `t`/`z`, leap seconds, `-00:00`, non-zero offsets, and higher-precision fractions are unknown. Providers without authoritative version/release publication time report no value.
 
 ### Treat suggestions as review-only TOML
 

@@ -395,12 +395,16 @@ class GitHubReleaseProvider:
             )
 
         current = target.current
+        from ..model import _validate_utc_rfc3339
+        published_at = _validate_utc_rfc3339(best_rel.get("published_at"))
+
         if best_tag == current:
             return ProviderResult(
                 candidate=UpdateCandidate(
                     value=current,
                     kind=UpdateKind.VERSION,
                     artifacts={},
+                    published_at=published_at,
                 )
             )
 
@@ -414,6 +418,7 @@ class GitHubReleaseProvider:
                     value=current,
                     kind=UpdateKind.VERSION,
                     artifacts={},
+                    published_at=published_at,
                 )
             )
 
@@ -479,5 +484,6 @@ class GitHubReleaseProvider:
                 value=best_tag,
                 kind=UpdateKind.VERSION,
                 artifacts=candidate_artifacts,
+                published_at=published_at,
             ),
         )

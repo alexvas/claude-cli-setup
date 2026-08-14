@@ -174,3 +174,60 @@ class TestNpmProvider(unittest.TestCase):
         self.assertIsNotNone(result.candidate)
         # Must report CURRENT, not the older 1.0.0
         self.assertEqual(result.candidate.value, "2.0.0")
+
+    def test_published_at_from_version_time(self) -> None:
+        """npm registry version time propagated as published_at."""
+        import json as _json
+        from urllib.parse import quote
+        pkg = "some-pkg"
+        encoded = quote(pkg, safe="")
+        self.http.set(
+            "GET", f"https://registry.npmjs.org/{encoded}",
+            status=200,
+            body=_json.dumps({
+                "versions": {
+                    "1.0.0": {"version": "1.0.0"},
+                    "2.0.0": {"version": "2.0.0"},
+                },
+                "time": {
+                    "1.0.0": "2025-01-01T00:00:00.000Z",
+                    "2.0.0": "2025-06-15T12:30:00.000Z",
+                },
+            }).encode(),
+        )
+        target = self._target(package=pkg, version="1.0.0")
+        result = self.provider.discover(target, self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("2.0.0", result.candidate.value)
+        self.assertEqual("2025-06-15T12:30:00.000Z", result.candidate.published_at)
+
+    def test_missing_time_field_yields_none(self) -> None:
+        """When the 'time' object is absent, published_at is None."""
+        self._set_versions("some-pkg", {
+            "1.0.0": {"version": "1.0.0"},
+            "2.0.0": {"version": "2.0.0"},
+        })
+        target = self._target(package="some-pkg", version="1.0.0")
+        result = self.provider.discover(target, self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertIsNone(result.candidate.published_at)
+
+    def test_current_return_includes_published_at(self) -> None:
+        """CURRENT early-return preserves published_at from time object."""
+        import json as _json
+        from urllib.parse import quote
+        pkg = "some-pkg"
+        encoded = quote(pkg, safe="")
+        self.http.set(
+            "GET", f"https://registry.npmjs.org/{encoded}",
+            status=200,
+            body=_json.dumps({
+                "versions": {"1.0.0": {"version": "1.0.0"}},
+                "time": {"1.0.0": "2025-02-01T00:00:00Z"},
+            }).encode(),
+        )
+        target = self._target(package=pkg, version="1.0.0")
+        result = self.provider.discover(target, self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("1.0.0", result.candidate.value)
+        self.assertEqual("2025-02-01T00:00:00Z", result.candidate.published_at)

@@ -761,6 +761,71 @@ class CandidateArtifact:
     sha256: str | None
 
 
+def _validate_utc_rfc3339(value: str | None) -> str | None:
+    """Validate *value* against the RFC 3339 date-time grammar.
+
+    Accepts ``Z`` and zero UTC offset (``+00:00``); normalises the
+    offset to ``Z``-suffix.  ``-00:00`` is rejected — it denotes an
+    unknown local offset, not authoritative UTC.  Other non-UTC
+    offsets (``+01:00``) are rejected.  The fractional-precision
+    portion is preserved exactly as received.
+
+    Returns the validated timestamp, or ``None`` when *value* is
+    absent, non-UTC, or unparseable.
+    """
+    import re
+    from datetime import datetime, timezone, timedelta
+
+    if value is None or not isinstance(value, str) or not value.strip():
+        return None
+
+    # RFC 3339 date-time (section 5.6):
+    #   date-time = full-date "T" full-time
+    #   time-offset = "Z" / time-numoffset
+    #   time-numoffset = ("+" / "-") time-hour ":" time-minute
+    #   partial-time = time-hour ":" time-minute ":" time-second [time-secfrac]
+    #   time-secfrac  = "." 1*DIGIT
+    # We cap at 6 fractional digits (microsecond) — that is Python's
+    # datetime resolution.
+    m = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?)"
+        r"(Z|(?:[+-]\d{2}:\d{2}))",
+        value,
+    )
+    if not m:
+        return None
+
+    date_frac, offset = m.group(1), m.group(3)
+
+    # Validate calendar date
+    try:
+        dt = datetime.fromisoformat(date_frac)
+    except ValueError:
+        return None
+
+    # Validate UTC offset
+    if offset == "Z":
+        pass
+    elif offset == "+00:00":
+        pass
+    elif offset == "-00:00":
+        return None  # unknown local offset, not UTC
+    else:
+        # Parse offset, accept only zero
+        off_h, off_m = int(offset[1:3]), int(offset[4:6])
+        total_min = off_h * 60 + off_m
+        if offset[0] == "-":
+            total_min = -total_min
+        if total_min != 0:
+            return None
+
+    # Normalise: offset → Z suffix; fractional precision preserved as-is
+    base = dt.strftime("%Y-%m-%dT%H:%M:%S")
+    if m.group(2):
+        base += m.group(2)
+    return base + "Z"
+
+
 @dataclass(frozen=True)
 class UpdateCandidate:
     value: str
@@ -768,9 +833,18 @@ class UpdateCandidate:
     artifacts: Mapping[str, CandidateArtifact]
     digest: str | None = None
     metadata: Mapping[str, str] = ()
+    published_at: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))
+        if self.published_at is not None:
+            validated = _validate_utc_rfc3339(self.published_at)
+            if validated is None:
+                raise ValueError(
+                    f"UpdateCandidate.published_at must be a valid UTC RFC 3339 "
+                    f"timestamp, got {self.published_at!r}"
+                )
+            object.__setattr__(self, "published_at", validated)
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
 
@@ -786,9 +860,18 @@ class UpdateResult:
     reason: str | None
     artifacts: Mapping[str, CandidateArtifact]
     digest: str | None = None
+    published_at: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))
+        if self.published_at is not None:
+            validated = _validate_utc_rfc3339(self.published_at)
+            if validated is None:
+                raise ValueError(
+                    f"UpdateResult.published_at must be a valid UTC RFC 3339 "
+                    f"timestamp, got {self.published_at!r}"
+                )
+            object.__setattr__(self, "published_at", validated)
 
     def to_dict(self) -> dict[str, object]:
         """Return a deterministic JSON-serializable dict."""
@@ -805,6 +888,8 @@ class UpdateResult:
         }
         if self.digest is not None:
             result["digest"] = self.digest
+        if self.published_at is not None:
+            result["published_at"] = self.published_at
         # artifacts: plain dict of platform → {url, sha256}
         if self.artifacts:
             result["artifacts"] = {

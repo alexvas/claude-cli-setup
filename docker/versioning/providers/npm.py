@@ -124,12 +124,20 @@ class NpmProvider:
                 skipped_reason=f"npm registry: no matching versions for {package}"
             )
 
+        # Extract authoritative version publication time (validated UTC)
+        from ..model import _validate_utc_rfc3339
+        npm_time: str | None = None
+        times = data.get("time")
+        if isinstance(times, dict):
+            npm_time = _validate_utc_rfc3339(times.get(candidate_raw))
+
         if candidate_raw == current:
             return ProviderResult(
                 candidate=UpdateCandidate(
                     value=current,
                     kind=UpdateKind.VERSION,
                     artifacts={},
+                    published_at=npm_time,
                 )
             )
 
@@ -144,15 +152,18 @@ class NpmProvider:
                         value=current,
                         kind=UpdateKind.VERSION,
                         artifacts={},
+                        published_at=npm_time,
                     )
                 )
         except ValueError:
             pass  # fall through to string comparison
 
+        # npm_time was already extracted above (before early returns)
         return ProviderResult(
             candidate=UpdateCandidate(
                 value=candidate_raw,
                 kind=UpdateKind.VERSION,
                 artifacts={},
+                published_at=npm_time,
             )
         )

@@ -1169,6 +1169,427 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
                 os.chdir(orig)
 
 
+class TestCheckUpdatesCompactIdentifiers(unittest.TestCase):
+    """Text-mode CURRENT/CANDIDATE cells abbreviate hex identifiers."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_plain_hex_abbreviated(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "abc123def4567890abcdef0123456789abcdef01",
+                 "candidate": "fedcba0987654321fedcba0987654321fedcba09",
+                 "status": "outdated", "kind": "revision",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("abc12...", out)
+        self.assertIn("fedcb...", out)
+        self.assertNotIn("abc123def4567890abcdef", out)
+        self.assertNotIn("fedcba0987654321fedcba", out)
+
+    def test_sha256_prefix_retained(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "sha256:deadbeefcafebabe0123456789",
+                 "candidate": "sha256:abcdef0123456789abcdef0123",
+                 "status": "outdated", "kind": "digest-refresh",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("sha256:deadb...", out)
+        self.assertIn("sha256:abcde...", out)
+        self.assertNotIn("deadbeefcafe", out)
+
+    def test_short_hex_not_abbreviated(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "abcd", "candidate": "ef01",
+                 "status": "outdated", "kind": "revision",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("abcd", out)
+        self.assertIn("ef01", out)
+
+    def test_version_like_hex_not_abbreviated(self) -> None:
+        """Short all-hex values such as '12345' must NOT be truncated."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "12345", "candidate": "67890",
+                 "status": "outdated", "kind": "revision",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("12345", out)
+        self.assertIn("67890", out)
+        self.assertNotIn("12345...", out)
+
+    def test_sha256_prefix_partial_hex_not_abbreviated(self) -> None:
+        """sha256: with non-hex suffix not treated as a digest."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "sha256:abcdef123-filesystem",
+                 "candidate": "sha256:abcdef999-filesystem",
+                 "status": "outdated", "kind": "digest-refresh",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # Full values preserved — not truncated
+        self.assertIn("sha256:abcdef123-filesystem", out)
+        self.assertIn("sha256:abcdef999-filesystem", out)
+
+    def test_prefix_collision_does_not_hide_candidate(self) -> None:
+        """Distinct hashes sharing a five-char prefix must show
+        different abbreviated values — not collapse to '-'."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 # Same prefix, different tails
+                 "current": "4acc900000000000000000000000000000000001",
+                 "candidate": "4acc9fffffffffffffffffffffffffffffffffffff",
+                 "status": "outdated", "kind": "digest-refresh",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # Both abbreviated forms appear (they differ after 5 chars)
+        self.assertIn("4acc9...", out)
+        # CANDIDATE column shows "4acc9..." (not "-") before STATUS
+        self.assertRegex(out, r"4acc9\.\.\.\s+outdated\s+digest-refresh\s+yes")
+
+    def test_non_hex_unchanged(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm",
+                 "current": "20.10.0", "candidate": "21.0.0",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("20.10.0", out)
+        self.assertIn("21.0.0", out)
+
+    def test_candidate_equal_to_current_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "1.2.3", "candidate": "1.2.3",
+                 "status": "current", "kind": "version",
+                 "applicable": False, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data)
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("1.2.3", out)   # CURRENT column still present
+        # Candidate column shows "-" because candidate == current
+        self.assertIn("  -  ", out)
+        # Row: path  provider  current  candidate  status  kind  applicable  published  detail
+        self.assertRegex(out, r"x\s+gh\s+1\.2\.3\s+-\s+current")
+
+    # ── full values in JSON ─────────────────────────────────────
+
+    def test_json_retains_full_hex(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "abc123def4567890abcdef0123456789abcdef01",
+                 "candidate": "fedcba0987654321fedcba0987654321fedcba09",
+                 "status": "outdated", "kind": "revision",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        results = payload["data"]["results"]
+        self.assertEqual("abc123def4567890abcdef0123456789abcdef01", results[0]["current"])
+        self.assertEqual("fedcba0987654321fedcba0987654321fedcba09", results[0]["candidate"])
+
+
+class TestCheckUpdatesPublishedAt(unittest.TestCase):
+    """Publication times rendered as GMT, unknown as dash, full values in JSON."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def test_known_published_at_rendered_as_gmt(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00Z"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("2025-03-15 10:30:00 GMT", out)
+
+    def test_null_published_at_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        # PUBLISHED column contains "-" and the word "GMT" does not appear for null
+        self.assertIn("PUBLISHED", out)
+
+    def test_malformed_published_at_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "not-a-timestamp"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertNotIn("not-a-timestamp", out)
+
+    def test_timezone_less_published_at_renders_dash(self) -> None:
+        """Timezone-less timestamps are not UTC — rendered as '-'."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-01-01T00:00:00"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertNotIn("2025-01-01", out)
+
+    def test_non_utc_offset_published_at_renders_dash(self) -> None:
+        """Non-UTC offsets (e.g. +05:00) are rejected — rendered as '-'."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-01-01T00:00:00+05:00"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertNotIn("2025-01-01", out)
+        self.assertNotIn("+05:00", out)
+
+    def test_minus_00_00_renders_dash(self) -> None:
+        """-00:00 is unknown local offset — rendered as '-'."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-01-01T00:00:00-00:00"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertNotIn("2025-01-01", out)
+        self.assertNotIn("-00:00", out)
+
+    def test_over_six_fraction_digits_renders_dash(self) -> None:
+        """>6 fractional digits exceed resolution — rendered as '-'."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-01-01T00:00:00.1234567Z"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertNotIn("2025-01-01", out)
+        self.assertNotIn("1234567", out)
+
+    def test_plus_00_00_accepted_and_normalised_in_text(self) -> None:
+        """+00:00 offset is valid UTC RFC 3339 — normalised to Z in text."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 # already normalised by UpdateResult.__post_init__
+                 "published_at": "2025-06-01T12:30:00Z"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
+        self.assertIn("2025-06-01 12:30:00 GMT", out)
+
+    def test_fractional_seconds_preserved_in_json(self) -> None:
+        """Fractional seconds like .000 and .123 are preserved in JSON."""
+        # .123 — presented as-is
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00.123Z"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake)
+        payload = json.loads(out)
+        results = payload["data"]["results"]
+        self.assertEqual("2025-03-15T10:30:00.123Z",
+                         results[0]["published_at"])
+
+        # .000 — same precision preserved (only offset normalised)
+        data2 = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00.000Z"},
+            ],
+        }
+        fake2 = _make_fake(self.m, exit_kind="policy", data=data2,
+                           message="1 outdated")
+        _, out2, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake2)
+        payload2 = json.loads(out2)
+        results2 = payload2["data"]["results"]
+        self.assertEqual("2025-03-15T10:30:00.000Z",
+                         results2[0]["published_at"])
+
+    def test_json_retains_full_published_at(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00Z"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        results = payload["data"]["results"]
+        self.assertEqual("2025-03-15T10:30:00Z", results[0]["published_at"])
+
+    def test_json_omits_published_at_when_absent(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        results = payload["data"]["results"]
+        self.assertNotIn("published_at", results[0])
+
+    def test_published_at_preserved_in_collective_json(self) -> None:
+        """When present, published_at is included in the JSON results array."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "2025-06-01T12:00:00+00:00"},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake,
+        )
+        payload = json.loads(out)
+        self.assertIn("published_at", payload["data"]["results"][0])
+
+    def test_suggestions_toml_retains_full_values(self) -> None:
+        """TOML suggestions fragment retains unabridged identifiers."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "abc123def4567890abcdef0123456789abcdef01",
+                 "candidate": "fedcba0987654321fedcba0987654321fedcba09",
+                 "status": "outdated", "kind": "revision",
+                 "applicable": True, "reason": None,
+                 "published_at": "2025-01-01T00:00:00Z"},
+            ],
+            "suggest": True,
+            "suggestions": [
+                {"path": "x", "changes": {
+                    "revision": "fedcba0987654321fedcba0987654321fedcba09"}},
+            ],
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--suggest"], dispatcher=fake,
+        )
+        # Table abbreviates hex; TOML fragment below retains full value
+        self.assertIn('revision = "fedcba0987654321fedcba0987654321fedcba09"', out)
+        self.assertIn('fedcb...', out)  # abbreviated in table
+
+
 class TestCheckUpdatesPolicyExits(unittest.TestCase):
     """``check-updates`` maps domain outcomes to correct exit codes."""
 

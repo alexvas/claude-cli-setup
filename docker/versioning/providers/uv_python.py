@@ -88,6 +88,7 @@ class UvPythonProvider:
         )
         best: tuple[int, int, int] | None = None
         best_raw: str | None = None
+        best_published_at_raw: object = None
 
         # Filter non-release/draft if stable_only (respecting include_prerelease override)
         strict_stable = upd.stable_only and not context.include_prerelease
@@ -111,11 +112,15 @@ class UvPythonProvider:
                 if best is None or version_tuple > best:
                     best = version_tuple
                     best_raw = raw
+                    best_published_at_raw = release.get("published_at")
 
         if best_raw is None:
             return ProviderResult(
                 unavailable_reason="uv-python: no valid CPython versions found"
             )
+
+        from ..model import _validate_utc_rfc3339
+        published_at = _validate_utc_rfc3339(best_published_at_raw)
 
         current = target.current
         if best_raw == current:
@@ -124,6 +129,7 @@ class UvPythonProvider:
                     value=current,
                     kind=UpdateKind.VERSION,
                     artifacts={},
+                    published_at=published_at,
                 )
             )
 
@@ -138,15 +144,18 @@ class UvPythonProvider:
                         value=current,
                         kind=UpdateKind.VERSION,
                         artifacts={},
+                        published_at=published_at,
                     )
                 )
         except Exception:
             pass  # fall through to string comparison
 
+        # published_at was already extracted above (before early returns)
         return ProviderResult(
             candidate=UpdateCandidate(
                 value=best_raw,
                 kind=UpdateKind.VERSION,
                 artifacts={},
+                published_at=published_at,
             )
         )

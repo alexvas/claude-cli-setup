@@ -113,3 +113,103 @@ class TestPyPiProvider(unittest.TestCase):
         result = self.provider.discover(target, self._ctx())
         self.assertIsNotNone(result.candidate)
         self.assertEqual(result.candidate.value, "2.0.0")
+
+    def test_published_at_from_upload_time_iso_8601(self) -> None:
+        """Earliest valid upload_time_iso_8601 propagated as published_at."""
+        self._set_releases("pkg", {
+            "1.0.0": [
+                {"filename": "a.whl", "upload_time_iso_8601": "2025-06-01T10:30:00Z"},
+                {"filename": "b.whl", "upload_time_iso_8601": "2025-06-01T10:29:00Z"},
+            ],
+        })
+        result = self.provider.discover(
+            self._target("0.9.0", package="pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("1.0.0", result.candidate.value)
+        # earliest upload_time_iso_8601 normalised to Z-suffix
+        self.assertEqual(
+            "2025-06-01T10:29:00Z", result.candidate.published_at)
+
+    def test_upload_time_iso_8601_ignored_when_malformed(self) -> None:
+        """Malformed timestamps are skipped; published_at stays None."""
+        self._set_releases("pkg", {
+            "1.0.0": [
+                {"filename": "a.whl",
+                 "upload_time_iso_8601": "not-a-timestamp"},
+                {"filename": "b.whl",
+                 "upload_time_iso_8601": "also-bad"},
+            ],
+        })
+        result = self.provider.discover(
+            self._target("0.9.0", package="pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("1.0.0", result.candidate.value)
+        self.assertIsNone(result.candidate.published_at)
+
+    def test_legacy_upload_time_not_used(self) -> None:
+        """Only upload_time_iso_8601 is read; legacy upload_time ignored."""
+        self._set_releases("pkg", {
+            "1.0.0": [
+                {"filename": "a.whl",
+                 "upload_time_iso_8601": "2025-01-15T00:00:00Z",
+                 "upload_time": "2010-01-01T00:00:00"},
+            ],
+        })
+        result = self.provider.discover(
+            self._target("0.9.0", package="pkg"), self._ctx())
+        self.assertEqual("2025-01-15T00:00:00Z", result.candidate.published_at)
+
+    def test_current_return_includes_published_at(self) -> None:
+        """CURRENT early-return preserves upload_time_iso_8601."""
+        self._set_releases("pkg", {
+            "1.0.0": [
+                {"filename": "a.whl",
+                 "upload_time_iso_8601": "2025-03-01T00:00:00Z"},
+            ],
+        })
+        result = self.provider.discover(
+            self._target("1.0.0", package="pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("1.0.0", result.candidate.value)
+        self.assertEqual("2025-03-01T00:00:00Z", result.candidate.published_at)
+
+    def test_earliest_instant_uses_parsed_comparison(self) -> None:
+        """Fractional vs no-fraction ordering must use parsed datetimes.
+
+        Lexicographic comparison misorders no-fraction (Z) vs .9Z
+        because Z (ASCII 90) > . (ASCII 46).  Parsed comparison
+        treats no-fraction as equivalent to .0, so the no-fraction
+        entry wins when it is earlier.
+        """
+        self._set_releases("pkg", {
+            "1.0.0": [
+                {"filename": "later.whl",
+                 "upload_time_iso_8601": "2025-06-01T10:30:00.9Z"},
+                {"filename": "earlier.whl",
+                 "upload_time_iso_8601": "2025-06-01T10:30:00Z"},
+            ],
+        })
+        result = self.provider.discover(
+            self._target("0.9.0", package="pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("1.0.0", result.candidate.value)
+        # No-fraction entry is earlier → wins
+        self.assertEqual("2025-06-01T10:30:00Z",
+                         result.candidate.published_at)
+
+    def test_over_six_fraction_digits_skipped(self) -> None:
+        """>6-digit upload_time_iso_8601 is rejected; next-best wins."""
+        self._set_releases("pkg", {
+            "2.0.0": [
+                {"filename": "nanoseconds.whl",
+                 "upload_time_iso_8601": "2025-01-01T00:00:00.1234567Z"},
+                {"filename": "microseconds.whl",
+                 "upload_time_iso_8601": "2025-01-01T00:00:00.654321Z"},
+            ],
+        })
+        result = self.provider.discover(
+            self._target("1.0.0", package="pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("2.0.0", result.candidate.value)
+        self.assertEqual("2025-01-01T00:00:00.654321Z",
+                         result.candidate.published_at)

@@ -139,12 +139,38 @@ class PyPiProvider:
                 skipped_reason=f"PyPI: no matching versions for {package}"
             )
 
+        # Extract earliest upload time for the selected version.
+        # Validated UTC RFC 3339 via _validate_utc_rfc3339.
+        # Compare parsed datetimes to avoid lexicographic misordering
+        # when fractional precision differs (Z vs .9Z).
+        from datetime import datetime, timezone
+        from ..model import _validate_utc_rfc3339
+        pypi_published_at: str | None = None
+        best_dt: datetime | None = None
+        cand_files = releases.get(candidate_raw)
+        if isinstance(cand_files, list):
+            for f in cand_files:
+                if not isinstance(f, dict):
+                    continue
+                ut = _validate_utc_rfc3339(f.get("upload_time_iso_8601"))
+                if ut is None:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(
+                        ut.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if best_dt is None or dt < best_dt:
+                    best_dt = dt
+                    pypi_published_at = ut
+
         if candidate_raw == current:
             return ProviderResult(
                 candidate=UpdateCandidate(
                     value=current,
                     kind=UpdateKind.VERSION,
                     artifacts={},
+                    published_at=pypi_published_at,
                 )
             )
 
@@ -159,15 +185,18 @@ class PyPiProvider:
                         value=current,
                         kind=UpdateKind.VERSION,
                         artifacts={},
+                        published_at=pypi_published_at,
                     )
                 )
         except ValueError:
             pass  # fall through to string comparison
 
+        # pypi_published_at was already extracted above (before early returns)
         return ProviderResult(
             candidate=UpdateCandidate(
                 value=candidate_raw,
                 kind=UpdateKind.VERSION,
                 artifacts={},
+                published_at=pypi_published_at,
             )
         )

@@ -15,8 +15,8 @@ The version helper SHALL provide an explicit best-effort `check-updates` operati
 #### Scenario: Reporting publication time
 - **WHEN** the selected candidate has an authoritative release/version publication time from its provider
 - **THEN** the text report SHALL show it as `YYYY-MM-DD HH:MM:SS GMT`
-- **AND** the structured JSON result SHALL retain the complete UTC RFC 3339 value as an additive optional field
-- **AND** SHALL show `-` when the provider has no authoritative release/version publication time or supplies a malformed value
+- **AND** the structured JSON result SHALL retain the complete value as an additive optional field when it uses the supported UTC RFC 3339 profile `YYYY-MM-DDTHH:MM:SS[.fraction](Z|+00:00)`, where `.fraction`, when present, contains one through six decimal digits
+- **AND** SHALL show `-` when the provider has no authoritative release/version publication time or supplies a malformed or unsupported timestamp; lowercase `t`/`z` forms and leap seconds are unsupported
 - **AND** SHALL NOT infer publication time from response, cache, Git commit, or later supplemental artifact-upload timestamps
 
 #### Scenario: Checking release applicability

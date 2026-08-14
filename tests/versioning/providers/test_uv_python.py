@@ -120,3 +120,34 @@ class TestUvPythonProvider(unittest.TestCase):
         result = self.provider.discover(self._target("3.15.0"), self._ctx())
         self.assertIsNotNone(result.candidate)
         self.assertEqual(result.candidate.value, "3.15.0")
+
+    def test_published_at_from_release(self) -> None:
+        """uv-python propagates published_at from the winning release."""
+        rel1 = _make_release([_make_asset("3.14.6")])
+        rel1["published_at"] = "2025-01-15T10:00:00Z"
+        rel2 = _make_release([_make_asset("3.15.0")])
+        rel2["published_at"] = "2025-06-01T12:00:00Z"
+        self._set_releases([rel1, rel2])
+        result = self.provider.discover(self._target("3.14.6"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("3.15.0", result.candidate.value)
+        self.assertEqual("2025-06-01T12:00:00Z", result.candidate.published_at)
+
+    def test_missing_published_at_is_none(self) -> None:
+        """Release without published_at → published_at is None."""
+        self._set_releases([
+            _make_release([_make_asset("3.14.6")]),
+            _make_release([_make_asset("3.15.0")]),
+        ])
+        result = self.provider.discover(self._target("3.14.6"), self._ctx())
+        self.assertIsNone(result.candidate.published_at)
+
+    def test_current_return_includes_published_at(self) -> None:
+        """CURRENT early-return preserves published_at from the release."""
+        rel = _make_release([_make_asset("3.14.6")])
+        rel["published_at"] = "2025-04-01T00:00:00Z"
+        self._set_releases([rel])
+        result = self.provider.discover(self._target("3.14.6"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("3.14.6", result.candidate.value)
+        self.assertEqual("2025-04-01T00:00:00Z", result.candidate.published_at)

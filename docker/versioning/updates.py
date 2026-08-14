@@ -463,6 +463,7 @@ def check_updates(
             reason=reason,
             artifacts=candidate.artifacts,
             digest=candidate.digest,
+            published_at=candidate.published_at,
         ))
 
     return tuple(results)

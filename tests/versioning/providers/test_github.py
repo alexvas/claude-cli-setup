@@ -443,3 +443,62 @@ class TestGitHubProvider(unittest.TestCase):
         self.assertIsNotNone(art)
         # Falls through to body text
         self.assertEqual(art.sha256, "f" * 64)
+
+    def test_published_at_from_release(self) -> None:
+        """GitHub release published_at propagated to candidate."""
+        self._set_releases("owner/repo", [
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": False,
+             "assets": [], "published_at": "2025-01-15T10:30:00Z"},
+            {"tag_name": "v2.0.0", "draft": False, "prerelease": False,
+             "assets": [], "published_at": "2025-06-01T12:00:00Z"},
+        ])
+        result = self.provider.discover(self._target("v1.0.0"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("v2.0.0", result.candidate.value)
+        self.assertEqual("2025-06-01T12:00:00Z", result.candidate.published_at)
+
+    def test_missing_published_at_is_none(self) -> None:
+        """Release without published_at → published_at is None."""
+        self._set_releases("owner/repo", [
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": False,
+             "assets": []},
+            {"tag_name": "v2.0.0", "draft": False, "prerelease": False,
+             "assets": []},
+        ])
+        result = self.provider.discover(self._target("v1.0.0"), self._ctx())
+        self.assertIsNone(result.candidate.published_at)
+
+    def test_non_utc_published_at_rejected(self) -> None:
+        """Non-UTC published_at (timezone-less) → published_at is None."""
+        self._set_releases("owner/repo", [
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": False,
+             "assets": []},
+            {"tag_name": "v2.0.0", "draft": False, "prerelease": False,
+             "assets": [],
+             "published_at": "2025-01-01T00:00:00"},
+        ])
+        result = self.provider.discover(self._target("v1.0.0"), self._ctx())
+        self.assertIsNone(result.candidate.published_at)
+
+    def test_minus_00_00_published_at_rejected(self) -> None:
+        """-00:00 offset in release → published_at is None."""
+        self._set_releases("owner/repo", [
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": False,
+             "assets": []},
+            {"tag_name": "v2.0.0", "draft": False, "prerelease": False,
+             "assets": [],
+             "published_at": "2025-01-01T00:00:00-00:00"},
+        ])
+        result = self.provider.discover(self._target("v1.0.0"), self._ctx())
+        self.assertIsNone(result.candidate.published_at)
+
+    def test_current_return_includes_published_at(self) -> None:
+        """CURRENT early-return preserves published_at."""
+        self._set_releases("owner/repo", [
+            {"tag_name": "v1.0.0", "draft": False, "prerelease": False,
+             "assets": [], "published_at": "2025-01-15T10:30:00Z"},
+        ])
+        result = self.provider.discover(self._target("v1.0.0"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("v1.0.0", result.candidate.value)
+        self.assertEqual("2025-01-15T10:30:00Z", result.candidate.published_at)
