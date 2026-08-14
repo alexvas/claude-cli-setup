@@ -22,10 +22,10 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 
 ### RED
 
-- [ ] 1.1 Add failing unit tests for loading absent/disabled `[corporate-trust]` settings and for resolving the companion beside both the canonical inventory and a `--inventory` custom inventory.
-- [ ] 1.2 Add failing unit tests requiring enabled corporate trust to use only `.docker-local/corporate-ca-bundle.crt` and to reject a missing, unreadable, empty, or malformed PEM bundle with a path-specific CONFIG error before Docker execution.
-- [ ] 1.3 Add failing unit tests for `[network.proxy]`: accept only credential-free `http`, `socks5`, and `socks5h` URLs with host and explicit port; reject userinfo, fragments, unsupported schemes, missing host/port, malformed URLs, unknown keys, and invalid `no_proxy` values.
-- [ ] 1.4 Add failing regression tests proving a valid external proxy works while host access is disabled and that absent corporate settings preserve existing cache and host-access behavior.
+- [x] 1.1 Add failing unit tests for loading absent/disabled `[corporate-trust]` settings and for resolving the companion beside both the canonical inventory and a `--inventory` custom inventory.
+- [x] 1.2 Add failing unit tests requiring enabled corporate trust to use only `.docker-local/corporate-ca-bundle.crt` and to reject a missing, unreadable, empty, or malformed PEM bundle with a path-specific CONFIG error before Docker execution.
+- [x] 1.3 Add failing unit tests for `[network.proxy]`: accept only credential-free `http`, `socks5`, and `socks5h` URLs with host and explicit port; reject userinfo, fragments, unsupported schemes, missing host/port, malformed URLs, unknown keys, and invalid `no_proxy` values.
+- [x] 1.4 Add failing regression tests proving a valid external proxy works while host access is disabled and that absent corporate settings preserve existing cache and host-access behavior.
 
 ### GREEN
 

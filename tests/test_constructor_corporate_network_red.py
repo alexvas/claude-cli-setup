@@ -1,0 +1,687 @@
+"""RED contracts for the local corporate-network input boundary.
+
+These tests precede the GREEN Phase 1 implementation and define the closed
+local-companion contract for ``[corporate-trust]`` and ``[network.proxy]``:
+
+* absent/disabled corporate trust and proxy preserve existing behavior;
+* the fixed bundle is the only corporate trust source and every invalid
+  bundle condition fails with a path-specific CONFIG error before Docker;
+* proxy URLs accept only credential-free ``http``/``socks5``/``socks5h``
+  endpoints with an explicit host and port and reject every other shape;
+* proxy configuration is independent of host access — a valid external
+  proxy needs no host-access policy, triggers no gateway diagnosis, and
+  leaves the rendered host-access vector unchanged.
+
+Run this module before tasks 1.5-1.10 and expect failures until that
+boundary exists.
+"""
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from docker.versions import InventoryError
+from docker.versioning.inventory import (
+    load_local_config,
+    load_local_config_for_inventory,
+    resolve_local_companion_path,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_CANONICAL = (_REPO_ROOT / "docker-constructor.toml").read_text()
+
+# A minimal valid self-signed EC certificate used only to exercise the
+# "valid PEM" path of the fixed bundle.  It is not trusted material.
+_VALID_PEM = """-----BEGIN CERTIFICATE-----
+MIIBfDCCASOgAwIBAgIUdl75ym6g4Eko1mak72ORwWiNWnowCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDgxNDAwMTgxMVoXDTI3MDgxNDAw
+MTgxMVowFDESMBAGA1UEAwwJbG9jYWxob3N0MFkwEwYHKoZIzj0CAQYIKoZIzj0D
+AQcDQgAELD/pSr/tM52haJmAs3Lm1YJ/m3AGrlvGgj38Fa+I/95Uo1x/zbKyFmZI
+T9PWiGwS24UiLM+aFsAd+rPV0KV7eKNTMFEwHQYDVR0OBBYEFHF9WJm24ZXta8tj
+gpJslBtSd+8LMB8GA1UdIwQYMBaAFHF9WJm24ZXta8tjgpJslBtSd+8LMA8GA1Ud
+EwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDRwAwRAIgTYW37JoqGZtM1MCI3cahfZRT
+WpbFH/15SPYF7RkD3HECIC8tEfgidvmwIGG2J1cOKTnJeHgSJdEiya9SAZ6QKD0/
+-----END CERTIFICATE-----
+"""
+
+
+def _write_toml(
+    content: str,
+    *,
+    directory: Path | None = None,
+    name: str | None = None,
+) -> Path:
+    if directory is not None:
+        path = directory / (name or "inventory.toml")
+        path.write_text(content)
+        return path
+    handle, path = tempfile.mkstemp(suffix=".toml")
+    with os.fdopen(handle, "w") as stream:
+        stream.write(content)
+    return Path(path)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Recording command-path guards — each appends a token to ``effects``
+# instead of performing the real side effect, proving where a boundary
+# stops relative to Docker, gateway diagnosis, and cache mutation.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _ProjectionHandle:
+    path = "/tmp/.docker-generated/runtime/projection.toml"
+    content_hash = "test-hash"
+
+    def __enter__(self) -> "_ProjectionHandle":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def _recording_run_executor(effects: list[str]):
+    from docker.launcher import ProcessResult
+
+    class _Exec:
+        def run(self, argv: tuple[str, ...], *, interactive: bool = False) -> ProcessResult:
+            effects.append("docker-execution")
+            return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
+
+    return _Exec()
+
+
+def _recording_build_executor(effects: list[str]):
+    from docker.launcher import ProcessResult
+
+    class _Exec:
+        def run(self, argv: tuple[str, ...]) -> ProcessResult:
+            effects.append("docker-build")
+            return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
+
+    return _Exec()
+
+
+def _recording_inspector(effects: list[str]):
+    class _Insp:
+        def list_names(self) -> list[str]:
+            effects.append("container-inspection")
+            return []
+
+    return _Insp()
+
+
+def _record_projection(effects: list[str]):
+    def _fn(*_args, **_kwargs) -> _ProjectionHandle:
+        effects.append("runtime-projection")
+        return _ProjectionHandle()
+
+    return _fn
+
+
+def _record_artifact_fetch(effects: list[str]):
+    def _fn(*_args, **_kwargs) -> list[bytes]:
+        effects.append("artifact-download")
+        return []
+
+    return _fn
+
+
+def _record_materialize(effects: list[str]):
+    def _fn(*_args, **_kwargs) -> dict[object, object]:
+        effects.append("cache-materialization")
+        return {}
+
+    return _fn
+
+
+def _record_diagnose(effects: list[str]):
+    def _fn(*_args, **_kwargs) -> None:
+        effects.append("gateway-diagnosis")
+        return None
+
+    return _fn
+
+
+class _LocalTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.paths: list[Path] = []
+
+    def tearDown(self) -> None:
+        for path in self.paths:
+            path.unlink(missing_ok=True)
+
+    def local(self, content: str) -> Path:
+        """Write raw local TOML: it is never an inventory overlay."""
+        path = _write_toml(content)
+        self.paths.append(path)
+        return path
+
+
+class TestCorporateTrustLocalRed(_LocalTest):
+    """Task 1.1: absent/disabled [corporate-trust] and typed enabled flag."""
+
+    def test_absent_corporate_trust_disables_trust(self) -> None:
+        local = load_local_config(self.local('[host-access]\naddress = "10.0.2.2"\n'))
+        self.assertFalse(local.corporate_trust.enabled)
+
+    def test_explicitly_disabled_corporate_trust(self) -> None:
+        local = load_local_config(self.local("[corporate-trust]\nenabled = false\n"))
+        self.assertFalse(local.corporate_trust.enabled)
+
+    def test_enabled_corporate_trust(self) -> None:
+        local = load_local_config(self.local("[corporate-trust]\nenabled = true\n"))
+        self.assertTrue(local.corporate_trust.enabled)
+
+    def test_corporate_trust_enabled_must_be_boolean(self) -> None:
+        for value in ('"true"', "1", '"yes"', "0"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(InventoryError, r"corporate-trust\.enabled"):
+                    load_local_config(
+                        self.local(f"[corporate-trust]\nenabled = {value}\n")
+                    )
+
+    def test_corporate_trust_rejects_unknown_keys_and_arbitrary_paths(self) -> None:
+        # The fixed bundle is the only permitted trust source; no arbitrary
+        # certificate path may be named in local configuration.
+        for body in (
+            'enabled = true\npath = "/etc/ssl/custom.crt"',
+            'enabled = true\nbundle = "/etc/ssl/custom.pem"',
+            'enabled = true\nca_file = "/etc/ssl/custom.crt"',
+        ):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(
+                    InventoryError, r"corporate-trust\.(path|bundle|ca_file)"
+                ):
+                    load_local_config(self.local(f"[corporate-trust]\n{body}\n"))
+
+
+class TestCompanionResolutionRed(_LocalTest):
+    """Task 1.1: the companion resolves beside the selected inventory only."""
+
+    def test_canonical_and_custom_paths_resolve_their_own_companion(self) -> None:
+        self.assertEqual(
+            resolve_local_companion_path(Path("docker-constructor.toml")),
+            Path("docker-constructor.local.toml"),
+        )
+        self.assertEqual(
+            resolve_local_companion_path(Path("/path/custom.toml")),
+            Path("/path/custom.local.toml"),
+        )
+
+    def test_corporate_trust_loads_from_companion_beside_canonical_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            inventory = root_path / "docker-constructor.toml"
+            inventory.write_text("")
+            _write_toml(
+                "[corporate-trust]\nenabled = true\n",
+                directory=root_path,
+                name="docker-constructor.local.toml",
+            )
+            local = load_local_config_for_inventory(inventory)
+            self.assertTrue(local.corporate_trust.enabled)
+
+    def test_corporate_trust_loads_from_custom_companion_without_repository_fallback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            repository = root_path / "repository"
+            workspace = root_path / "workspace"
+            repository.mkdir()
+            workspace.mkdir()
+            _write_toml(
+                "[corporate-trust]\nenabled = true\n",
+                directory=repository,
+                name="docker-constructor.local.toml",
+            )
+            inventory = workspace / "custom.toml"
+            inventory.write_text("")
+            _write_toml(
+                "[corporate-trust]\nenabled = false\n",
+                directory=workspace,
+                name="custom.local.toml",
+            )
+
+            local = load_local_config_for_inventory(
+                inventory, repository_root=repository
+            )
+            self.assertFalse(local.corporate_trust.enabled)
+
+            # Removing the custom companion must produce absent local state,
+            # never the injected repository-local fallback value.
+            (workspace / "custom.local.toml").unlink()
+            absent = load_local_config_for_inventory(
+                inventory, repository_root=repository
+            )
+            self.assertFalse(absent.corporate_trust.enabled)
+
+
+class TestCorporateTrustBundleRed(_LocalTest):
+    """Task 1.2: fixed bundle is the only trust source; invalid bundles
+    fail with a path-specific CONFIG error before Docker is invoked."""
+
+    def test_bundle_path_is_fixed_under_dot_docker_local(self) -> None:
+        from docker.versioning.inventory import resolve_corporate_trust_bundle_path
+
+        self.assertEqual(
+            resolve_corporate_trust_bundle_path(Path("/repo")),
+            Path("/repo/.docker-local/corporate-ca-bundle.crt"),
+        )
+
+    def test_missing_bundle_rejected_with_path_specific_error(self) -> None:
+        from docker.versioning.inventory import validate_corporate_trust_bundle
+
+        with tempfile.TemporaryDirectory() as root:
+            missing = Path(root) / ".docker-local" / "corporate-ca-bundle.crt"
+            with self.assertRaises(InventoryError) as raised:
+                validate_corporate_trust_bundle(missing)
+            self.assertIn(str(missing), str(raised.exception))
+            self.assertIn("corporate", str(raised.exception).lower())
+
+    def test_unreadable_bundle_rejected_with_path_specific_error(self) -> None:
+        # Mock the read/open failure so the assertion also holds when the
+        # suite runs as root, where chmod-based unreadability is ineffective.
+        from unittest import mock
+
+        from docker.versioning.inventory import validate_corporate_trust_bundle
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "corporate-ca-bundle.crt"
+            path.write_text(_VALID_PEM)
+            with mock.patch(
+                "pathlib.Path.open",
+                side_effect=OSError("EACCES: Permission denied"),
+            ):
+                with self.assertRaises(InventoryError) as raised:
+                    validate_corporate_trust_bundle(path)
+            self.assertIn(str(path), str(raised.exception))
+
+    def test_empty_bundle_rejected_with_path_specific_error(self) -> None:
+        from docker.versioning.inventory import validate_corporate_trust_bundle
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "corporate-ca-bundle.crt"
+            path.write_text("")
+            with self.assertRaises(InventoryError) as raised:
+                validate_corporate_trust_bundle(path)
+            self.assertIn(str(path), str(raised.exception))
+
+    def test_malformed_bundle_rejected(self) -> None:
+        from docker.versioning.inventory import validate_corporate_trust_bundle
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "corporate-ca-bundle.crt"
+            path.write_text("this is not a PEM certificate bundle\n")
+            with self.assertRaisesRegex(InventoryError, r"PEM|certificate"):
+                validate_corporate_trust_bundle(path)
+
+    def test_valid_pem_bundle_accepted(self) -> None:
+        from docker.versioning.inventory import validate_corporate_trust_bundle
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "corporate-ca-bundle.crt"
+            path.write_text(_VALID_PEM)
+            self.assertEqual(validate_corporate_trust_bundle(path), path)
+
+    def test_invalid_enabled_bundle_aborts_build_before_docker(self) -> None:
+        from docker.versioning.build_orchestration import (
+            BuildRequest,
+            PublishResult,
+            orchestrate_build,
+        )
+        from docker.versioning.dispatch_types import ExitKind
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            inventory = root_path / "inventory.toml"
+            inventory.write_text(_CANONICAL)
+            (root_path / "inventory.local.toml").write_text(
+                "[corporate-trust]\nenabled = true\n"
+            )
+            bundle_dir = root_path / ".docker-local"
+            bundle_dir.mkdir()
+            (bundle_dir / "corporate-ca-bundle.crt").write_text("not a pem\n")
+
+            effects: list[str] = []
+
+            def record_publish(projection: object, *, repo_root: Path | None = None):
+                effects.append("projection-publication")
+                return PublishResult(published_path="/tmp/effective.toml")
+
+            result = orchestrate_build(BuildRequest(
+                inventory_path=str(inventory),
+                repo_root=str(root_path),
+                confirmed=True,
+                dry_run=False,
+                runner=_recording_build_executor(effects),
+                _publish_projection=record_publish,
+            ))
+
+            self.assertEqual(ExitKind.CONFIG, result.exit_kind)
+            self.assertIn("corporate-ca-bundle.crt", result.message or "")
+            self.assertEqual([], effects)
+
+    def test_invalid_enabled_bundle_aborts_run_before_docker(self) -> None:
+        from unittest import mock
+
+        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.versioning.dispatch_types import ExitKind
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            inventory = root_path / "inventory.toml"
+            inventory.write_text(_CANONICAL)
+            (root_path / "inventory.local.toml").write_text(
+                "[corporate-trust]\nenabled = true\n"
+            )
+            bundle_dir = root_path / ".docker-local"
+            bundle_dir.mkdir()
+            (bundle_dir / "corporate-ca-bundle.crt").write_text("not a pem\n")
+
+            effects: list[str] = []
+            with (
+                mock.patch(
+                    "docker.launcher.artifact_cache.materialize_selected_artifacts",
+                    _record_materialize(effects),
+                ),
+                mock.patch(
+                    "docker.networking.diagnose_gateway",
+                    _record_diagnose(effects),
+                ),
+            ):
+                result = orchestrate_run(RunRequest(
+                    inventory_path=str(inventory),
+                    image="pi-cli-pi:latest",
+                    selection=ProjectSelection(main_project="/work/project"),
+                    pi_home_host="/home/user/.pi",
+                    dry_run=False,
+                    executor=_recording_run_executor(effects),
+                    inspector=_recording_inspector(effects),
+                    _create_projection=_record_projection(effects),
+                    _artifact_fetcher=_record_artifact_fetch(effects),
+                ))
+
+            self.assertEqual(ExitKind.CONFIG, result.exit_kind)
+            self.assertIn("corporate-ca-bundle.crt", result.message or "")
+            self.assertEqual([], effects)
+
+
+class TestNetworkProxyLocalRed(_LocalTest):
+    """Task 1.3: credential-free proxy URL and optional no_proxy validation."""
+
+    def test_proxy_absent_by_default(self) -> None:
+        local = load_local_config(self.local('[host-access]\naddress = "10.0.2.2"\n'))
+        self.assertIsNone(local.network_proxy.url)
+        self.assertIsNone(local.network_proxy.no_proxy)
+
+    def test_proxy_accepts_credential_free_urls(self) -> None:
+        for url in (
+            "http://proxy.corp.example:3128",
+            "socks5://proxy.corp.example:1080",
+            "socks5h://proxy.corp.example:1080",
+        ):
+            with self.subTest(url=url):
+                local = load_local_config(
+                    self.local(f'[network.proxy]\nurl = "{url}"\n')
+                )
+                self.assertEqual(local.network_proxy.url, url)
+
+    def test_proxy_accepts_explicit_no_proxy(self) -> None:
+        local = load_local_config(
+            self.local(
+                '[network.proxy]\n'
+                'url = "http://proxy.corp.example:3128"\n'
+                'no_proxy = "localhost,.corp.example"\n'
+            )
+        )
+        self.assertEqual(local.network_proxy.no_proxy, "localhost,.corp.example")
+
+    def test_proxy_requires_url(self) -> None:
+        for body in ("[network.proxy]\n", '[network.proxy]\nno_proxy = "localhost"\n'):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(body))
+
+    def test_proxy_url_must_be_string(self) -> None:
+        with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+            load_local_config(self.local("[network.proxy]\nurl = 42\n"))
+
+    def test_proxy_rejects_userinfo(self) -> None:
+        for url in (
+            "http://user:pass@proxy.corp.example:3128",
+            "socks5://user@proxy.corp.example:1080",
+            "http://user@proxy.corp.example:3128",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
+
+    def test_proxy_rejects_fragments(self) -> None:
+        with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+            load_local_config(
+                self.local('[network.proxy]\nurl = "http://proxy.corp.example:3128/#frag"\n')
+            )
+
+    def test_proxy_rejects_unsupported_schemes(self) -> None:
+        for url in (
+            "https://proxy.corp.example:3128",
+            "ftp://proxy.corp.example:21",
+            "socks4://proxy.corp.example:1080",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
+
+    def test_proxy_rejects_missing_host_or_port(self) -> None:
+        for url in (
+            "http://:3128",
+            "http://proxy.corp.example",
+            "http://proxy.corp.example:",
+            "http:///path",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
+
+    def test_proxy_rejects_malformed_or_out_of_range_ports(self) -> None:
+        # The endpoint contract requires an explicit numeric TCP port in
+        # 1..65535; non-numeric, zero, negative, fractional, and
+        # out-of-range ports are unsupported endpoint forms.
+        for url in (
+            "http://proxy.corp.example:abc",
+            "http://proxy.corp.example:0",
+            "http://proxy.corp.example:65536",
+            "http://proxy.corp.example:-1",
+            "http://proxy.corp.example:3.5",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
+
+    def test_proxy_rejects_malformed_urls(self) -> None:
+        for url in ("not a url", "http://", "3128", ""):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
+
+    def test_proxy_rejects_unknown_keys(self) -> None:
+        for key in ('username = "u"', 'password = "p"', 'credential = "c"', "port = 3128"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\."):
+                    load_local_config(
+                        self.local(
+                            '[network.proxy]\n'
+                            'url = "http://proxy.corp.example:3128"\n'
+                            f"{key}\n"
+                        )
+                    )
+
+    def test_proxy_rejects_unknown_network_keys(self) -> None:
+        with self.assertRaisesRegex(InventoryError, r"network\."):
+            load_local_config(self.local("[network]\nother = true\n"))
+
+    def test_proxy_rejects_invalid_no_proxy_values(self) -> None:
+        for value in ("42", "true", '["localhost"]'):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.no_proxy"):
+                    load_local_config(
+                        self.local(
+                            '[network.proxy]\n'
+                            'url = "http://proxy.corp.example:3128"\n'
+                            f"no_proxy = {value}\n"
+                        )
+                    )
+
+
+class TestCorporateNetworkRegressionRed(_LocalTest):
+    """Task 1.4: proxy/host-access independence through the run path."""
+
+    def test_valid_external_proxy_without_host_access_renders_no_host_mapping(self) -> None:
+        from unittest import mock
+
+        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.versioning.dispatch_types import ExitKind
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            inventory = root_path / "inventory.toml"
+            inventory.write_text(_CANONICAL)  # no [runtime.host-access]
+            (root_path / "inventory.local.toml").write_text(
+                '[network.proxy]\nurl = "http://proxy.corp.example:3128"\n'
+            )
+
+            effects: list[str] = []
+            with mock.patch(
+                "docker.networking.diagnose_gateway",
+                _record_diagnose(effects),
+            ):
+                result = orchestrate_run(RunRequest(
+                    inventory_path=str(inventory),
+                    image="pi-cli-pi:latest",
+                    selection=ProjectSelection(main_project="/work/project"),
+                    pi_home_host="/home/user/.pi",
+                    dry_run=True,
+                    executor=_recording_run_executor(effects),
+                    inspector=_recording_inspector(effects),
+                    _create_projection=_record_projection(effects),
+                    _artifact_fetcher=_record_artifact_fetch(effects),
+                ))
+
+            self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
+            for forbidden in ("--add-host", "HOST_ACCESS_ADDRESS=", "HOST_PROXY_PORT="):
+                self.assertFalse(
+                    any(forbidden in arg for arg in result.run_args),
+                    f"host-access vector must remain unchanged: {forbidden}",
+                )
+            self.assertNotIn("gateway-diagnosis", effects)
+
+    def test_invalid_proxy_with_disabled_host_access_fails_before_docker(self) -> None:
+        # RED: the run boundary must validate corporate settings
+        # independently of host access.  A credential-bearing proxy must
+        # abort before Docker even when host access is disabled.
+        from unittest import mock
+
+        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.versioning.dispatch_types import ExitKind
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            inventory = root_path / "inventory.toml"
+            inventory.write_text(_CANONICAL)  # no [runtime.host-access]
+            (root_path / "inventory.local.toml").write_text(
+                '[network.proxy]\nurl = "http://user:pass@proxy.corp.example:3128"\n'
+            )
+
+            effects: list[str] = []
+            with (
+                mock.patch(
+                    "docker.launcher.artifact_cache.materialize_selected_artifacts",
+                    _record_materialize(effects),
+                ),
+                mock.patch(
+                    "docker.networking.diagnose_gateway",
+                    _record_diagnose(effects),
+                ),
+            ):
+                result = orchestrate_run(RunRequest(
+                    inventory_path=str(inventory),
+                    image="pi-cli-pi:latest",
+                    selection=ProjectSelection(main_project="/work/project"),
+                    pi_home_host="/home/user/.pi",
+                    dry_run=False,
+                    executor=_recording_run_executor(effects),
+                    inspector=_recording_inspector(effects),
+                    _create_projection=_record_projection(effects),
+                    _artifact_fetcher=_record_artifact_fetch(effects),
+                ))
+
+            self.assertEqual(ExitKind.CONFIG, result.exit_kind)
+            self.assertIn("network.proxy.url", result.message or "")
+            self.assertEqual([], effects)
+
+    def test_absent_corporate_settings_preserve_existing_host_access_vector(self) -> None:
+        from unittest import mock
+
+        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.versioning.dispatch_types import ExitKind
+
+        policy = (
+            "[runtime.host-access]\nenabled = true\n"
+            'mode = "external-address"\nproxy-port = 1080\n'
+        )
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            inventory = root_path / "inventory.toml"
+            inventory.write_text(_CANONICAL + "\n" + policy)
+            (root_path / "inventory.local.toml").write_text(
+                '[host-access]\naddress = "192.0.2.10"\n'
+            )
+
+            effects: list[str] = []
+            with mock.patch(
+                "docker.networking.diagnose_gateway",
+                _record_diagnose(effects),
+            ):
+                result = orchestrate_run(RunRequest(
+                    inventory_path=str(inventory),
+                    image="pi-cli-pi:latest",
+                    selection=ProjectSelection(main_project="/work/project"),
+                    pi_home_host="/home/user/.pi",
+                    dry_run=True,
+                    executor=_recording_run_executor(effects),
+                    inspector=_recording_inspector(effects),
+                    _create_projection=_record_projection(effects),
+                    _artifact_fetcher=_record_artifact_fetch(effects),
+                ))
+
+            self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
+            self.assertIn("host.docker.internal:192.0.2.10", result.run_args)
+            self.assertIn("HOST_ACCESS_ADDRESS=192.0.2.10", result.run_args)
+            self.assertIn("HOST_PROXY_PORT=1080", result.run_args)
+            # No application proxy variables may leak from host access.
+            for forbidden in ("HTTP_PROXY=", "HTTPS_PROXY=", "ALL_PROXY=", "NO_PROXY="):
+                self.assertFalse(
+                    any(forbidden in arg for arg in result.run_args),
+                    f"host access must not emit {forbidden}",
+                )
+            self.assertNotIn("gateway-diagnosis", effects)
+
+    def test_corporate_sections_do_not_change_cache_resolution(self) -> None:
+        from docker.versioning.transports import resolve_cache_settings
+
+        local = load_local_config(
+            self.local(
+                '[cache]\ndir = "/tmp/cache"\n'
+                "[corporate-trust]\nenabled = true\n"
+                '[network.proxy]\nurl = "http://proxy.corp.example:3128"\n'
+            )
+        )
+        settings = resolve_cache_settings(None, local)
+        self.assertEqual(settings.directory, Path("/tmp/cache"))
+
+
+if __name__ == "__main__":
+    unittest.main()
