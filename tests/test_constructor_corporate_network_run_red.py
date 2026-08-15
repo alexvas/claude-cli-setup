@@ -35,6 +35,7 @@ from docker.launcher import (
 )
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.rendering import RunRenderInputs, render_run_vector
+from docker.versioning.runtime_verification import _MOUNTS_PROBE
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CANONICAL = (_REPO_ROOT / "docker-constructor.toml").read_text()
@@ -360,41 +361,49 @@ class TestProxyHostAccessIndependenceRed(_RunOrchestrationRed):
 # ---------------------------------------------------------------------------
 
 class _ContractRunner:
-    """Answers the trust/proxy contract probes; generic pass otherwise.
+    """Answers the trust/proxy contract probes for a configured or
+    disabled launch; any other command passes generically.
 
     The GREEN verification adds two targeted probes:
 
-    * ``grep ca-certificates.crt /proc/mounts`` → a read-only (``ro``)
-      bind-mount line, with ``test -w`` confirming not writable;
+    * an exact-mountpoint ``awk`` probe over ``/proc/mounts`` → a
+      read-only (``ro``) mount-options line (configured) or absent
+      (disabled), with ``test -w`` confirming not writable on the
+      configured path;
     * keyed ``printenv <NAME>`` per standard proxy variable.
 
     Every command still targets the container via ``docker exec``.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        configured: bool = True,
+        overrides: dict[tuple[str, ...], tuple[int, str, str]] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, ...]] = []
-        self._handlers: dict[tuple[str, ...], tuple[int, str, str]] = {
-            ("grep", "ca-certificates.crt", "/proc/mounts"):
-                (0, "host /etc/ssl/certs/ca-certificates.crt ext4"
-                    " ro,relatime 0 0\n", ""),
-            ("test", "-w", _SYSTEM_CA_BUNDLE): (1, "", ""),
-            ("printenv", "HTTP_PROXY"):
-                (0, "http://proxy.corp.example:3128\n", ""),
-            ("printenv", "http_proxy"):
-                (0, "http://proxy.corp.example:3128\n", ""),
-            ("printenv", "HTTPS_PROXY"):
-                (0, "http://proxy.corp.example:3128\n", ""),
-            ("printenv", "https_proxy"):
-                (0, "http://proxy.corp.example:3128\n", ""),
-            ("printenv", "ALL_PROXY"):
-                (0, "http://proxy.corp.example:3128\n", ""),
-            ("printenv", "all_proxy"):
-                (0, "http://proxy.corp.example:3128\n", ""),
-            ("printenv", "NO_PROXY"):
-                (0, "localhost,.corp.example\n", ""),
-            ("printenv", "no_proxy"):
-                (0, "localhost,.corp.example\n", ""),
-        }
+        if configured:
+            self._handlers: dict[tuple[str, ...], tuple[int, str, str]] = {
+                _MOUNTS_PROBE:
+                    (0, "ro,relatime\n", ""),
+                ("test", "-w", _SYSTEM_CA_BUNDLE): (1, "", ""),
+            }
+            for name in _PROXY_URL_NAMES:
+                self._handlers[("printenv", name)] = (
+                    0, "http://proxy.corp.example:3128\n", "",
+                )
+            for name in _PROXY_BYPASS_NAMES:
+                self._handlers[("printenv", name)] = (
+                    0, "localhost,.corp.example\n", "",
+                )
+        else:
+            self._handlers = {
+                _MOUNTS_PROBE: (0, "", ""),
+            }
+            for name in _PROXY_URL_NAMES + _PROXY_BYPASS_NAMES:
+                self._handlers[("printenv", name)] = (1, "", "")
+        if overrides:
+            self._handlers.update(overrides)
 
     def run(self, argv) -> object:
         t = tuple(argv)
@@ -424,6 +433,7 @@ class TestRuntimeVerificationContractRed(unittest.TestCase):
         corporate_trust_enabled: bool,
         proxy_url: str | None,
         proxy_no_proxy: str | None,
+        runner: _ContractRunner | None = None,
     ):
         from docker.versioning.runtime_verification import (
             VerifyRuntimeRequest,
@@ -432,7 +442,12 @@ class TestRuntimeVerificationContractRed(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             proj = Path(root) / "projection.toml"
             proj.write_text("[extensions]\n")
-            runner = _ContractRunner()
+            if runner is None:
+                runner = _ContractRunner(
+                    configured=(
+                        corporate_trust_enabled or proxy_url is not None
+                    ),
+                )
             result = verify_runtime(VerifyRuntimeRequest(
                 container="pi-cli-pi-1",
                 runtime_projection_path=proj,
@@ -474,6 +489,41 @@ class TestRuntimeVerificationContractRed(unittest.TestCase):
         self.assertTrue(trust.ok, trust.detail)
         self.assertTrue(proxy.ok, proxy.detail)
 
+    def test_disabled_trust_rejects_stale_system_bundle_mount(self) -> None:
+        result, _runner = self._verify(
+            corporate_trust_enabled=False,
+            proxy_url=None,
+            proxy_no_proxy=None,
+            runner=_ContractRunner(
+                configured=False,
+                overrides={
+                    _MOUNTS_PROBE: (0, "ro,relatime\n", ""),
+                },
+            ),
+        )
+        trust = next(
+            c for c in result.checks if c.key == "corporate-trust.mount"
+        )
+        self.assertFalse(trust.ok, trust.detail)
+
+    def test_disabled_proxy_rejects_injected_proxy_variables(self) -> None:
+        result, _runner = self._verify(
+            corporate_trust_enabled=False,
+            proxy_url=None,
+            proxy_no_proxy=None,
+            runner=_ContractRunner(
+                configured=False,
+                overrides={
+                    ("printenv", "HTTP_PROXY"):
+                        (0, "http://proxy.corp.example:3128\n", ""),
+                },
+            ),
+        )
+        proxy = next(
+            c for c in result.checks if c.key == "proxy.environment"
+        )
+        self.assertFalse(proxy.ok, proxy.detail)
+
     def test_verification_never_dumps_environment_or_claims_daemon_coverage(self) -> None:
         # Disabled contract — the guard must hold for the existing verifier
         # and remain true once trust/proxy probes are added.
@@ -501,6 +551,39 @@ class TestRuntimeVerificationContractRed(unittest.TestCase):
             if cmd and cmd[0] == "printenv":
                 self.assertEqual(len(cmd), 2,
                                  f"printenv must be keyed, got {argv}")
+
+
+class TestMountsProbeExactDestination(unittest.TestCase):
+    """The mount probe matches only the exact mountpoint field."""
+
+    def _run_probe(self, mounts: str) -> "subprocess.CompletedProcess[str]":
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as root:
+            fixture = Path(root) / "mounts"
+            fixture.write_text(mounts)
+            return subprocess.run(
+                ["awk", _MOUNTS_PROBE[1], str(fixture)],
+                capture_output=True, text=True,
+            )
+
+    def test_probe_ignores_unrelated_mounts_containing_the_filename(self) -> None:
+        result = self._run_probe(
+            "host /host/ca-certificates.crt ext4 rw,relatime 0 0\n"
+            "host /etc/ssl/certs/ca-certificates.crt ext4 ro,relatime 0 0\n"
+            "host /etc/other/ca-certificates.crt ext4 rw,relatime 0 0\n",
+        )
+        self.assertEqual(0, result.returncode)
+        # Only the exact-destination line's options are reported; the
+        # unrelated source/destination matches are ignored.
+        self.assertEqual("ro,relatime\n", result.stdout)
+
+    def test_probe_reports_absent_when_only_unrelated_mounts_exist(self) -> None:
+        result = self._run_probe(
+            "host /host/ca-certificates.crt ext4 ro,relatime 0 0\n",
+        )
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("", result.stdout)
 
 
 if __name__ == "__main__":

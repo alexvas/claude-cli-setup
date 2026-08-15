@@ -46,6 +46,19 @@ Checks
 | ``host-access.proxy-port`` | ``HOST_PROXY_PORT`` matches the configured port when       |
 |                          | present in policy, or is unset when disabled/omitted.      |
 +--------------------------+-----------------------------------------------------------+
+| ``corporate-trust.mount`` | When corporate trust is enabled, the fixed system CA      |
+|                          | bundle is mounted read-only at                            |
+|                          | ``/etc/ssl/certs/ca-certificates.crt``; when disabled,    |
+|                          | that exact mountpoint field is checked to be absent from |
+|                          | ``/proc/mounts``.                                        |
++--------------------------+-----------------------------------------------------------+
+| ``proxy.environment``    | When a proxy URL is configured, every standard            |
+|                          | uppercase/lowercase HTTP, HTTPS, and ALL variable matches |
+|                          | it and both ``NO_PROXY`` forms match the explicit bypass  |
+|                          | list (or are unset when no bypass list is configured).    |
+|                          | When disabled, every defined variable is checked to be   |
+|                          | unset.                                                   |
++--------------------------+-----------------------------------------------------------+
 | ``forbidden.paths``      | ``/run/pi-cli/docker-constructor.toml`` (reviewed inventory)    |
 |                          | and ``/run/pi-cli/docker-constructor.build.effective.toml``     |
 |                          | (effective build projection) are NOT present inside the         |
@@ -66,6 +79,21 @@ from typing import Protocol, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from docker.versioning.model import HostAccessPolicy
+
+
+# Fixed container-side system CA bundle.  Runtime verification checks this
+# exact mount destination — never a substring — so unrelated mounts whose
+# source or destination merely contains the filename are ignored.
+_SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
+# Targeted ``/proc/mounts`` probe: print the mount options (fourth field)
+# only for the mount whose second field (mountpoint) is exactly the system CA
+# bundle path.  ``awk`` exits 0 with empty output when no such mount exists.
+_MOUNTS_PROBE = (
+    "awk",
+    f'$2 == "{_SYSTEM_CA_BUNDLE}" {{print $4}}',
+    "/proc/mounts",
+)
 
 
 # ── Process boundary (shared contract) ───────────────────────────────
@@ -157,6 +185,20 @@ expectations."""
     host_access_address: str | None = None
     """Expected ``HOST_ACCESS_ADDRESS`` value.  Required when
     *host_access* is enabled, ``None`` when disabled."""
+
+    corporate_trust_enabled: bool = False
+    """Whether corporate trust is enabled.  When enabled, the verifier
+    checks the read-only system CA bundle mount; when disabled, it
+    reports no corporate trust contract."""
+
+    proxy_url: str | None = None
+    """Configured credential-free proxy URL, or ``None`` when disabled.
+    When set, every standard proxy variable is checked."""
+
+    proxy_no_proxy: str | None = None
+    """Configured bypass list, or ``None`` when omitted.  When set, both
+    ``NO_PROXY``/``no_proxy`` are checked; when omitted, both are checked
+    to be unset."""
 
 
 # ── Public API ───────────────────────────────────────────────────────
@@ -422,6 +464,82 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         else:
             _add("host-access.proxy-port", True,
                  "HOST_PROXY_PORT is not set (disabled)", r)
+
+    # ── corporate-trust.mount ──────────────────────────────────────
+    if request.corporate_trust_enabled:
+        r = _exec(_MOUNTS_PROBE)
+        opts_raw = ""
+        for line in r.stdout.splitlines():
+            if line.strip():
+                opts_raw = line.strip()
+        if r.return_code != 0 or not opts_raw:
+            _add("corporate-trust.mount", False,
+                 f"system CA bundle not mounted at {_SYSTEM_CA_BUNDLE}", r)
+        else:
+            opts = opts_raw.split(",")
+            if "ro" in opts:
+                rw = _exec(("test", "-w", _SYSTEM_CA_BUNDLE))
+                if rw.return_code != 0:
+                    _add("corporate-trust.mount", True,
+                         "system CA bundle mounted read-only"
+                         " (ro mount + not writable)", rw)
+                else:
+                    _add("corporate-trust.mount", False,
+                         "mount claims ro but file is writable", rw)
+            else:
+                _add("corporate-trust.mount", False,
+                     f"system CA bundle mount is not ro"
+                     f" (options: {opts_raw})", r)
+    else:
+        r = _exec(_MOUNTS_PROBE)
+        if r.return_code == 0 and r.stdout.strip():
+            _add("corporate-trust.mount", False,
+                 "system CA bundle mount present but corporate trust "
+                 "disabled", r)
+        else:
+            _add("corporate-trust.mount", True,
+                 "corporate trust disabled; no system CA bundle mount", r)
+
+    # ── proxy.environment ──────────────────────────────────────────
+    if request.proxy_url is not None:
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY",
+                     "https_proxy", "ALL_PROXY", "all_proxy"):
+            r = _exec(("printenv", name))
+            actual = r.stdout.strip() if r.return_code == 0 else ""
+            if actual == request.proxy_url:
+                _add("proxy.environment", True, f"{name}={actual}", r)
+            else:
+                _add("proxy.environment", False,
+                     f"{name}: expected {request.proxy_url!r}, got {actual!r}", r)
+        for name in ("NO_PROXY", "no_proxy"):
+            r = _exec(("printenv", name))
+            actual = r.stdout.strip() if r.return_code == 0 else ""
+            if request.proxy_no_proxy is not None:
+                if actual == request.proxy_no_proxy:
+                    _add("proxy.environment", True, f"{name}={actual}", r)
+                else:
+                    _add("proxy.environment", False,
+                         f"{name}: expected {request.proxy_no_proxy!r}, "
+                         f"got {actual!r}", r)
+            elif actual:
+                _add("proxy.environment", False,
+                     f"{name} is set ({actual!r}) but no bypass list "
+                     f"configured", r)
+            else:
+                _add("proxy.environment", True,
+                     f"{name} unset (no bypass list)", r)
+    else:
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY",
+                     "https_proxy", "ALL_PROXY", "all_proxy",
+                     "NO_PROXY", "no_proxy"):
+            r = _exec(("printenv", name))
+            if r.return_code == 0 and r.stdout.strip():
+                _add("proxy.environment", False,
+                     f"{name} is set ({r.stdout.strip()!r}) but proxy is "
+                     f"disabled", r)
+            else:
+                _add("proxy.environment", True,
+                     f"{name} is not set (disabled)", r)
 
     # ── forbidden.paths ──────────────────────────────────────────────
     forbidden = (

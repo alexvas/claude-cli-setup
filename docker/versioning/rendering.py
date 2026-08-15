@@ -296,6 +296,19 @@ class RunRenderInputs:
     destination collisions are validated.  Defaults to ``True``
     to enforce regular-file/symlink checks before Docker execution."""
 
+    corporate_trust_bundle: Optional[str] = None
+    """Absolute host path to the fixed corporate trust bundle.  When set,
+    the renderer adds a read-only bind mount over the container system CA
+    bundle; ``None`` (disabled) emits no such mount."""
+
+    proxy_url: Optional[str] = None
+    """Configured credential-free proxy URL, copied verbatim under every
+    standard proxy variable.  ``None`` emits no proxy variables."""
+
+    proxy_no_proxy: Optional[str] = None
+    """Optional bypass list emitted under ``NO_PROXY`` and ``no_proxy``
+    only when explicitly configured (and only when *proxy_url* is set)."""
+
 
 # ── platform helpers ────────────────────────────────────────────────
 
@@ -382,6 +395,19 @@ _CORPORATE_CA_PATH_ARG = "PI_CORPORATE_CA_PATH"
 # Explicit signal that gates the Dockerfile trust replacement, so a stale
 # bundle in the build context cannot change trust without enabled intent.
 _CORPORATE_TRUST_ENABLED_ARG = "CORPORATE_TRUST_ENABLED"
+
+# Standard proxy variable names emitted at runtime (task 3.2/3.6).  The
+# endpoint is copied verbatim across every variable, so SOCKS support stays
+# best-effort instead of being claimed.
+_PROXY_RUN_URL_NAMES: tuple[str, ...] = (
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+)
+_PROXY_RUN_BYPASS_NAMES: tuple[str, ...] = ("NO_PROXY", "no_proxy")
 
 
 def _emit_proxy_build_args(args: list[str], inputs: BuildRenderInputs) -> None:
@@ -557,6 +583,33 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
         seen_sources.add(source)
         all_dsts.add(target)
 
+    # Corporate trust bundle must be an absolute host path.
+    if (
+        inputs.corporate_trust_bundle is not None
+        and not inputs.corporate_trust_bundle.startswith("/")
+    ):
+        raise ValueError(
+            "corporate_trust_bundle must be an absolute path, got "
+            f"{inputs.corporate_trust_bundle!r}"
+        )
+
+    # Proxy inputs are only meaningful together.
+    if inputs.proxy_url is not None and not inputs.proxy_url.strip():
+        raise ValueError("proxy_url must not be empty")
+    if inputs.proxy_no_proxy is not None and inputs.proxy_url is None:
+        raise ValueError("proxy_no_proxy requires proxy_url to be configured")
+
+    # Corporate trust mount destination must not collide with any other
+    # mount destination (Pi home, projection, projects, or artifacts).
+    if (
+        inputs.corporate_trust_bundle is not None
+        and _SYSTEM_CA_BUNDLE in all_dsts
+    ):
+        raise ValueError(
+            "corporate trust bundle destination collides with another "
+            "mount destination"
+        )
+
 
 def plan_dry_run_artifact_mounts(
     selected_artifacts: "Iterable[SelectedArtifact]",
@@ -649,6 +702,23 @@ def _emit_run_mount(
     if readonly:
         parts.append("readonly")
     args.extend(("--mount", ",".join(parts)))
+
+
+def _emit_proxy_run_env(args: list[str], inputs: RunRenderInputs) -> None:
+    """Append the standard proxy ``--env`` pairs for a configured proxy.
+
+    Emits nothing when no proxy URL is configured; emits the bypass list only
+    when ``proxy_no_proxy`` is explicitly set.  Every standard
+    uppercase/lowercase HTTP, HTTPS, and ALL variable carries the exact URL,
+    and both ``NO_PROXY`` forms carry the explicit bypass list.
+    """
+    if inputs.proxy_url is None:
+        return
+    for name in _PROXY_RUN_URL_NAMES:
+        args.extend(("--env", f"{name}={inputs.proxy_url}"))
+    if inputs.proxy_no_proxy is not None:
+        for name in _PROXY_RUN_BYPASS_NAMES:
+            args.extend(("--env", f"{name}={inputs.proxy_no_proxy}"))
 
 
 # ── existing rendering functions ────────────────────────────────────
@@ -767,6 +837,15 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
             args, "bind", mount.host_path, mount.container_target, readonly=True,
         )
 
+    # Corporate trust — read-only system CA bundle mount (enabled only).
+    if inputs.corporate_trust_bundle is not None:
+        _emit_run_mount(
+            args, "bind",
+            inputs.corporate_trust_bundle,
+            _SYSTEM_CA_BUNDLE,
+            readonly=True,
+        )
+
     # Working directory
     args.extend(("--workdir", inputs.main_project))
 
@@ -784,6 +863,9 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
         args.extend(("--env", f"HOST_ACCESS_ADDRESS={inputs.host_access.address}"))
         if inputs.host_access.proxy_port is not None:
             args.extend(("--env", f"HOST_PROXY_PORT={inputs.host_access.proxy_port}"))
+
+    # Corporate proxy — standard proxy variables (enabled only).
+    _emit_proxy_run_env(args, inputs)
 
     # Image
     args.append(inputs.image)

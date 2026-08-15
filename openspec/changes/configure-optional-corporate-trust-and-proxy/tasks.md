@@ -84,17 +84,17 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 
 ### GREEN
 
-- [ ] 3.5 Extend run planning and rendering to add the enabled fixed bundle as a read-only bind mount at the system CA bundle path.
-- [ ] 3.6 Extend run planning and rendering to emit the exact configured proxy environment-variable set, omitting all proxy variables when no proxy is configured and omitting both NO_PROXY forms when no bypass list is configured.
-- [ ] 3.7 Extend runtime verification and diagnostics to check and report only the corporate trust/proxy launch contract defined in tasks 3.5–3.6.
+- [x] 3.5 Extend run planning and rendering to add the enabled fixed bundle as a read-only bind mount at the system CA bundle path.
+- [x] 3.6 Extend run planning and rendering to emit the exact configured proxy environment-variable set, omitting all proxy variables when no proxy is configured and omitting both NO_PROXY forms when no bypass list is configured.
+- [x] 3.7 Extend runtime verification and diagnostics to check and report only the corporate trust/proxy launch contract defined in tasks 3.5–3.6.
 
 ### INTROSPECT
 
-- [ ] 3.8 Review the Phase 3 diff against runtime projection and artifact-mount restrictions, host-access independence, restart/new-launch bundle refresh semantics, and the no-generic-environment-dump boundary; correct any violation.
+- [x] 3.8 Review the Phase 3 diff against runtime projection and artifact-mount restrictions, host-access independence, restart/new-launch bundle refresh semantics, and the no-generic-environment-dump boundary; correct any violation.
 
 ### VALIDATE
 
-- [ ] 3.9 Run the Phase 3 run-vector, launcher, and runtime-verification tests; inspect configured and unconfigured rendered run vectors to confirm mounts and environment arguments exactly match the contract.
+- [x] 3.9 Run the Phase 3 run-vector, launcher, and runtime-verification tests; inspect configured and unconfigured rendered run vectors to confirm mounts and environment arguments exactly match the contract.
 
 ## Phase 4 — Operator documentation and integrated acceptance
 

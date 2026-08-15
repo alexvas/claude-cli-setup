@@ -540,6 +540,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     from docker.versioning.inventory import (
         InventoryError,
         load_inventory,
+        resolve_corporate_trust_bundle_path,
         resolve_local_corporate_settings,
     )
     from docker.versioning.rendering import RunHostAccess, render_run_vector
@@ -561,7 +562,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         else None
     )
     try:
-        resolve_local_corporate_settings(
+        local_corporate = resolve_local_corporate_settings(
             Path(request.inventory_path),
             repository_root=(
                 Path(request.repo_root) if request.repo_root else None
@@ -573,6 +574,16 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             exit_kind=ExitKind.CONFIG,
             message=str(exc),
         )
+
+    # Corporate trust bundle host path — resolved only on the enabled path
+    # (the fixed repository-local bundle was already validated above).
+    corporate_trust_bundle: str | None = None
+    if local_corporate.corporate_trust.enabled and request.repo_root:
+        corporate_trust_bundle = os.path.abspath(
+            resolve_corporate_trust_bundle_path(Path(request.repo_root))
+        )
+    proxy_url = local_corporate.network_proxy.url
+    proxy_no_proxy = local_corporate.network_proxy.no_proxy
 
     # ── Step 1c: resolve host-access policy ─────────────────
     try:
@@ -677,6 +688,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 chown_on_start=request.chown_on_start,
                 artifact_mounts=dry_run_mounts,
                 validate_artifact_sources=False,
+                corporate_trust_bundle=corporate_trust_bundle,
+                proxy_url=proxy_url,
+                proxy_no_proxy=proxy_no_proxy,
             )
             run_args = render_run_vector(render_inputs)
             display = shlex.join(run_args)
@@ -805,6 +819,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 command=request.command,
                 chown_on_start=request.chown_on_start,
                 artifact_mounts=artifact_mounts,
+                corporate_trust_bundle=corporate_trust_bundle,
+                proxy_url=proxy_url,
+                proxy_no_proxy=proxy_no_proxy,
             )
             run_args = render_run_vector(render_inputs)
 

@@ -341,6 +341,20 @@ class _VerifyRuntimeRunner:
             return P(argv=argv, return_code=0,
                      stdout=self._gateway_ip, stderr="")
 
+        # corporate-trust.mount (disabled) — exact-mountpoint awk probe
+        # must report no options so the disabled contract passes.
+        if "awk" in cmd and "ca-certificates.crt" in cmd:
+            return P(argv=argv, return_code=0, stdout="", stderr="")
+
+        # proxy.environment (disabled) — keyed printenv must be unset.
+        if "printenv" in cmd and any(
+            name in cmd for name in (
+                "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+                "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+            )
+        ):
+            return P(argv=argv, return_code=1, stdout="", stderr="")
+
         # forbidden.paths — test -f (must be absent → rc != 0)
         if "test" in cmd and "-f" in cmd:
             return P(argv=argv, return_code=1, stdout="", stderr="")

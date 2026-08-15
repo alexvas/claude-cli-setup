@@ -300,6 +300,37 @@ def _resolve_verify_host_access(
     return ha, address, None
 
 
+def _resolve_verify_corporate_network(
+    inv_path: str,
+    repo_root: Path,
+) -> tuple[bool, str | None, str | None, str | None]:
+    """Resolve corporate trust/proxy expectations for runtime verification.
+
+    Returns ``(trust_enabled, proxy_url, proxy_no_proxy, error)``.
+
+    ``error`` is not ``None`` when the companion is malformed or the
+    enabled fixed bundle is unusable; the caller must report CONFIG before
+    any Docker inspection.
+    """
+    from docker.versioning.inventory import (
+        resolve_local_corporate_settings,
+    )
+
+    try:
+        local = resolve_local_corporate_settings(
+            Path(inv_path),
+            repository_root=repo_root,
+        )
+    except Exception as exc:
+        return False, None, None, str(exc)
+    return (
+        local.corporate_trust.enabled,
+        local.network_proxy.url,
+        local.network_proxy.no_proxy,
+        None,
+    )
+
+
 def _read_env_key(key: str) -> str | None:
     """Read a single value from the repo ``.env`` file.
 
@@ -881,6 +912,17 @@ def _real_dispatcher(
                     exit_kind=ExitKind.CONFIG,
                     message=_verify_ha_err,
                 )
+            (
+                _verify_trust,
+                _verify_proxy_url,
+                _verify_proxy_no_proxy,
+                _verify_net_err,
+            ) = _resolve_verify_corporate_network(inv_path, _REPO_ROOT)
+            if _verify_net_err is not None:
+                return CommandResult(
+                    exit_kind=ExitKind.CONFIG,
+                    message=_verify_net_err,
+                )
             # Resolve the operating container.
             container = c_args.get("container")
             if not container:
@@ -1007,6 +1049,9 @@ def _real_dispatcher(
                     runner=_runner,
                     host_access=_host_access,
                     host_access_address=_host_access_addr,
+                    corporate_trust_enabled=_verify_trust,
+                    proxy_url=_verify_proxy_url,
+                    proxy_no_proxy=_verify_proxy_no_proxy,
                 ))
                 results["runtime"] = {
                     "all_ok": r_result.all_ok,
