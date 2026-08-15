@@ -1063,6 +1063,10 @@ def _validate_proxy_url(url: str) -> None:
         raise InventoryError(
             "local.network.proxy.url: query strings are not allowed"
         )
+    if parsed.path:
+        raise InventoryError(
+            "local.network.proxy.url: URL paths are not allowed"
+        )
     if not parsed.hostname:
         raise InventoryError("local.network.proxy.url: missing host")
     try:

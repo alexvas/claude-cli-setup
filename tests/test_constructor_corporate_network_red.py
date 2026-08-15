@@ -852,6 +852,18 @@ class TestNetworkProxyLocalRed(_LocalTest):
                 with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
                     load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
 
+    def test_proxy_rejects_paths(self) -> None:
+        # Nonempty URL paths are an unvalidated credential channel and must
+        # not be propagated verbatim; the accepted shape is host:port only.
+        for url in (
+            "http://proxy.corp.example:3128/token-secret",
+            "socks5://proxy.corp.example:1080/password=x",
+            "http://proxy.corp.example:3128/",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(InventoryError, r"network\.proxy\.url"):
+                    load_local_config(self.local(f'[network.proxy]\nurl = "{url}"\n'))
+
     def test_proxy_rejects_unsupported_schemes(self) -> None:
         for url in (
             "https://proxy.corp.example:3128",

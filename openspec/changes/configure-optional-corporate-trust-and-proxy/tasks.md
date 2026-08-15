@@ -49,11 +49,11 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 
 ### RED
 
-- [ ] 2.1 Add failing build-vector tests proving disabled corporate settings neither require a bundle nor emit corporate proxy arguments.
-- [ ] 2.2 Add failing Dockerfile/build-context tests requiring the optional fixed-bundle convention to avoid a missing-`COPY` failure while keeping `.docker-local/corporate-ca-bundle.crt` untracked.
-- [ ] 2.3 Add failing Dockerfile tests requiring enabled bundle validation and replacement of `/etc/ssl/certs/ca-certificates.crt` before every base-stage network operation, with applicable clients using that final path.
-- [ ] 2.4 Add failing build-vector tests requiring configured proxy URLs under uppercase/lowercase HTTP, HTTPS, and ALL proxy argument names, and requiring uppercase/lowercase NO_PROXY arguments only for an explicitly configured bypass list.
-- [ ] 2.5 Add failing Dockerfile tests proving proxy build arguments are available to build-stage processes but never converted into image `ENV`.
+- [x] 2.1 Add failing build-vector tests proving disabled corporate settings neither require a bundle nor emit corporate proxy arguments.
+- [x] 2.2 Add failing Dockerfile/build-context tests requiring the optional fixed-bundle convention to avoid a missing-`COPY` failure while keeping `.docker-local/corporate-ca-bundle.crt` untracked.
+- [x] 2.3 Add failing Dockerfile tests requiring enabled bundle validation and replacement of `/etc/ssl/certs/ca-certificates.crt` before every base-stage network operation, with applicable clients using that final path.
+- [x] 2.4 Add failing build-vector tests requiring configured proxy URLs under uppercase/lowercase HTTP, HTTPS, and ALL proxy argument names, and requiring uppercase/lowercase NO_PROXY arguments only for an explicitly configured bypass list.
+- [x] 2.5 Add failing Dockerfile tests proving proxy build arguments are available to build-stage processes but never converted into image `ENV`.
 
 ### GREEN
 
