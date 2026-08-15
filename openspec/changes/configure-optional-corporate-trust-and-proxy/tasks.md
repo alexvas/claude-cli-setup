@@ -103,8 +103,8 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 
 ### RED
 
-- [ ] 4.1 Add failing documentation-contract tests or assertions, where the repository’s documentation test convention supports them, for the required setup, complete-bundle, proxy-policy, refresh, SOCKS, and Docker-boundary statements.
-- [ ] 4.2 Add failing integrated acceptance tests covering valid configured build/run planning, disabled compatibility, custom-inventory companion resolution, bundle error handling, proxy URI rejection, explicit-only NO_PROXY, and host-access independence across the Phase 1–3 public command paths.
+- [x] 4.1 Add failing documentation-contract tests or assertions, where the repository’s documentation test convention supports them, for the required setup, complete-bundle, proxy-policy, refresh, SOCKS, and Docker-boundary statements.
+- [x] 4.2 Add failing integrated acceptance tests covering valid configured build/run planning, disabled compatibility, custom-inventory companion resolution, bundle error handling, proxy URI rejection, explicit-only NO_PROXY, and host-access independence across the Phase 1–3 public command paths.
 
 ### GREEN
 
