@@ -1033,6 +1033,19 @@ def validate_corporate_trust_bundle(path: Path | str) -> Path:
             f"corporate trust bundle {bundle} is not PEM certificate material: "
             f"non-ASCII content"
         ) from exc
+    # Only space, tab, CR, and LF are legal PEM whitespace.  Other control
+    # characters (vertical tab, form feed, NUL, DEL, …) are rejected here so
+    # an enabled bundle fails at the command boundary instead of passing host
+    # validation but failing later inside the Dockerfile's own strict
+    # ASCII/control check.
+    if any(
+        (ord(ch) < 0x20 and ch not in "\t\r\n") or ord(ch) == 0x7F
+        for ch in text
+    ):
+        raise InventoryError(
+            f"corporate trust bundle {bundle} contains control characters; "
+            f"use printable ASCII with space, tab, and LF/CRLF line breaks only"
+        )
     _validate_pem_certificate_blocks(text, bundle)
     return bundle
 

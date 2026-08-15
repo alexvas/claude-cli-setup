@@ -38,11 +38,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # The .docker-local directory is always present in the build context (tracked
 # .gitkeep), so this COPY never fails.
 COPY .docker-local/ /tmp/corporate-ca/
+COPY docker/validate-corporate-bundle.sh /tmp/validate-corporate-bundle.sh
 RUN set -eux; \
     if [ "${CORPORATE_TRUST_ENABLED}" = "true" ]; then \
-        test -f /tmp/corporate-ca/corporate-ca-bundle.crt; \
-        grep -q "BEGIN CERTIFICATE" /tmp/corporate-ca/corporate-ca-bundle.crt; \
-        grep -q "END CERTIFICATE" /tmp/corporate-ca/corporate-ca-bundle.crt; \
+        sh /tmp/validate-corporate-bundle.sh /tmp/corporate-ca/corporate-ca-bundle.crt; \
         cp /tmp/corporate-ca/corporate-ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
     fi
 

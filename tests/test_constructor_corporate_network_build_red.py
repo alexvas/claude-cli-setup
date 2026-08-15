@@ -13,10 +13,12 @@ and ``[network.proxy]``:
   bundle stays untracked while a tracked placeholder keeps the
   ``.docker-local`` directory present so a missing disabled bundle never
   makes ``COPY`` fail;
-* the Dockerfile validates and replaces the system trust bundle before the
-  first base-stage network operation, re-applies it after package installs
-  that regenerate the system bundle, and points applicable clients at the
-  final system-bundle path only on the enabled-trust path;
+* the Dockerfile validates the fixed bundle against the complete PEM
+  framing/Base64 contract (standalone delimiters, no outside text, strictly
+  decodable nonempty payloads) before the first base-stage network operation,
+  re-applies it after package installs that regenerate the system bundle, and
+  points applicable clients at the final system-bundle path only on the
+  enabled-trust path;
 * proxy build arguments are available to build stages but never converted
   into persistent image ``ENV`` values.
 
@@ -297,7 +299,12 @@ class TestDockerfileTrustReplacementRed(unittest.TestCase):
     def test_base_stage_replaces_system_trust_before_network_operations(self) -> None:
         text = (_REPO_ROOT / "Dockerfile").read_text()
         self.assertIn("/etc/ssl/certs/ca-certificates.crt", text)
-        self.assertIn("BEGIN CERTIFICATE", text)
+        # The bundle is validated by the dedicated strict validator — never by
+        # substring greps that accept arbitrary surrounding text.
+        self.assertIn("COPY docker/validate-corporate-bundle.sh", text)
+        self.assertIn("sh /tmp/validate-corporate-bundle.sh", text)
+        self.assertNotIn('grep -q "BEGIN CERTIFICATE"', text)
+        self.assertNotIn('grep -q "END CERTIFICATE"', text)
         lines = text.splitlines()
         apt_indices = [i for i, line in enumerate(lines) if "apt-get update" in line]
         trust_indices = [
@@ -398,6 +405,88 @@ class TestDockerfileTrustReplacementRed(unittest.TestCase):
             "the set of stages with networked RUNs changed; update the enumeration",
         )
         self.assertEqual([], missing, "networked RUNs missing the CA helper source")
+
+
+class TestDockerfileBundleValidationRed(unittest.TestCase):
+    """Direct-build coverage: the exact validator the Dockerfile runs
+    rejects malformed framing/payload and accepts complete bundles.
+
+    These exercise ``docker/validate-corporate-bundle.sh`` directly (via
+    ``sh``, as the Dockerfile does) so the build-time rejection contract is
+    proven without a Docker daemon.
+    """
+
+    _SCRIPT = _REPO_ROOT / "docker" / "validate-corporate-bundle.sh"
+    _BEGIN = "-----BEGIN CERTIFICATE-----"
+    _END = "-----END CERTIFICATE-----"
+
+    @staticmethod
+    def _validator_exit(content: str | bytes) -> int:
+        import os
+        import subprocess
+
+        raw = content.encode("latin-1") if isinstance(content, str) else content
+        fd, path = tempfile.mkstemp(suffix=".crt")
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+            result = subprocess.run(
+                ["sh", str(TestDockerfileBundleValidationRed._SCRIPT), path],
+                capture_output=True,
+            )
+            return result.returncode
+        finally:
+            os.unlink(path)
+
+    def test_validator_accepts_complete_bundles(self) -> None:
+        for label, content in (
+            ("single block",
+             f"{self._BEGIN}\nAQIDBAU=\n{self._END}\n"),
+            ("multi-block",
+             f"{self._BEGIN}\nAQIDBAU=\n{self._END}\n"
+             f"{self._BEGIN}\nCQoLDA0=\n{self._END}\n"),
+            ("multi-line payload",
+             f"{self._BEGIN}\nAQID\nBAUG\n{self._END}\n"),
+            ("CRLF line endings",
+             f"{self._BEGIN}\r\nAQIDBAU=\r\n{self._END}\r\n"),
+        ):
+            with self.subTest(case=label):
+                self.assertEqual(0, self._validator_exit(content))
+
+    def test_validator_rejects_substring_only_pem(self) -> None:
+        # The prior substring greps accepted this; the strict validator must not.
+        content = f"junk {self._BEGIN} and {self._END} trailing junk\n"
+        self.assertNotEqual(0, self._validator_exit(content))
+
+    def test_validator_rejects_malformed_framing(self) -> None:
+        cases = {
+            "empty file": "",
+            "unterminated block": f"{self._BEGIN}\nAQIDBAU=\n",
+            "unmatched END": f"{self._END}\n",
+            "text before block": f"hello\n{self._BEGIN}\nAQIDBAU=\n{self._END}\n",
+            "text after block": f"{self._BEGIN}\nAQIDBAU=\n{self._END}\nworld\n",
+            "inline delimiter in payload":
+                f"{self._BEGIN}\nAQID{self._BEGIN}BAU=\n{self._END}\n",
+            "empty payload": f"{self._BEGIN}\n{self._END}\n",
+        }
+        for label, content in cases.items():
+            with self.subTest(case=label):
+                self.assertNotEqual(0, self._validator_exit(content))
+
+    def test_validator_rejects_invalid_base64_payload(self) -> None:
+        cases = {
+            "punctuation": f"{self._BEGIN}\nAQIDBAU!\n{self._END}\n",
+            "embedded space": f"{self._BEGIN}\nAQID BAU=\n{self._END}\n",
+            "embedded tab": f"{self._BEGIN}\nAQID\tBAU=\n{self._END}\n",
+            "embedded carriage return":
+                f"{self._BEGIN}\nAQID\rBAU=\n{self._END}\n",
+            "missing padding": f"{self._BEGIN}\nAQIDBAU\n{self._END}\n",
+            "non-ASCII": f"{self._BEGIN}\nAQIDBAU=\u00e4\n{self._END}\n",
+            "control byte": f"{self._BEGIN}\nAQIDBAU=\x7f\n{self._END}\n",
+        }
+        for label, content in cases.items():
+            with self.subTest(case=label):
+                self.assertNotEqual(0, self._validator_exit(content))
 
 
 class TestDockerfileProxyArgsRed(unittest.TestCase):

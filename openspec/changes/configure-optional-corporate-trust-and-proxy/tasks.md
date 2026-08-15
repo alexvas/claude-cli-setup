@@ -77,10 +77,10 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 
 ### RED
 
-- [ ] 3.1 Add failing run-vector tests requiring an enabled fixed bundle to be mounted read-only at `/etc/ssl/certs/ca-certificates.crt`, and requiring no such mount when trust is disabled.
-- [ ] 3.2 Add failing run-vector tests requiring configured proxy URLs under uppercase/lowercase HTTP, HTTPS, and ALL proxy variables, with uppercase/lowercase NO_PROXY variables only when explicitly configured.
-- [ ] 3.3 Add failing regression tests proving external and host endpoint proxies do not require host access, do not trigger gateway diagnostics, and do not alter host-access mappings.
-- [ ] 3.4 Add failing runtime-verification/diagnostic tests requiring reporting of the configured trust/proxy launch contract while forbidding arbitrary environment dumps and Docker client/daemon coverage claims.
+- [x] 3.1 Add failing run-vector tests requiring an enabled fixed bundle to be mounted read-only at `/etc/ssl/certs/ca-certificates.crt`, and requiring no such mount when trust is disabled.
+- [x] 3.2 Add failing run-vector tests requiring configured proxy URLs under uppercase/lowercase HTTP, HTTPS, and ALL proxy variables, with uppercase/lowercase NO_PROXY variables only when explicitly configured.
+- [x] 3.3 Add failing regression tests proving external and host endpoint proxies do not require host access, do not trigger gateway diagnostics, and do not alter host-access mappings.
+- [x] 3.4 Add failing runtime-verification/diagnostic tests requiring reporting of the configured trust/proxy launch contract while forbidding arbitrary environment dumps and Docker client/daemon coverage claims.
 
 ### GREEN
 

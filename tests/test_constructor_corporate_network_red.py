@@ -427,7 +427,9 @@ class TestCorporateTrustBundleRed(_LocalTest):
         # Strict Base64 decoding permits only PEM line breaks between
         # wrapped payload lines.  Embedded whitespace or control characters
         # (vertical tab, form feed, NUL, space, tab) are not line breaks and
-        # must be rejected rather than silently normalized away.
+        # must be rejected rather than silently normalized away.  Control
+        # characters are caught by the ASCII/control check; space and tab
+        # survive that check and are rejected by strict Base64 decoding.
         for embedded in ("\x0b", "\x0c", "\x00", " ", "\t"):
             with self.subTest(embedded=embedded):
                 with tempfile.TemporaryDirectory() as root:
@@ -437,7 +439,27 @@ class TestCorporateTrustBundleRed(_LocalTest):
                         f"aGVs{embedded}bG8=\n"
                         "-----END CERTIFICATE-----\n"
                     )
-                    with self.assertRaisesRegex(InventoryError, r"Base64|certificate"):
+                    with self.assertRaisesRegex(
+                        InventoryError, r"Base64|control|certificate",
+                    ):
+                        validate_corporate_trust_bundle(path)
+
+    def test_control_characters_outside_blocks_rejected(self) -> None:
+        from docker.versioning.inventory import validate_corporate_trust_bundle
+
+        # The Dockerfile-side validator rejects vertical tab and form feed
+        # outright, so the host-side must reject them too rather than treat
+        # them as whitespace outside certificate blocks.  Otherwise an
+        # enabled bundle would pass command-boundary validation and fail only
+        # during the Docker build.
+        for control in ("\x0b", "\x0c", "\x00", "\x7f"):
+            with self.subTest(control=repr(control)):
+                with tempfile.TemporaryDirectory() as root:
+                    path = Path(root) / "corporate-ca-bundle.crt"
+                    path.write_text(f"{control}\n{_VALID_PEM}")
+                    with self.assertRaisesRegex(
+                        InventoryError, r"control|PEM|certificate",
+                    ):
                         validate_corporate_trust_bundle(path)
 
     def test_decodable_non_certificate_payloads_accepted(self) -> None:
