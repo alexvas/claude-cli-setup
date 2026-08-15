@@ -3,3 +3,8 @@
 __pycache__/
 .claude/
 docker-constructor.local.toml
+
+# Local-only complete corporate trust bundle.  The .docker-local directory
+# itself is tracked via .docker-local/.gitkeep so the optional Dockerfile
+# COPY never fails when trust is disabled.
+.docker-local/corporate-ca-bundle.crt

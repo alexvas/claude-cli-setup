@@ -52,23 +52,23 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 - [x] 2.1 Add failing build-vector tests proving disabled corporate settings neither require a bundle nor emit corporate proxy arguments.
 - [x] 2.2 Add failing Dockerfile/build-context tests requiring the optional fixed-bundle convention to avoid a missing-`COPY` failure while keeping `.docker-local/corporate-ca-bundle.crt` untracked.
 - [x] 2.3 Add failing Dockerfile tests requiring enabled bundle validation and replacement of `/etc/ssl/certs/ca-certificates.crt` before every base-stage network operation, with applicable clients using that final path.
-- [x] 2.4 Add failing build-vector tests requiring configured proxy URLs under uppercase/lowercase HTTP, HTTPS, and ALL proxy argument names, and requiring uppercase/lowercase NO_PROXY arguments only for an explicitly configured bypass list.
-- [x] 2.5 Add failing Dockerfile tests proving proxy build arguments are available to build-stage processes but never converted into image `ENV`.
+- [x] 2.4 Add failing build-vector and Dockerfile-helper tests requiring configured proxy URLs and optional bypass lists to travel through constructor-specific build arguments, then appear under uppercase/lowercase HTTP, HTTPS, ALL_PROXY, and explicit-only NO_PROXY variables for every networked build command while overriding conflicting inherited proxy `ENV` values.
+- [x] 2.5 Add failing Dockerfile tests proving constructor-specific proxy arguments are available in every networked stage, standard proxy variables are exported only for networked `RUN` commands when configured, and neither form is converted into persistent image `ENV`.
 
 ### GREEN
 
-- [ ] 2.6 Add the tracked placeholder or generated equivalent for the fixed local bundle build-context convention and update ignore rules so the actual bundle remains untracked.
-- [ ] 2.7 Update the Dockerfile base stage to validate and replace the system CA bundle from the fixed build-context source before networked package or installer operations, and set applicable client CA-path configuration to the final system-bundle path.
-- [ ] 2.8 Extend build request, orchestration, and rendering to carry Phase 1 validated corporate settings and emit proxy build arguments in the deterministic order asserted by task 2.4.
-- [ ] 2.9 Declare proxy arguments in the Dockerfile so descendant build stages can use them during `RUN`, without adding proxy values to persistent image environment metadata.
+- [x] 2.6 Add the tracked placeholder or generated equivalent for the fixed local bundle build-context convention and update ignore rules so the actual bundle remains untracked.
+- [x] 2.7 Update the Dockerfile base stage to validate and replace the system CA bundle from the fixed build-context source before networked package or installer operations, and set applicable client CA-path configuration to the final system-bundle path.
+- [x] 2.8 Extend build request, orchestration, and rendering to carry Phase 1 validated corporate settings and emit constructor-specific proxy transport arguments in the deterministic order asserted by task 2.4.
+- [x] 2.9 Declare constructor-specific proxy arguments in every networked Dockerfile stage and conditionally export the standard proxy-variable contract before each networked `RUN`, overriding inherited proxy values only when configured and without adding proxy values to persistent image environment metadata.
 
 ### INTROSPECT
 
-- [ ] 2.10 Review the Phase 2 diff against disabled-build compatibility, complete-replacement semantics, local-only input boundaries, deterministic vector ordering, and SOCKS best-effort semantics; correct any violation.
+- [x] 2.10 Review the Phase 2 diff against disabled-build compatibility, complete-replacement semantics, local-only input boundaries, deterministic vector ordering, and SOCKS best-effort semantics; correct any violation.
 
 ### VALIDATE
 
-- [ ] 2.11 Run the Phase 2 Dockerfile, build-context, and build-vector tests; inspect a rendered disabled vector and a rendered configured vector to confirm the exact absence/presence contract.
+- [x] 2.11 Run the Phase 2 Dockerfile, build-context, and build-vector tests; inspect a rendered disabled vector and a rendered configured vector to confirm the exact absence/presence contract.
 
 ## Phase 3 — Runtime trust, proxy, and observability contract
 

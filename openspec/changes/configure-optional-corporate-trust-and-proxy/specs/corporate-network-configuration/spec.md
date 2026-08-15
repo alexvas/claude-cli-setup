@@ -22,8 +22,17 @@ The system SHALL support an optional `[corporate-trust]` section only in the res
 - **THEN** the invoking command SHALL accept the bundle without an X.509 parser or external Python dependency
 - **AND** any invalid certificate object, expired certificate, invalid signature, missing trust root, or incomplete corporate coverage SHALL remain an operator responsibility
 
+### Requirement: Preserve default trust configuration when corporate trust is disabled
+When `[corporate-trust]` is absent or `enabled = false`, the constructor SHALL preserve the base image's default certificate and trust configuration. It SHALL NOT add, replace, remove, or override trust bundles, certificate paths, certificate directories, or client-specific CA settings at build or runtime. This prohibition includes, but is not limited to, injecting or persisting `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NPM_CONFIG_CAFILE`, or analogous settings for other TLS clients. Values already defined by the selected base image SHALL remain unchanged.
+
+#### Scenario: Disabled trust preserves base-image client behavior
+- **WHEN** the local companion omits `[corporate-trust]` or declares `enabled = false`
+- **THEN** the Dockerfile, build vector, and run vector SHALL introduce no certificate or trust override
+- **AND** SHALL not persist or inject any constructor-defined CA path or client-specific trust setting
+- **AND** certificate and trust settings inherited from the selected base image SHALL remain unchanged
+
 ### Requirement: Apply enabled trust at build and restarted runtime
-When corporate trust is enabled, the Dockerfile SHALL validate and replace `/etc/ssl/certs/ca-certificates.crt` with the fixed complete bundle before image-stage network operations. The constructor SHALL bind-mount the same current host file read-only at that path for each launched container. A restarted or newly launched container SHALL receive a changed bundle without rebuilding the image; already-running containers and processes SHALL not be required to reload it.
+When corporate trust is enabled, the Dockerfile SHALL validate and replace `/etc/ssl/certs/ca-certificates.crt` with the fixed complete bundle before image-stage network operations. The constructor SHALL bind-mount the same current host file read-only at that path for each launched container. A restarted or newly launched container SHALL receive a changed bundle without rebuilding the image; already-running containers and processes SHALL not be required to reload it. Any certificate-path or client-specific CA setting introduced by the constructor SHALL be scoped to enabled corporate trust and SHALL point to the replacement system bundle.
 
 #### Scenario: Build uses enabled corporate trust before package downloads
 - **WHEN** an enabled trust bundle is used to build the image
@@ -51,12 +60,13 @@ The system SHALL support an optional `[network.proxy]` section only in the resol
 - **THEN** the invoking command SHALL fail with a path-specific CONFIG error before Docker execution
 
 ### Requirement: Propagate local proxy without persisting it in the image
-When a local proxy is configured, the constructor SHALL propagate its exact URL at build through named build arguments and at runtime through direct Docker environment arguments under `HTTP_PROXY`, `http_proxy`, `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, and `all_proxy`. It SHALL propagate an explicitly configured bypass list under both `NO_PROXY` and `no_proxy`. The Dockerfile SHALL make build arguments available to build-stage processes without converting them into persistent image `ENV` values. `socks5` and `socks5h` build operation SHALL be best-effort: a build client that does not support the configured SOCKS URL can fail normally.
+When a local proxy is configured, the constructor SHALL transport its exact URL into the Docker build through constructor-specific build arguments that cannot be shadowed by same-named proxy `ENV` values inherited from the base image. Before every networked build-stage command, the Dockerfile SHALL conditionally export that URL under `HTTP_PROXY`, `http_proxy`, `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, and `all_proxy`, overriding inherited values only on the configured path. An explicitly configured bypass list SHALL similarly be transported through a constructor-specific build argument and conditionally exported under both `NO_PROXY` and `no_proxy`; when omitted, the constructor SHALL introduce neither bypass variable. At runtime, the constructor SHALL propagate the standard proxy variables through direct Docker environment arguments. None of these settings SHALL become persistent image `ENV` values. `socks5` and `socks5h` build operation SHALL be best-effort: a build client that does not support the configured SOCKS URL can fail normally.
 
 #### Scenario: HTTP proxy is propagated in all supported forms
 - **WHEN** a credential-free HTTP proxy and explicit bypass list are configured
-- **THEN** build and run vectors SHALL contain each required uppercase and lowercase proxy variable with the configured URL
-- **AND** SHALL contain both bypass variables with the configured bypass list
+- **THEN** the build vector SHALL carry the exact values through constructor-specific proxy arguments
+- **AND** every networked build-stage command SHALL receive each required uppercase and lowercase standard proxy variable with those values, overriding conflicting inherited proxy settings
+- **AND** the run vector SHALL contain each required uppercase and lowercase standard proxy variable with those values
 - **AND** the image configuration SHALL not persist proxy `ENV` values
 
 #### Scenario: SOCKS build client rejects the configured proxy

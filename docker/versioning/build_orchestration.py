@@ -404,7 +404,7 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
     # The repository root is mandatory for enabled trust and is never
     # inferred from the inventory path.
     try:
-        resolve_local_corporate_settings(
+        local = resolve_local_corporate_settings(
             inv_path,
             repository_root=(
                 Path(request.repo_root) if request.repo_root else None
@@ -447,6 +447,9 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
             dockerfile=request.dockerfile,
             dev_uid=request.uid if request.uid is not None else 1000,
             dev_gid=request.gid if request.gid is not None else 1000,
+            proxy_url=local.network_proxy.url,
+            proxy_no_proxy=local.network_proxy.no_proxy,
+            corporate_trust_enabled=local.corporate_trust.enabled,
         )
 
         # 4. Render

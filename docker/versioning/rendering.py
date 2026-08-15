@@ -148,6 +148,19 @@ class BuildRenderInputs:
     dev_gid: int = 1000
     """Host user GID injected as ``DEV_GID`` build argument."""
 
+    proxy_url: Optional[str] = None
+    """Configured credential-free proxy URL, copied verbatim under every
+    proxy build-argument name.  ``None`` emits no proxy arguments."""
+
+    proxy_no_proxy: Optional[str] = None
+    """Optional bypass list emitted under ``NO_PROXY`` and ``no_proxy`` only
+    when explicitly configured.  ``None`` emits no bypass arguments."""
+
+    corporate_trust_enabled: bool = False
+    """True when the resolved local companion enables corporate trust.  When
+    true the renderer injects client CA-path build arguments pointing at the
+    final system-bundle path; when false it injects none."""
+
 
 @dataclass(frozen=True)
 class RunHostAccess:
@@ -351,6 +364,55 @@ def _emit_build_args(args: list[str], proj: EffectiveBuildProjection) -> None:
     for arg_name, field_path in _BUILD_ARG_ORDER:
         raw = _resolve_build_arg(proj, field_path)
         args.extend(("--build-arg", f"{arg_name}={raw}"))
+
+
+# Deterministic proxy build-argument order (task 2.4/2.8).  The endpoint is
+# carried through a constructor-specific argument (never a same-named proxy
+# ARG, which an inherited base-image ENV would override) and the Dockerfile
+# helper exports it into every standard proxy variable, so SOCKS support stays
+# best-effort instead of being claimed.
+_PROXY_URL_ARG = "PI_CORPORATE_PROXY_URL"
+_PROXY_BYPASS_ARG = "PI_CORPORATE_NO_PROXY"
+
+# Fixed container-side system CA bundle.  The Dockerfile receives it via a
+# constructor-specific build argument (never a same-named SSL_CERT_FILE or
+# NODE_EXTRA_CA_CERTS ARG, which an inherited base-image ENV would override).
+_SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+_CORPORATE_CA_PATH_ARG = "PI_CORPORATE_CA_PATH"
+# Explicit signal that gates the Dockerfile trust replacement, so a stale
+# bundle in the build context cannot change trust without enabled intent.
+_CORPORATE_TRUST_ENABLED_ARG = "CORPORATE_TRUST_ENABLED"
+
+
+def _emit_proxy_build_args(args: list[str], inputs: BuildRenderInputs) -> None:
+    """Append configured proxy ``--build-arg`` pairs in deterministic order.
+
+    Emits nothing when no proxy URL is configured; emits the bypass list only
+    when ``proxy_no_proxy`` is explicitly set.
+    """
+    if inputs.proxy_url is None:
+        return
+    args.extend(("--build-arg", f"{_PROXY_URL_ARG}={inputs.proxy_url}"))
+    if inputs.proxy_no_proxy is not None:
+        args.extend(("--build-arg", f"{_PROXY_BYPASS_ARG}={inputs.proxy_no_proxy}"))
+
+
+def _emit_corporate_trust_build_args(
+    args: list[str], inputs: BuildRenderInputs,
+) -> None:
+    """Append corporate-trust build arguments only when trust is enabled.
+
+    Emits an explicit ``CORPORATE_TRUST_ENABLED=true`` signal that gates the
+    Dockerfile trust replacement, plus a constructor-specific CA-path argument
+    that the Dockerfile conditionally exports into the client variables.  All
+    are supplied as build arguments (never persisted as image ``ENV``) and
+    disabled builds receive none, so a stale bundle or an inherited client
+    variable cannot alter default behavior.
+    """
+    if not inputs.corporate_trust_enabled:
+        return
+    args.extend(("--build-arg", f"{_CORPORATE_TRUST_ENABLED_ARG}=true"))
+    args.extend(("--build-arg", f"{_CORPORATE_CA_PATH_ARG}={_SYSTEM_CA_BUNDLE}"))
 
 
 # ── validation ──────────────────────────────────────────────────────
@@ -646,6 +708,12 @@ def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
 
     # Build arguments — deterministic order matching the Dockerfile ARGs.
     _emit_build_args(args, inputs.projection)
+
+    # Optional proxy build arguments (absent when no proxy is configured).
+    _emit_proxy_build_args(args, inputs)
+
+    # Corporate trust signal + client CA-path arguments — only when enabled.
+    _emit_corporate_trust_build_args(args, inputs)
 
     # DEV_UID / DEV_GID — host-user identity, not from the projection.
     if inputs.dev_uid < 0:

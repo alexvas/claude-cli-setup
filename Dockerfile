@@ -15,6 +15,14 @@ FROM ${NODE_BASE_IMAGE} AS base
 ARG DEV_UID
 ARG DEV_GID
 
+# Optional corporate network build arguments, supplied via --build-arg and
+# redeclared in each stage that performs network operations.  They are never
+# converted to persistent image ENV metadata.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
+
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/dev \
     RUSTUP_HOME=/home/dev/.rustup \
@@ -24,9 +32,25 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=ru_RU.UTF-8 \
     LC_ALL=ru_RU.UTF-8
 
+# Optional corporate trust replacement: enabled only by the explicit
+# CORPORATE_TRUST_ENABLED build argument, never by bundle-file presence alone,
+# so a stale .docker-local/corporate-ca-bundle.crt cannot silently change trust.
+# The .docker-local directory is always present in the build context (tracked
+# .gitkeep), so this COPY never fails.
+COPY .docker-local/ /tmp/corporate-ca/
+RUN set -eux; \
+    if [ "${CORPORATE_TRUST_ENABLED}" = "true" ]; then \
+        test -f /tmp/corporate-ca/corporate-ca-bundle.crt; \
+        grep -q "BEGIN CERTIFICATE" /tmp/corporate-ca/corporate-ca-bundle.crt; \
+        grep -q "END CERTIFICATE" /tmp/corporate-ca/corporate-ca-bundle.crt; \
+        cp /tmp/corporate-ca/corporate-ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
+    fi
+
+COPY docker/corp-network-env.sh /tmp/corp-network-env.sh
 RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-trixie,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean \
+    . /tmp/corp-network-env.sh \
+    && rm -f /etc/apt/apt.conf.d/docker-clean \
     && printf 'Binary::apt::APT::Keep-Downloaded-Packages "true";\n' > /etc/apt/apt.conf.d/keep-cache \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -36,6 +60,16 @@ RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked 
     && sed -i 's/# ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen \
     && locale-gen ru_RU.UTF-8 \
     && apt-get autoclean
+
+# Re-apply the corporate bundle after package installation: the ca-certificates
+# package regenerates /etc/ssl/certs/ca-certificates.crt from distro roots, so
+# the final image must replace it again to preserve complete-replacement
+# semantics.
+RUN set -eux; \
+    if [ "${CORPORATE_TRUST_ENABLED}" = "true" ]; then \
+        cp /tmp/corporate-ca/corporate-ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
+    fi; \
+    rm -rf /tmp/corporate-ca
 
 COPY docker/setup-dev-user.sh /tmp/setup-dev-user.sh
 RUN chmod +x /tmp/setup-dev-user.sh \
@@ -47,10 +81,17 @@ RUN chmod +x /tmp/setup-dev-user.sh \
 # -----------------------------------------------------------------------------
 FROM base AS rtk-prebuilt
 
+# Corporate network build arguments supplied via --build-arg; never persisted
+# as ENV.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
+
 ARG RTK_VERSION
 ARG RTK_URL
 ARG RTK_SHA256
-RUN curl -fsSL -o /tmp/rtk.deb "${RTK_URL}" \
+RUN . /tmp/corp-network-env.sh && curl -fsSL -o /tmp/rtk.deb "${RTK_URL}" \
     && ACTUAL=$(sha256sum /tmp/rtk.deb | cut -d' ' -f1) \
     && if [ "$ACTUAL" != "${RTK_SHA256}" ]; then echo "SHA256 mismatch: expected ${RTK_SHA256}, got $ACTUAL" >&2; exit 1; fi \
     && dpkg-deb -x /tmp/rtk.deb /tmp/rtk-extract \
@@ -59,10 +100,17 @@ RUN curl -fsSL -o /tmp/rtk.deb "${RTK_URL}" \
 
 FROM base AS fd-prebuilt
 
+# Corporate network build arguments supplied via --build-arg; never persisted
+# as ENV.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
+
 ARG FD_VERSION
 ARG FD_URL
 ARG FD_SHA256
-RUN curl -fsSL -o /tmp/fd.deb "${FD_URL}" \
+RUN . /tmp/corp-network-env.sh && curl -fsSL -o /tmp/fd.deb "${FD_URL}" \
     && ACTUAL=$(sha256sum /tmp/fd.deb | cut -d' ' -f1) \
     && if [ "$ACTUAL" != "${FD_SHA256}" ]; then echo "SHA256 mismatch: expected ${FD_SHA256}, got $ACTUAL" >&2; exit 1; fi \
     && dpkg-deb -x /tmp/fd.deb /tmp/fd-extract \
@@ -74,9 +122,17 @@ RUN curl -fsSL -o /tmp/fd.deb "${FD_URL}" \
 # -----------------------------------------------------------------------------
 FROM base AS toolchain
 
+# Corporate network build arguments supplied via --build-arg; never persisted
+# as ENV.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
+
 RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-trixie,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update \
+    . /tmp/corp-network-env.sh \
+    && apt-get update \
     && apt-get install -y --no-install-recommends privoxy xz-utils netcat-openbsd iproute2 \
     && apt-get autoclean
 
@@ -94,6 +150,7 @@ RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/
     --mount=type=cache,id=rustup-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \
     env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
     bash -euo pipefail -c ' \
+        . /tmp/corp-network-env.sh; \
         curl -fsSL -o /tmp/rustup-init "${RUSTUP_URL}" \
         && printf "%s  %s\n" "${RUSTUP_SHA256}" /tmp/rustup-init | sha256sum -c - \
         && chmod +x /tmp/rustup-init \
@@ -112,6 +169,7 @@ ARG UV_URL
 ARG UV_SHA256
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
     bash -euo pipefail -c ' \
+        . /tmp/corp-network-env.sh; \
         curl -fsSL -o /tmp/uv.tar.gz "${UV_URL}" \
         && printf "%s  %s\n" "${UV_SHA256}" /tmp/uv.tar.gz | sha256sum -c - \
         && tar xzf /tmp/uv.tar.gz -C /tmp \
@@ -125,12 +183,14 @@ RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.c
 ARG PYTHON_VERSION
 COPY --chown=dev:dev docker/setup-python.sh /home/dev/setup-python.sh
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
-    chmod +x /home/dev/setup-python.sh \
+    . /tmp/corp-network-env.sh \
+    && chmod +x /home/dev/setup-python.sh \
     && PYTHON_VERSION="${PYTHON_VERSION}" /home/dev/setup-python.sh
 
 ARG TY_VERSION
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
-    uv tool install --python "${PYTHON_VERSION}" "ty==${TY_VERSION}"
+    . /tmp/corp-network-env.sh \
+    && uv tool install --python "${PYTHON_VERSION}" "ty==${TY_VERSION}"
 
 COPY --chown=dev:dev docker/mcp /home/dev/mcp
 COPY --chown=dev:dev docker/setup-mcp-yarn.sh /home/dev/setup-mcp-yarn.sh
@@ -141,26 +201,49 @@ RUN bash /home/dev/setup-mcp-yarn.sh
 # -----------------------------------------------------------------------------
 FROM toolchain AS pi-tools
 
+# Corporate network build arguments supplied via --build-arg; never persisted
+# as ENV.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
+
 ARG PI_VERSION
 USER root
 RUN mkdir -p /opt/pi && chown -R dev:dev /opt/pi
 USER dev
 RUN --mount=type=cache,id=npm-pi-${DEV_UID}-${DEV_GID},target=/home/dev/.npm,uid=${DEV_UID},gid=${DEV_GID} \
-    npm_config_cache=/home/dev/.npm npm install --global --prefix /opt/pi --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}"
+    . /tmp/corp-network-env.sh \
+    && npm_config_cache=/home/dev/.npm npm install --global --prefix /opt/pi --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}"
 
 FROM base AS openspec-tools
+
+# Corporate network build arguments supplied via --build-arg; never persisted
+# as ENV.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
 
 ARG OPENSPEC_VERSION
 USER root
 RUN mkdir -p /opt/openspec && chown -R dev:dev /opt/openspec
 USER dev
 RUN --mount=type=cache,id=npm-openspec-${DEV_UID}-${DEV_GID},target=/home/dev/.npm,uid=${DEV_UID},gid=${DEV_GID} \
-    npm_config_cache=/home/dev/.npm npm install --global --prefix /opt/openspec "@fission-ai/openspec@${OPENSPEC_VERSION}"
+    . /tmp/corp-network-env.sh \
+    && npm_config_cache=/home/dev/.npm npm install --global --prefix /opt/openspec "@fission-ai/openspec@${OPENSPEC_VERSION}"
 
 # -----------------------------------------------------------------------------
 # Runtime assembly; no builder-only packages or cache mounts are copied
 # -----------------------------------------------------------------------------
 FROM base AS runtime
+
+# Corporate network build arguments supplied via --build-arg; never persisted
+# as ENV.
+ARG PI_CORPORATE_PROXY_URL
+ARG PI_CORPORATE_NO_PROXY
+ARG CORPORATE_TRUST_ENABLED
+ARG PI_CORPORATE_CA_PATH
 
 ARG OH_MY_ZSH_VERSION
 
@@ -186,7 +269,8 @@ COPY --from=fd-prebuilt /usr/local/bin/fd /usr/local/bin/fd
 
 COPY docker/zsh/zshrc.fragment /tmp/zshrc.fragment
 COPY docker/setup-zsh.sh /tmp/setup-zsh.sh
-RUN chmod +x /tmp/setup-zsh.sh \
+RUN . /tmp/corp-network-env.sh \
+    && chmod +x /tmp/setup-zsh.sh \
     && runuser -u dev -- env HOME=/home/dev OH_MY_ZSH_VERSION="${OH_MY_ZSH_VERSION}" /tmp/setup-zsh.sh \
     && rm -f /tmp/setup-zsh.sh /tmp/zshrc.fragment
 

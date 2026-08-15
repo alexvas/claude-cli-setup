@@ -1,0 +1,4 @@
+This directory is intentionally tracked so the Dockerfile's optional
+`.docker-local/` COPY always succeeds.  When corporate trust is enabled,
+place the complete CA bundle at `.docker-local/corporate-ca-bundle.crt`;
+that file is ignored by Git and is never committed.

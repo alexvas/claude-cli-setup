@@ -6,16 +6,17 @@ and ``[network.proxy]``:
 
 * disabled corporate settings preserve the existing Docker build vector —
   no bundle is required and no corporate proxy argument is emitted;
-* configured proxy URLs are emitted verbatim under every uppercase and
-  lowercase ``HTTP_PROXY``/``HTTPS_PROXY``/``ALL_PROXY`` build argument,
-  with ``NO_PROXY``/``no_proxy`` emitted only for an explicit bypass list;
+* configured proxy URLs and bypass lists are carried through
+  constructor-specific build arguments and exported into the standard proxy
+  variables only when configured, never as same-named build arguments;
 * the fixed bundle has an optional build-context convention: the actual
   bundle stays untracked while a tracked placeholder keeps the
   ``.docker-local`` directory present so a missing disabled bundle never
   makes ``COPY`` fail;
 * the Dockerfile validates and replaces the system trust bundle before the
-  first base-stage network operation and points applicable clients at the
-  final system-bundle path;
+  first base-stage network operation, re-applies it after package installs
+  that regenerate the system bundle, and points applicable clients at the
+  final system-bundle path only on the enabled-trust path;
 * proxy build arguments are available to build stages but never converted
   into persistent image ``ENV`` values.
 
@@ -50,6 +51,43 @@ _PROXY_URL_NAMES = (
 
 _PROXY_ARG_NAMES = _PROXY_URL_NAMES + ("NO_PROXY", "no_proxy")
 
+_CONSTRUCTOR_PROXY_ARGS = ("PI_CORPORATE_PROXY_URL", "PI_CORPORATE_NO_PROXY")
+
+_CLIENT_CA_ARG_NAMES = ("SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS")
+
+_VALID_BUNDLE = (
+    "-----BEGIN CERTIFICATE-----\n"
+    "AQIDBAU=\n"
+    "-----END CERTIFICATE-----\n"
+)
+
+_DOCKERFILE_INSTRUCTIONS = {
+    "ADD", "ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM",
+    "HEALTHCHECK", "LABEL", "ONBUILD", "RUN", "SHELL", "STOPSIGNAL", "USER",
+    "VOLUME", "WORKDIR",
+}
+
+_NETWORK_MARKERS = (
+    "apt-get update",
+    "curl -fsSL",
+    "npm install",
+    "setup-python.sh",
+    "uv tool install",
+    "setup-zsh.sh",
+)
+
+_EXPECTED_NETWORKED_STAGES = {
+    "base", "rtk-prebuilt", "fd-prebuilt", "toolchain",
+    "pi-tools", "openspec-tools", "runtime",
+}
+
+
+def _starts_instruction(line: str) -> bool:
+    """True when *line* begins a top-level Dockerfile instruction."""
+    if not line or line[0].isspace() or line.startswith("#"):
+        return False
+    return line.split()[0] in _DOCKERFILE_INSTRUCTIONS
+
 
 def _recording_build_executor(effects: list[str]):
     class _Exec:
@@ -75,13 +113,21 @@ def _build_arg_pairs(args: tuple[str, ...]) -> dict[str, str]:
 class _BuildOrchestrationRed(unittest.TestCase):
     """Runs ``orchestrate_build`` against a real inventory + local companion."""
 
-    def build_with_local(self, companion: str | None) -> BuildResult:
+    def build_with_local(
+        self,
+        companion: str | None,
+        bundle: str | None = None,
+    ) -> BuildResult:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL)
             if companion is not None:
                 (root_path / "inventory.local.toml").write_text(companion)
+            if bundle is not None:
+                bundle_dir = root_path / ".docker-local"
+                bundle_dir.mkdir()
+                (bundle_dir / "corporate-ca-bundle.crt").write_text(bundle)
             effects: list[str] = []
             result = orchestrate_build(BuildRequest(
                 inventory_path=str(inventory),
@@ -101,6 +147,8 @@ class TestDisabledBuildVectorRed(_BuildOrchestrationRed):
         result = self.build_with_local(None)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
         pairs = _build_arg_pairs(result.build_args or ())
+        for name in _CONSTRUCTOR_PROXY_ARGS:
+            self.assertNotIn(name, pairs)
         for name in _PROXY_ARG_NAMES:
             self.assertNotIn(name, pairs)
 
@@ -110,16 +158,65 @@ class TestDisabledBuildVectorRed(_BuildOrchestrationRed):
         result = self.build_with_local("[corporate-trust]\nenabled = false\n")
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
         pairs = _build_arg_pairs(result.build_args or ())
+        for name in _CONSTRUCTOR_PROXY_ARGS:
+            self.assertNotIn(name, pairs)
         for name in _PROXY_ARG_NAMES:
+            self.assertNotIn(name, pairs)
+
+    def test_disabled_build_injects_no_client_ca_args(self) -> None:
+        # A disabled build must not inject constructor-specific trust or client
+        # CA-path arguments.
+        for companion in (None, "[corporate-trust]\nenabled = false\n"):
+            with self.subTest(companion=companion):
+                result = self.build_with_local(companion)
+                self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
+                pairs = _build_arg_pairs(result.build_args or ())
+                self.assertNotIn("CORPORATE_TRUST_ENABLED", pairs)
+                self.assertNotIn("PI_CORPORATE_CA_PATH", pairs)
+                for name in _CLIENT_CA_ARG_NAMES:
+                    self.assertNotIn(name, pairs)
+
+    def test_disabled_with_existing_bundle_emits_no_trust_args(self) -> None:
+        # A stale .docker-local/corporate-ca-bundle.crt must not enable trust
+        # replacement when the section is absent or disabled.
+        for companion in (None, "[corporate-trust]\nenabled = false\n"):
+            with self.subTest(companion=companion):
+                result = self.build_with_local(companion, bundle=_VALID_BUNDLE)
+                self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
+                pairs = _build_arg_pairs(result.build_args or ())
+                self.assertNotIn("CORPORATE_TRUST_ENABLED", pairs)
+                self.assertNotIn("PI_CORPORATE_CA_PATH", pairs)
+                for name in _CLIENT_CA_ARG_NAMES:
+                    self.assertNotIn(name, pairs)
+
+
+class TestEnabledTrustBuildVectorRed(_BuildOrchestrationRed):
+    """Enabled trust injects constructor-specific trust arguments."""
+
+    def test_enabled_trust_injects_constructor_specific_args(self) -> None:
+        result = self.build_with_local(
+            "[corporate-trust]\nenabled = true\n",
+            bundle=_VALID_BUNDLE,
+        )
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
+        pairs = _build_arg_pairs(result.build_args or ())
+        self.assertEqual("true", pairs.get("CORPORATE_TRUST_ENABLED"))
+        self.assertEqual(
+            "/etc/ssl/certs/ca-certificates.crt",
+            pairs.get("PI_CORPORATE_CA_PATH"),
+        )
+        # The client variables are set inside the Dockerfile (via the helper),
+        # never passed as same-named build arguments.
+        for name in _CLIENT_CA_ARG_NAMES:
             self.assertNotIn(name, pairs)
 
 
 class TestConfiguredProxyBuildVectorRed(_BuildOrchestrationRed):
-    """Task 2.4: configured proxy URLs under every proxy build-arg name."""
+    """Task 2.4: configured proxy under constructor-specific build args."""
 
-    def test_configured_proxy_emitted_under_all_proxy_arg_names(self) -> None:
-        # The endpoint is copied verbatim across all six names — including
-        # SOCKS schemes, which are best-effort, never reinterpreted.
+    def test_configured_proxy_emitted_under_constructor_specific_arg(self) -> None:
+        # The endpoint is carried verbatim via a constructor-specific argument —
+        # including SOCKS schemes, which are best-effort, never reinterpreted.
         for url in (
             "http://proxy.corp.example:3128",
             "socks5h://proxy.corp.example:1080",
@@ -130,10 +227,11 @@ class TestConfiguredProxyBuildVectorRed(_BuildOrchestrationRed):
                 )
                 self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
                 pairs = _build_arg_pairs(result.build_args or ())
-                for name in _PROXY_URL_NAMES:
-                    self.assertEqual(url, pairs.get(name), f"wrong value for {name}")
-                self.assertNotIn("NO_PROXY", pairs)
-                self.assertNotIn("no_proxy", pairs)
+                self.assertEqual(url, pairs.get("PI_CORPORATE_PROXY_URL"))
+                self.assertNotIn("PI_CORPORATE_NO_PROXY", pairs)
+                # Same-named proxy build args would be overridden by inherited ENV.
+                for name in _PROXY_ARG_NAMES:
+                    self.assertNotIn(name, pairs)
 
     def test_no_proxy_emitted_only_when_explicitly_configured(self) -> None:
         configured = self.build_with_local(
@@ -143,16 +241,14 @@ class TestConfiguredProxyBuildVectorRed(_BuildOrchestrationRed):
         )
         self.assertEqual(ExitKind.SUCCESS, configured.exit_kind, configured.message)
         pairs = _build_arg_pairs(configured.build_args or ())
-        self.assertEqual("localhost,.corp.example", pairs.get("NO_PROXY"))
-        self.assertEqual("localhost,.corp.example", pairs.get("no_proxy"))
+        self.assertEqual("localhost,.corp.example", pairs.get("PI_CORPORATE_NO_PROXY"))
 
         unconfigured = self.build_with_local(
             '[network.proxy]\nurl = "http://proxy.corp.example:3128"\n'
         )
         self.assertEqual(ExitKind.SUCCESS, unconfigured.exit_kind, unconfigured.message)
         pairs2 = _build_arg_pairs(unconfigured.build_args or ())
-        self.assertNotIn("NO_PROXY", pairs2)
-        self.assertNotIn("no_proxy", pairs2)
+        self.assertNotIn("PI_CORPORATE_NO_PROXY", pairs2)
 
 
 class TestBundleBuildContextConventionRed(unittest.TestCase):
@@ -219,26 +315,114 @@ class TestDockerfileTrustReplacementRed(unittest.TestCase):
             "trust replacement must precede the first network operation",
         )
 
-    def test_applicable_clients_point_at_final_system_bundle_path(self) -> None:
+    def test_client_ca_not_persisted_and_not_same_named_args(self) -> None:
+        # Client CA-path variables must not be persisted as image ENV (which
+        # would alter default client behavior) and must not be declared as
+        # same-named ARGs: an ENV inherited from the base image overrides an
+        # ARG of the same name, so same-named ARGs could not force the path.
         text = (_REPO_ROOT / "Dockerfile").read_text()
-        for var in ("SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
-            matching = [line for line in text.splitlines() if var in line]
-            self.assertTrue(matching, f"expected {var} client configuration")
-            self.assertTrue(
-                any("/etc/ssl/certs/ca-certificates.crt" in line for line in matching),
-                f"{var} must point at the final system bundle path",
-            )
+        for var in _CLIENT_CA_ARG_NAMES:
+            self.assertNotIn(f"ENV {var}", text, f"{var} must not persist as image ENV")
+            self.assertNotIn(f"ARG {var}", text, f"{var} must not be a same-named ARG")
+        self.assertIn("ARG PI_CORPORATE_CA_PATH", text)
+
+    def test_client_ca_conditionally_exported_only_when_enabled(self) -> None:
+        # A helper sourced by networked RUNs exports the client variables from
+        # the constructor-specific path only when trust is enabled, preserving
+        # inherited values otherwise.
+        helper = (_REPO_ROOT / "docker" / "corp-network-env.sh").read_text()
+        self.assertIn('"${CORPORATE_TRUST_ENABLED:-}" = "true"', helper)
+        self.assertIn('export SSL_CERT_FILE="${PI_CORPORATE_CA_PATH}"', helper)
+        self.assertIn('export NODE_EXTRA_CA_CERTS="${PI_CORPORATE_CA_PATH}"', helper)
+
+    def test_bundle_reapplied_after_ca_certificates_install(self) -> None:
+        # Installing ca-certificates regenerates /etc/ssl/certs/ca-certificates.crt,
+        # so the initial pre-network replacement is not enough; the final image
+        # must re-apply the configured bundle after the install.
+        text = (_REPO_ROOT / "Dockerfile").read_text()
+        lines = text.splitlines()
+        ca_install = [
+            i for i, line in enumerate(lines)
+            if "ca-certificates" in line and "ca-certificates.crt" not in line
+        ]
+        self.assertTrue(ca_install, "expected the ca-certificates package install")
+        reapply = [
+            i for i, line in enumerate(lines)
+            if i > ca_install[0]
+            and "cp " in line
+            and "/etc/ssl/certs/ca-certificates.crt" in line
+        ]
+        self.assertTrue(
+            reapply,
+            "the bundle must be re-applied after the ca-certificates install",
+        )
+
+    def test_trust_replacement_gated_on_explicit_enabled_arg(self) -> None:
+        # Replacement must be gated on the explicit enabled build argument, not
+        # on bundle-file presence alone, so a stale bundle cannot change trust.
+        text = (_REPO_ROOT / "Dockerfile").read_text()
+        self.assertIn("ARG CORPORATE_TRUST_ENABLED", text)
+        self.assertIn('"${CORPORATE_TRUST_ENABLED}" = "true"', text)
+
+    def test_every_networked_run_sources_ca_helper(self) -> None:
+        # Every networked RUN in every build stage — including the base and
+        # toolchain apt-get commands — must source the conditional CA helper,
+        # so inherited client CA variables cannot override the replaced bundle.
+        text = (_REPO_ROOT / "Dockerfile").read_text()
+        lines = text.splitlines()
+        stage: str | None = None
+        networked_stages: set[str] = set()
+        missing: list[str] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith("FROM ") and " AS " in line:
+                stage = line.split(" AS ", 1)[1].strip()
+                i += 1
+            elif line.startswith("RUN "):
+                block = [line]
+                i += 1
+                while i < len(lines) and not _starts_instruction(lines[i]):
+                    block.append(lines[i])
+                    i += 1
+                joined = "\n".join(block)
+                if any(marker in joined for marker in _NETWORK_MARKERS):
+                    networked_stages.add(stage or "<unknown>")
+                    if ". /tmp/corp-network-env.sh" not in joined:
+                        missing.append(stage or "<unknown>")
+            else:
+                i += 1
+        self.assertEqual(
+            _EXPECTED_NETWORKED_STAGES,
+            networked_stages,
+            "the set of stages with networked RUNs changed; update the enumeration",
+        )
+        self.assertEqual([], missing, "networked RUNs missing the CA helper source")
 
 
 class TestDockerfileProxyArgsRed(unittest.TestCase):
-    """Task 2.5: proxy ARGs available to stages, never persisted as ENV."""
+    """Task 2.5: proxy via constructor-specific args, never same-named ARG/ENV."""
 
-    def test_proxy_build_args_declared_for_all_forms(self) -> None:
+    def test_proxy_uses_constructor_specific_args_not_same_named(self) -> None:
         text = (_REPO_ROOT / "Dockerfile").read_text()
         for name in _PROXY_ARG_NAMES:
+            self.assertNotIn(
+                f"ARG {name}", text,
+                f"{name} must not be a same-named ARG (an inherited ENV overrides it)",
+            )
+        for name in _CONSTRUCTOR_PROXY_ARGS:
             self.assertIn(f"ARG {name}", text)
 
     def test_proxy_values_never_converted_to_image_env(self) -> None:
         text = (_REPO_ROOT / "Dockerfile").read_text()
         for name in _PROXY_ARG_NAMES:
             self.assertNotIn(f"ENV {name}", text)
+
+    def test_proxy_conditionally_exported_only_when_configured(self) -> None:
+        # The helper overrides inherited proxy ENV values only when a proxy is
+        # configured; otherwise inherited values are preserved.
+        helper = (_REPO_ROOT / "docker" / "corp-network-env.sh").read_text()
+        self.assertIn('if [ -n "${PI_CORPORATE_PROXY_URL:-}" ]; then', helper)
+        self.assertIn('export HTTP_PROXY="${PI_CORPORATE_PROXY_URL}"', helper)
+        self.assertIn('export https_proxy="${PI_CORPORATE_PROXY_URL}"', helper)
+        self.assertIn('export no_proxy="${PI_CORPORATE_NO_PROXY}"', helper)
