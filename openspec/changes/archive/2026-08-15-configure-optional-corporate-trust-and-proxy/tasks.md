@@ -108,16 +108,19 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 
 ### GREEN
 
-- [ ] 4.3 Update the local-companion example and operator documentation with the fixed bundle location, local-only configuration, complete-bundle replacement responsibility, rebuild requirement for build-stage trust, restart/new-launch refresh behavior, supported proxy schemes, explicit `no_proxy`, credential prohibition, and SOCKS best-effort limitation.
-- [ ] 4.4 Document the explicit operator-managed boundary for Docker client/daemon proxy and trust, registry authentication, image pulls, and `FROM` resolution.
-- [ ] 4.5 Implement only the production corrections needed to make the integrated acceptance tests from task 4.2 pass; do not add behavior outside the approved specs.
+- [x] 4.3 Update the local-companion example and operator documentation with the fixed bundle location, local-only configuration, complete-bundle replacement responsibility, rebuild requirement for build-stage trust, restart/new-launch refresh behavior, supported proxy schemes, explicit `no_proxy`, credential prohibition, and SOCKS best-effort limitation.
+- [x] 4.4 Document the explicit operator-managed boundary for Docker client/daemon proxy and trust, registry authentication, image pulls, and `FROM` resolution.
+- [x] 4.5 Implement only the production corrections needed to make the integrated acceptance tests from task 4.2 pass; do not add behavior outside the approved specs.
 
 ### INTROSPECT
 
-- [ ] 4.6 Review the complete change diff against every delta-spec requirement and scenario; verify documentation does not over-promise daemon coverage, live reload, trust augmentation, or universal SOCKS support, then correct any mismatch.
+- [x] 4.6 Review the complete change diff against every delta-spec requirement and scenario; verify documentation does not over-promise daemon coverage, live reload, trust augmentation, or universal SOCKS support, then correct any mismatch.
 
 ### VALIDATE
 
-- [ ] 4.7 Run all focused corporate-network tests and the full project test/static-check suite used by this repository; record the exact commands and passing results.
-- [ ] 4.8 Run `openspec validate configure-optional-corporate-trust-and-proxy --strict` and record passing output.
-- [ ] 4.9 Where Docker and the necessary network environment are available, perform and record a representative configured build plus a new-launch/restart verification; otherwise record the unavailable prerequisite and the passing automated coverage that substitutes for it.
+- [x] 4.7 Run all focused corporate-network tests and the full project test/static-check suite used by this repository; record the exact commands and passing results.
+  - Evidence: `python3 -m unittest tests.test_constructor_corporate_network_red tests.test_constructor_corporate_network_build_red tests.test_constructor_corporate_network_run_red tests.test_constructor_corporate_network_acceptance_red tests.test_constructor_corporate_network_docs_red -q` — 114 tests passed; `python3 -m unittest discover -s tests -q` — 2322 tests passed; `./docker/docker-constructor.py validate` — valid. `npx pi-green-loop check --since HEAD` reported that this repository has no auto-detected checks.
+- [x] 4.8 Run `openspec validate configure-optional-corporate-trust-and-proxy --strict` and record passing output.
+  - Evidence: command passed with `Change 'configure-optional-corporate-trust-and-proxy' is valid`.
+- [x] 4.9 Where Docker and the necessary network environment are available, perform and record a representative configured build plus a new-launch/restart verification; otherwise record the unavailable prerequisite and the passing automated coverage that substitutes for it.
+  - Evidence: Docker is unavailable in this environment (`docker: command not found`). The 114 passing focused tests include configured build/run vectors, exact trust mounts and proxy variables, restart/current-source planning, runtime verification, and integrated public-command acceptance coverage.

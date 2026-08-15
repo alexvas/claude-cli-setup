@@ -12,6 +12,13 @@
 #
 #   [cache]
 #   dir = "/path/to/cache"  # overrides the XDG default cache location
+#
+#   [corporate-trust]
+#   enabled = true  # requires .docker-local/corporate-ca-bundle.crt
+#
+#   [network.proxy]
+#   url = "http://proxy.corp.example:3128"  # also: socks5, socks5h
+#   no_proxy = "localhost,.corp.example"    # optional; explicit only
 
 [host-access]
 address = "10.0.2.2"

@@ -99,6 +99,27 @@ dir = "/home/dev/.cache/pi-docker"
 
 `cache.ttl` belongs in `docker-constructor.toml`; `cache.dir` belongs only in `docker-constructor.local.toml`. When `[cache].dir` is absent, the existing XDG cache-directory default is used. Host access does not need to be enabled to use a local cache directory.
 
+### Corporate trust and application proxy
+
+Corporate network settings are machine-local: add `[corporate-trust]` and `[network.proxy]` only to the resolved `docker-constructor.local.toml` companion, and place trust material at the fixed repository path `.docker-local/corporate-ca-bundle.crt`. For example:
+
+```toml
+[corporate-trust]
+enabled = true
+
+[network.proxy]
+url = "http://proxy.corp.example:3128"
+no_proxy = "localhost,.corp.example"
+```
+
+The certificate file is a **complete replacement** for the system `/etc/ssl/certs/ca-certificates.crt`, not an extra certificate. It must therefore contain every public and corporate root required by container clients; the constructor checks PEM framing and Base64 only, while certificate validity and trust coverage remain the operator's responsibility.
+
+The proxy URL requires an explicit host and port and supports `http`, `socks5`, or `socks5h`. `no_proxy` is optional and creates `NO_PROXY`/`no_proxy` only when explicitly configured. Proxy credentials or URI userinfo are not allowed; use a credential-free proxy endpoint. SOCKS support during a build is best-effort and a build client that does not support `socks5` or `socks5h` may fail normally.
+
+After enabling or changing the certificate bundle, rebuild the image for build-stage trust. A restart or new launch mounts the current bundle read-only and receives certificate updates without a rebuild; this is not live reload for an already-running container or process.
+
+This feature does not configure or control the Docker client or daemon proxy/trust, registry authentication or registry trust, image pulls, or `FROM` resolution. Configure those operator-managed host and Docker facilities separately when they are required.
+
 ## 2. Launch the environment
 
 Open the interactive project selector:

@@ -99,6 +99,27 @@ dir = "/home/dev/.cache/pi-docker"
 
 `cache.ttl` 属于 `docker-constructor.toml`；`cache.dir` 只能位于 `docker-constructor.local.toml`。未设置 `[cache].dir` 时，仍使用现有的 XDG 默认缓存目录。使用本地缓存目录不需要启用主机访问。
 
+### 企业信任与应用代理
+
+企业网络设置是机器本地配置：只在解析到的本地伴生文件 `docker-constructor.local.toml` 中添加 `[corporate-trust]` 和 `[network.proxy]`，并将证书放在固定仓库路径 `.docker-local/corporate-ca-bundle.crt`。例如：
+
+```toml
+[corporate-trust]
+enabled = true
+
+[network.proxy]
+url = "http://proxy.corp.example:3128"
+no_proxy = "localhost,.corp.example"
+```
+
+该证书 bundle 是系统 `/etc/ssl/certs/ca-certificates.crt` 的**完整替换**，而不是附加证书。因此它必须包含容器客户端所需的全部公共和企业根证书；构造器只检查 PEM framing 和 Base64，证书有效性及信任覆盖完整性仍由操作员负责。
+
+代理 URL 必须包含明确的 host 和 port，并支持 `http`、`socks5` 或 `socks5h`。可选的 `no_proxy` 只有在显式配置时才生成 `NO_PROXY`/`no_proxy`。不允许代理凭据或 URI userinfo；请使用无凭据代理端点。构建期间的 SOCKS 支持是尽力而为，若构建客户端不支持 `socks5` 或 `socks5h`，可能正常失败。
+
+启用或更改证书 bundle 后，必须重新构建镜像才能更新构建阶段信任。重启或重新启动新容器会只读挂载当前 bundle，无需重新构建即可获得证书更新；这不是已运行容器或进程的实时重新加载。
+
+此功能不配置或控制 Docker 客户端或守护进程的代理/信任、注册表身份验证或信任、镜像 pull，也不控制 `FROM` 解析。需要时，操作员必须单独配置这些外部主机和 Docker 功能。
+
 ## 2. 启动环境
 
 打开交互式项目选择器：

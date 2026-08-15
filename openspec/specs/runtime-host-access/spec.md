@@ -23,7 +23,7 @@ The system SHALL accept an optional closed `[runtime.host-access]` table in `doc
 - **AND** SHALL reject unknown keys, unsupported modes, booleans used as ports, and ports outside 1 through 65535
 
 ### Requirement: Store machine-local constructor state separately
-The system SHALL resolve a closed local TOML companion beside the reviewed inventory and SHALL use it only for `[host-access].address` and `[cache].dir`. The local companion SHALL NOT override reviewed dependency, update, artifact, host-access policy, or cache TTL fields.
+The system SHALL resolve a closed local TOML companion beside the reviewed inventory and SHALL use it only for `[host-access].address`, `[cache].dir`, `[corporate-trust].enabled`, and `[network.proxy]` corporate-network settings. The local companion SHALL NOT override reviewed dependency, update, artifact, host-access policy, or cache TTL fields. Corporate trust and proxy settings SHALL remain independent from host-access policy: they SHALL neither require enabled host access nor derive an application proxy URL from `HOST_ACCESS_ADDRESS` or `HOST_PROXY_PORT`.
 
 #### Scenario: Resolving the canonical local companion
 - **WHEN** the canonical `docker-constructor.toml` is used
@@ -39,8 +39,13 @@ The system SHALL resolve a closed local TOML companion beside the reviewed inven
 - **THEN** cache consumers SHALL use the validated local directory
 - **AND** SHALL NOT require `[host-access]` state
 
+#### Scenario: Using corporate proxy without host access
+- **WHEN** host access is disabled and the local companion declares a valid external `[network.proxy]` endpoint
+- **THEN** build and run planning SHALL accept the proxy configuration
+- **AND** SHALL NOT emit host-access mappings or require gateway diagnosis
+
 #### Scenario: Rejecting malformed local state
-- **WHEN** a consumer reads an unknown local key, malformed TOML, invalid host address, or invalid cache directory value
+- **WHEN** a consumer reads an unknown local key, malformed TOML, invalid host address, invalid cache directory value, or invalid corporate network setting
 - **THEN** the operation SHALL fail before network, cache mutation, artifact materialization, or Docker execution
 - **AND** SHALL provide path-specific recovery guidance
 
