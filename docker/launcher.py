@@ -373,6 +373,14 @@ class RunRequest:
     pi_home_host: str
     """Host path to the Pi home directory."""
 
+    repo_root: str | None = None
+    """Repository root for the fixed corporate trust bundle.
+
+    Mandatory whenever corporate trust is enabled.  It is never inferred
+    from the inventory path; a direct caller that enables corporate trust
+    without supplying it fails closed with a CONFIG error before Docker.
+    """
+
     overrides: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}),
     )
@@ -530,8 +538,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         UnsupportedOverrideError,
     )
     from docker.versioning.inventory import (
+        InventoryError,
         load_inventory,
-        load_local_config_for_inventory,
+        resolve_local_corporate_settings,
     )
     from docker.versioning.rendering import RunHostAccess, render_run_vector
 
@@ -544,8 +553,28 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             message=f"Failed to load inventory: {exc}",
         )
 
-    # ── Step 1b: resolve host-access policy ─────────────────
-    from docker.versioning.inventory import InventoryError
+    # ── Step 1b: validate local corporate settings ──────────
+    host_access_policy = getattr(inventory.runtime, "host_access", None)
+    host_access_mode = (
+        getattr(host_access_policy, "mode", None)
+        if getattr(host_access_policy, "enabled", False)
+        else None
+    )
+    try:
+        resolve_local_corporate_settings(
+            Path(request.inventory_path),
+            repository_root=(
+                Path(request.repo_root) if request.repo_root else None
+            ),
+            host_access_mode=host_access_mode,
+        )
+    except InventoryError as exc:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+
+    # ── Step 1c: resolve host-access policy ─────────────────
     try:
         host_access = _resolve_host_access(
             getattr(inventory.runtime, "host_access", None),

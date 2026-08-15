@@ -9,6 +9,7 @@ import base64
 import ipaddress
 import re
 import tomllib
+import urllib.parse
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Union
@@ -27,7 +28,9 @@ from .model import (
     HostAccessPolicy,
     LocalCacheConfig,
     LocalConfig,
+    LocalCorporateTrust,
     LocalHostAccess,
+    LocalNetworkProxy,
     DockerRegistrySource,
     DockerRegistryUpdate,
     FdPrebuiltStage,
@@ -77,6 +80,8 @@ from .semver import SemverError, validate as _validate_semver
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 NODE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+PEM_CERTIFICATE_BEGIN = "-----BEGIN CERTIFICATE-----"
+PEM_CERTIFICATE_END = "-----END CERTIFICATE-----"
 GIT_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 VERSION_STRICT_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 PREBUILT_VERSION_RE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
@@ -898,6 +903,253 @@ def resolve_local_companion_path(inventory_path: Path) -> Path:
     return path.with_name(f"{path.stem}.local.toml")
 
 
+def resolve_corporate_trust_bundle_path(repository_root: Path | str) -> Path:
+    """Return the only permitted corporate trust source for a repository.
+
+    The authoritative root is the repository root (the directory that
+    contains ``docker/`` and ``docker-constructor.toml``).  It is not the
+    directory of a custom ``--inventory``: a custom inventory still reads
+    its local companion beside that inventory, but its corporate trust
+    bundle remains the repository-local ``.docker-local/
+    corporate-ca-bundle.crt`` file.
+    """
+    return Path(repository_root) / ".docker-local" / "corporate-ca-bundle.crt"
+
+
+def _split_pem_lines(text: str) -> list[str]:
+    """Split into lines using only PEM line breaks (LF or CRLF).
+
+    ``str.splitlines`` would also treat other control characters such as
+    vertical tab and form feed as line boundaries, silently removing them
+    from payloads and defeating strict Base64 validation.
+    """
+    return [line.rstrip("\r") for line in text.split("\n")]
+
+
+def _validate_pem_certificate_blocks(text: str, bundle: Path) -> None:
+    """Require complete, decodable PEM certificate blocks.
+
+    A valid corporate trust bundle must be one or more complete
+    ``-----BEGIN CERTIFICATE-----`` / ``-----END CERTIFICATE-----``
+    blocks.  Each delimiter must occupy its own line — a standalone PEM
+    boundary line, not a substring of a longer line — with the Base64
+    payload on the intervening lines.  Only PEM line breaks are permitted
+    inside a payload; other whitespace and control characters are left in
+    place for strict Base64 validation to reject.  Truncated blocks,
+    unmatched delimiters, arbitrary text outside blocks, invalid Base64
+    payloads, and empty payloads are rejected.  Bundle completeness beyond
+    these PEM checks remains the operator's responsibility.
+    """
+    begin = PEM_CERTIFICATE_BEGIN
+    end = PEM_CERTIFICATE_END
+
+    payload_lines: list[str] = []
+    in_block = False
+    blocks = 0
+
+    for line in _split_pem_lines(text):
+        stripped = line.strip()
+        if stripped == begin:
+            if in_block:
+                raise InventoryError(
+                    f"corporate trust bundle {bundle} has nested or misordered "
+                    f"PEM certificate delimiters"
+                )
+            in_block = True
+            payload_lines = []
+            blocks += 1
+            continue
+        if stripped == end:
+            if not in_block:
+                raise InventoryError(
+                    f"corporate trust bundle {bundle} has unmatched PEM "
+                    f"certificate delimiters"
+                )
+            compact = "".join(payload_lines)
+            try:
+                decoded = base64.b64decode(compact, validate=True)
+            except Exception as exc:
+                raise InventoryError(
+                    f"corporate trust bundle {bundle} has an invalid Base64 "
+                    f"certificate payload"
+                ) from exc
+            if not decoded:
+                raise InventoryError(
+                    f"corporate trust bundle {bundle} has an empty certificate "
+                    f"payload"
+                )
+            in_block = False
+            payload_lines = []
+            continue
+        if in_block:
+            if begin in stripped or end in stripped:
+                raise InventoryError(
+                    f"corporate trust bundle {bundle} has nested or misordered "
+                    f"PEM certificate delimiters"
+                )
+            payload_lines.append(line)
+            continue
+        if stripped:
+            raise InventoryError(
+                f"corporate trust bundle {bundle} contains non-PEM content "
+                f"outside certificate blocks"
+            )
+
+    if in_block:
+        raise InventoryError(
+            f"corporate trust bundle {bundle} has an unterminated PEM "
+            f"certificate block"
+        )
+    if blocks == 0:
+        raise InventoryError(
+            f"corporate trust bundle {bundle} is not PEM certificate material"
+        )
+
+
+def validate_corporate_trust_bundle(path: Path | str) -> Path:
+    """Validate the fixed corporate trust bundle and return its path.
+
+    Raises ``InventoryError`` carrying the bundle path for a missing,
+    unreadable, empty, or malformed bundle.
+    """
+    bundle = Path(path)
+    if not bundle.is_file():
+        raise InventoryError(
+            f"corporate trust enabled but bundle {bundle} is missing; "
+            f"create .docker-local/corporate-ca-bundle.crt"
+        )
+    try:
+        data = bundle.read_bytes()
+    except OSError as exc:
+        raise InventoryError(
+            f"corporate trust bundle {bundle} is unreadable: {exc}"
+        ) from exc
+    if not data.strip():
+        raise InventoryError(f"corporate trust bundle {bundle} is empty")
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise InventoryError(
+            f"corporate trust bundle {bundle} is not PEM certificate material: "
+            f"non-ASCII content"
+        ) from exc
+    _validate_pem_certificate_blocks(text, bundle)
+    return bundle
+
+
+def _validate_proxy_url(url: str) -> None:
+    """Validate a credential-free proxy URL; raise on any unsupported shape."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise InventoryError(
+            f"local.network.proxy.url: malformed URL {url!r}"
+        ) from exc
+    if parsed.scheme not in {"http", "socks5", "socks5h"}:
+        raise InventoryError(
+            f"local.network.proxy.url: unsupported scheme {parsed.scheme!r}; "
+            f"use http, socks5, or socks5h"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise InventoryError(
+            "local.network.proxy.url: credentials are not allowed; "
+            "use a credential-free URL"
+        )
+    if parsed.fragment:
+        raise InventoryError(
+            "local.network.proxy.url: fragments are not allowed"
+        )
+    if parsed.query:
+        raise InventoryError(
+            "local.network.proxy.url: query strings are not allowed"
+        )
+    if not parsed.hostname:
+        raise InventoryError("local.network.proxy.url: missing host")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise InventoryError(
+            f"local.network.proxy.url: invalid port in {url!r}"
+        ) from exc
+    if port is None:
+        raise InventoryError("local.network.proxy.url: missing port")
+    if not 1 <= port <= 65535:
+        raise InventoryError(
+            f"local.network.proxy.url: port {port} out of range 1..65535"
+        )
+
+
+def _parse_corporate_trust_section(trust_raw: object) -> LocalCorporateTrust:
+    """Parse ``[corporate-trust]`` into validated local state."""
+    if not isinstance(trust_raw, dict):
+        raise InventoryError(
+            "local.corporate-trust: expected table; use [corporate-trust].enabled"
+        )
+    unknown = set(trust_raw) - {"enabled"}
+    if unknown:
+        key = sorted(unknown)[0]
+        raise InventoryError(
+            f"local.corporate-trust.{key}: unknown key; "
+            f"use only local.corporate-trust.enabled"
+        )
+    enabled = trust_raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise InventoryError(
+            "local.corporate-trust.enabled: expected boolean; "
+            "set enabled = true or enabled = false"
+        )
+    return LocalCorporateTrust(enabled)
+
+
+def _parse_network_proxy_section(network_raw: object) -> LocalNetworkProxy:
+    """Parse ``[network.proxy]`` into validated local state."""
+    if network_raw is not None and not isinstance(network_raw, dict):
+        raise InventoryError("local.network: expected table; use [network.proxy]")
+    if isinstance(network_raw, dict):
+        unknown_network = set(network_raw) - {"proxy"}
+        if unknown_network:
+            key = sorted(unknown_network)[0]
+            raise InventoryError(
+                f"local.network.{key}: unknown key; use only [network.proxy]"
+            )
+        has_proxy = "proxy" in network_raw
+        proxy_raw = network_raw.get("proxy")
+    else:
+        has_proxy = False
+        proxy_raw = None
+    if has_proxy:
+        if not isinstance(proxy_raw, dict):
+            raise InventoryError(
+                "local.network.proxy: expected table; use [network.proxy]"
+            )
+        unknown_proxy = set(proxy_raw) - {"url", "no_proxy"}
+        if unknown_proxy:
+            key = sorted(unknown_proxy)[0]
+            raise InventoryError(
+                f"local.network.proxy.{key}: unknown key; "
+                f"use only [network.proxy].url and [network.proxy].no_proxy"
+            )
+        url = proxy_raw.get("url")
+        if url is None:
+            raise InventoryError(
+                "local.network.proxy.url: missing required key; set [network.proxy].url"
+            )
+        if not isinstance(url, str):
+            raise InventoryError(
+                "local.network.proxy.url: expected string; set a credential-free "
+                "http/socks5/socks5h URL"
+            )
+        _validate_proxy_url(url)
+        no_proxy = proxy_raw.get("no_proxy")
+        if no_proxy is not None and not isinstance(no_proxy, str):
+            raise InventoryError(
+                "local.network.proxy.no_proxy: expected string; set a comma-separated "
+                "bypass list"
+            )
+        return LocalNetworkProxy(url, no_proxy)
+    return LocalNetworkProxy()
+
+
 def load_local_config(
     path: Path,
     *,
@@ -913,11 +1165,12 @@ def load_local_config(
         ) from exc
     if not isinstance(raw, dict):
         raise InventoryError("local: expected TOML table")
-    unknown = set(raw) - {"host-access", "cache"}
+    unknown = set(raw) - {"host-access", "cache", "corporate-trust", "network"}
     if unknown:
         key = sorted(unknown)[0]
         raise InventoryError(
-            f"local.{key}: unknown key; use only [host-access] or [cache]"
+            f"local.{key}: unknown key; use only [host-access], [cache], "
+            f"[corporate-trust], or [network.proxy]"
         )
     host_raw = raw.get("host-access", {})
     if not isinstance(host_raw, dict):
@@ -957,7 +1210,14 @@ def load_local_config(
         raise InventoryError(
             "local.cache.dir: expected string; set [cache].dir to a filesystem path"
         )
-    return LocalConfig(LocalHostAccess(address), LocalCacheConfig(cache_dir))
+    trust = _parse_corporate_trust_section(raw.get("corporate-trust", {}))
+    proxy = _parse_network_proxy_section(raw.get("network"))
+    return LocalConfig(
+        LocalHostAccess(address),
+        LocalCacheConfig(cache_dir),
+        trust,
+        proxy,
+    )
 
 
 def load_local_config_for_inventory(
@@ -972,6 +1232,40 @@ def load_local_config_for_inventory(
     if not companion.exists():
         return LocalConfig()
     return load_local_config(companion, host_access_mode=host_access_mode)
+
+
+def resolve_local_corporate_settings(
+    inventory_path: Path,
+    *,
+    repository_root: Path | None = None,
+    host_access_mode: str | None = None,
+) -> LocalConfig:
+    """Load and validate the complete local-companion schema.
+
+    Unlike the earlier corporate-only parsing, this runs the same closed
+    local-companion schema validation as :func:`load_local_config`, so unknown
+    top-level keys, invalid ``[host-access]`` values, and invalid ``[cache]``
+    values fail closed with an ``InventoryError`` before build/run execution.
+    When corporate trust is enabled, the fixed repository-local bundle is
+    additionally validated before any Docker invocation.  The repository
+    root is mandatory in that case: it must be supplied by the build/run
+    boundary and is never inferred from the inventory path.
+    """
+    companion = resolve_local_companion_path(inventory_path)
+    if not companion.exists():
+        return LocalConfig()
+    local = load_local_config(companion, host_access_mode=host_access_mode)
+    if local.corporate_trust.enabled:
+        if repository_root is None:
+            raise InventoryError(
+                "corporate trust is enabled but no repository root was "
+                "supplied; cannot resolve the fixed "
+                ".docker-local/corporate-ca-bundle.crt"
+            )
+        validate_corporate_trust_bundle(
+            resolve_corporate_trust_bundle_path(repository_root)
+        )
+    return local
 
 
 def validate_inventory(raw: Mapping[str, object]) -> Inventory:

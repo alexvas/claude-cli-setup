@@ -13,7 +13,7 @@ Phase 2 ──┐
 Phase 3 ──┘
 ```
 
-Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” means add focused failing tests that express the phase contract before production implementation. “INTROSPECT” means review the completed diff against the stated phase boundaries and correct any defect found. “VALIDATE” is the phase gate; preserve its command output or other named evidence in the change’s implementation record.
+Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” means add focused failing tests that express the phase contract before production implementation. “INTROSPECT” means review the completed diff against the stated phase boundaries and correct any defect found. “VALIDATE” is the phase gate; its evidence is the checked-in executable tests and reproducible validation commands, independently rerunnable by a reviewer. Do not add a self-reported implementation record as validation evidence.
 
 ## Phase 1 — Local corporate-network input contract
 
@@ -23,24 +23,24 @@ Each phase follows **RED → GREEN → INTROSPECT → VALIDATE**. “RED” mean
 ### RED
 
 - [x] 1.1 Add failing unit tests for loading absent/disabled `[corporate-trust]` settings and for resolving the companion beside both the canonical inventory and a `--inventory` custom inventory.
-- [x] 1.2 Add failing unit tests requiring enabled corporate trust to use only `.docker-local/corporate-ca-bundle.crt` and to reject a missing, unreadable, empty, or malformed PEM bundle with a path-specific CONFIG error before Docker execution.
+- [x] 1.2 Add failing unit tests requiring enabled corporate trust to use only `.docker-local/corporate-ca-bundle.crt` and to reject a missing, unreadable, empty, or PEM-framing/Base64-malformed bundle with a path-specific CONFIG error before Docker execution; preserve dependency-free acceptance of complete blocks with nonempty decodable payloads.
 - [x] 1.3 Add failing unit tests for `[network.proxy]`: accept only credential-free `http`, `socks5`, and `socks5h` URLs with host and explicit port; reject userinfo, fragments, unsupported schemes, missing host/port, malformed URLs, unknown keys, and invalid `no_proxy` values.
 - [x] 1.4 Add failing regression tests proving a valid external proxy works while host access is disabled and that absent corporate settings preserve existing cache and host-access behavior.
 
 ### GREEN
 
-- [ ] 1.5 Extend the closed local-companion data model and loader with `[corporate-trust].enabled` and `[network.proxy]`, resolving the companion only beside the selected inventory.
-- [ ] 1.6 Implement fixed-path corporate-bundle validation for enabled trust, returning path-specific CONFIG errors for every invalid bundle condition specified by task 1.2.
-- [ ] 1.7 Implement proxy and optional `no_proxy` validation, returning the normalized validated settings only for the URI and key set allowed by task 1.3.
-- [ ] 1.8 Pass validated corporate settings through the command/planning boundary without adding their values to the reviewed inventory or effective dependency projection.
+- [x] 1.5 Extend the closed local-companion data model and loader with `[corporate-trust].enabled` and `[network.proxy]`, resolving the companion only beside the selected inventory.
+- [x] 1.6 Implement dependency-free fixed-path corporate-bundle validation for enabled trust, returning path-specific CONFIG errors for every invalid bundle condition specified by task 1.2 without X.509 semantic parsing.
+- [x] 1.7 Implement proxy and optional `no_proxy` validation, returning the normalized validated settings only for the URI and key set allowed by task 1.3.
+- [x] 1.8 Pass validated corporate settings through the command/planning boundary without adding their values to the reviewed inventory or effective dependency projection.
 
 ### INTROSPECT
 
-- [ ] 1.9 Review the Phase 1 diff against the local-only, fixed-file, credential-free, and host-access-independence requirements; remove any arbitrary certificate-path input, credential channel, inventory serialization, or implicit host-proxy derivation.
+- [x] 1.9 Review the Phase 1 diff against the local-only, fixed-file, credential-free, and host-access-independence requirements; remove any arbitrary certificate-path input, credential channel, inventory serialization, or implicit host-proxy derivation.
 
 ### VALIDATE
 
-- [ ] 1.10 Run the Phase 1 focused local-config test modules and `./docker/docker-constructor.py validate`; record passing output and confirm invalid local inputs prevent Docker invocation.
+- [x] 1.10 Provide reproducible Phase 1 validation: the focused local-config tests and `./docker/docker-constructor.py validate` must pass when independently run, and checked-in command-boundary tests must prove invalid local inputs prevent Docker invocation. No implementation report is required or accepted as evidence.
 
 ## Phase 2 — Build-time trust and proxy contract
 

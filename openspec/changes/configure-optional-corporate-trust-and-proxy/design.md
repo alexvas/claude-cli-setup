@@ -20,7 +20,7 @@ Corporate TLS interception requires a complete corporate trust bundle, while mac
 - Support proxy credentials, arbitrary environment passthrough, PAC/WPAD, proxy auto-discovery, or proxy health checks.
 - Promise SOCKS support in every build client; SOCKS build operation is best-effort and a client such as `apt` can fail normally.
 - Hot-reload CA trust inside an already running process or container; a restart/new launch receives the current mounted bundle.
-- Augment the system trust store, infer a missing bundle, or prove a supplied bundle contains every required public/corporate root.
+- Augment the system trust store, infer a missing bundle, parse or verify supplied certificate payloads as X.509, or prove a supplied bundle contains every required public/corporate root.
 
 ## Decisions
 
@@ -28,7 +28,7 @@ Corporate TLS interception requires a complete corporate trust bundle, while mac
 
 Add closed local-companion sections for corporate trust and network proxy. Neither endpoint nor trust material enters `docker-constructor.toml`, effective dependency projections, suggestions, or source control. A custom inventory continues to resolve its companion beside that inventory.
 
-`[corporate-trust] enabled = true` is explicit intent; it requires the exact repository-local file `.docker-local/corporate-ca-bundle.crt`. Absence or `enabled = false` preserves standard trust behavior. Explicit enablement avoids treating a deleted file as a silent feature disablement.
+`[corporate-trust] enabled = true` is explicit intent; it requires the exact repository-local file `.docker-local/corporate-ca-bundle.crt`. The authoritative root for that fixed bundle is the repository root (the directory containing `docker/` and the canonical `docker-constructor.toml`), never the directory of a custom `--inventory`; a custom inventory still resolves its companion beside that inventory, but its enabled corporate trust bundle remains the repository-local file. Absence or `enabled = false` preserves standard trust behavior. Explicit enablement avoids treating a deleted file as a silent feature disablement.
 
 `[network.proxy]` is enabled by its required `url`; absence disables proxy. `no_proxy` is optional and is emitted only when explicitly configured. Accepted proxy URL schemes are `http`, `socks5`, and `socks5h`; URLs require a host and explicit port and reject userinfo, fragments, unsupported schemes, and malformed values. The configuration contains no credential channel.
 
@@ -37,6 +37,8 @@ An alternative reviewed policy plus local values was rejected because network en
 ### One fixed complete bundle serves build and runtime
 
 The fixed bundle is a complete replacement for `/etc/ssl/certs/ca-certificates.crt`, not an added root. The Dockerfile consumes the optional local build-context input before any networked package/install action and validates it as nonempty PEM certificate material before replacement. Client-specific CA environment settings point at the final system-bundle path where needed for consistent curl/OpenSSL/Node behavior.
+
+Host-side validation remains dependency-free because it runs before Docker can establish the configured corporate trust/proxy path. It validates ASCII PEM framing only: complete matching `CERTIFICATE` delimiters, no non-whitespace data outside blocks, and nonempty strict-Base64 payloads. It deliberately does not parse DER or validate X.509 semantics, signatures, expiry, chains, or trust coverage. This avoids a host Python dependency/bootstrap cycle; those semantic properties remain the operator's responsibility and are ultimately exercised by the consuming TLS clients.
 
 At launch, the constructor bind-mounts that same resolved host source file read-only over `/etc/ssl/certs/ca-certificates.crt`. A new launch or restart therefore sees a changed bundle without rebuilding the image. A running process is not expected to reload it.
 
@@ -52,7 +54,7 @@ The alternative of deriving a proxy URL from `[runtime.host-access]` was rejecte
 
 ### Validation and observability fail closed without treating values as secrets
 
-Before build planning or run-vector execution, local parsing validates intent, bundle presence/type, and proxy URI shape. Invalid enabled settings produce a path-specific CONFIG result before Docker execution. The bundle’s semantic completeness remains operator responsibility; validation can establish PEM syntax but cannot prove organizational trust coverage.
+Before build planning or run-vector execution, local parsing validates the complete closed local-companion schema — including unknown top-level keys, invalid `[host-access]` values, invalid `[cache]` values, corporate intent, bundle presence/type, PEM framing/Base64 decodability, and proxy URI shape. Invalid local state produces a path-specific CONFIG result before Docker execution. The bundle’s semantic completeness remains operator responsibility; validation establishes complete PEM certificate blocks with nonempty decodable payloads but does not establish X.509 validity or organizational trust coverage.
 
 Endpoints contain no credentials by contract, but command displays and structured build data still require deterministic handling and must not add generic environment dumps. Tests verify that proxy configuration is not injected when absent and never becomes an image `ENV` declaration.
 

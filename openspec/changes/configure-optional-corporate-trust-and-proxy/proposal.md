@@ -8,7 +8,7 @@ Corporate TLS interception causes build-time and runtime clients to reject other
 - Replace the image system CA bundle from that file during build when explicitly enabled, and bind-mount the same file read-only at runtime so a restarted container receives trust updates without rebuilding the image.
 - Add optional, local-only proxy configuration for credential-free `http`, `socks5`, and `socks5h` endpoints, with an explicitly configured optional `no_proxy` list.
 - Propagate configured proxy values to build-stage clients and runtime containers through uppercase and lowercase `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and, when configured, `NO_PROXY` variables; SOCKS build support is best-effort.
-- Validate enabled local corporate-network inputs before Docker execution and fail closed for missing or malformed bundles, unsupported URLs, or embedded proxy credentials.
+- Validate enabled local corporate-network inputs before Docker execution and fail closed for missing bundles, malformed PEM framing or Base64 payloads, unsupported URLs, or embedded proxy credentials, without adding host-side parser dependencies.
 - Document that this feature does not configure the Docker client/daemon and therefore does not control registry authentication or `FROM` image pulls.
 
 ## Capabilities

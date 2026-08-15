@@ -477,6 +477,7 @@ def _real_dispatcher(
 
         build_request = BuildRequest(
             inventory_path=str(inv_path),
+            repo_root=str(_REPO_ROOT),
             platform=str(c_args.get("platform", "linux-amd64")),
             tag=c_args.get("tag") if c_args.get("tag") is not None else None,
             overrides=overrides,
@@ -750,6 +751,7 @@ def _real_dispatcher(
 
         run_request = RunRequest(
             inventory_path=str(inv_path),
+            repo_root=str(_REPO_ROOT),
             image=image,
             selection=selection,
             pi_home_host=str(Path.home() / ".pi"),

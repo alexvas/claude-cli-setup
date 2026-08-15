@@ -641,10 +641,25 @@ class LocalCacheConfig:
 
 
 @dataclass(frozen=True)
+class LocalCorporateTrust:
+    """Machine-local corporate trust intent; never an inventory overlay."""
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
+class LocalNetworkProxy:
+    """Machine-local credential-free proxy; never an inventory overlay."""
+    url: str | None = None
+    no_proxy: str | None = None
+
+
+@dataclass(frozen=True)
 class LocalConfig:
     """Closed local companion state."""
     host_access: LocalHostAccess = LocalHostAccess()
     cache: LocalCacheConfig = LocalCacheConfig()
+    corporate_trust: LocalCorporateTrust = LocalCorporateTrust()
+    network_proxy: LocalNetworkProxy = LocalNetworkProxy()
 
 
 @dataclass(frozen=True)

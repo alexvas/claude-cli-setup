@@ -49,7 +49,7 @@ from docker.versioning.errors import (
     UnsupportedOverrideError,
     VersionConfigError,
 )
-from docker.versioning.inventory import load_inventory, load_local_config_for_inventory
+from docker.versioning.inventory import load_inventory, resolve_local_corporate_settings
 from docker.versioning.model import HostAccessPolicy, Inventory
 from docker.versioning.rendering import (
     BuildRenderInputs,
@@ -188,7 +188,12 @@ class BuildRequest:
     """Deprecated compatibility injection; builds never invoke it."""
 
     repo_root: str | None = None
-    """Repository root directory (default: auto-detected from inventory)."""
+    """Repository root for the fixed corporate trust bundle.
+
+    Mandatory whenever corporate trust is enabled.  It is never inferred
+    from the inventory path; a direct caller that enables corporate trust
+    without supplying it fails closed with a CONFIG error before Docker.
+    """
 
     # ── injectable projection boundary (faked in tests) ──────────────
     _publish_projection: Callable[..., PublishResult] | None = None
@@ -388,6 +393,24 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
     try:
         inventory = load_inventory(inv_path)
     except (VersionConfigError, OSError, ValueError, KeyError) as exc:
+        return BuildTransactionPlan(
+            exit_kind=ExitKind.CONFIG,
+            message=str(exc),
+        )
+
+    # 1b. Validate local corporate settings (proxy + enabled trust bundle)
+    # before any side effect; proxy validation raises InventoryError from
+    # the loader and an enabled invalid bundle raises from bundle validation.
+    # The repository root is mandatory for enabled trust and is never
+    # inferred from the inventory path.
+    try:
+        resolve_local_corporate_settings(
+            inv_path,
+            repository_root=(
+                Path(request.repo_root) if request.repo_root else None
+            ),
+        )
+    except InventoryError as exc:
         return BuildTransactionPlan(
             exit_kind=ExitKind.CONFIG,
             message=str(exc),

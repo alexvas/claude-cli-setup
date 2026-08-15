@@ -135,13 +135,14 @@ class TestHostAccessPlanningRed(unittest.TestCase):
         from docker.launcher import orchestrate_run
 
         scenarios = (
-            # Disabled access must not read or require malformed host state.
-            ('[runtime.host-access]\nenabled = false\n', b"[host-access]\naddress = 42\n", (), ("--add-host", "HOST_ACCESS_ADDRESS=", "HOST_PROXY_PORT=")),
+            # Disabled access no longer ignores malformed local host state:
+            # the complete companion schema fails closed before rendering.
+            ('[runtime.host-access]\nenabled = false\n', b"[host-access]\naddress = 42\n", (), ("--add-host", "HOST_ACCESS_ADDRESS=", "HOST_PROXY_PORT="), "config"),
             ('[runtime.host-access]\nenabled = true\nmode = "external-address"\nproxy-port = 1080\n',
              b'[host-access]\naddress = "192.0.2.10"\n',
-             ("host.docker.internal:192.0.2.10", "HOST_ACCESS_ADDRESS=192.0.2.10", "HOST_PROXY_PORT=1080"), ()),
+             ("host.docker.internal:192.0.2.10", "HOST_ACCESS_ADDRESS=192.0.2.10", "HOST_PROXY_PORT=1080"), (), "success"),
         )
-        for policy, local_bytes, expected, absent in scenarios:
+        for policy, local_bytes, expected, absent, exit_kind in scenarios:
             with self.subTest(policy=policy), tempfile.TemporaryDirectory() as root:
                 root_path = Path(root)
                 inventory = self._inventory(root_path, policy)
@@ -149,7 +150,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
                 companion.write_bytes(local_bytes)
                 before = companion.read_bytes()
                 result = orchestrate_run(self._request(inventory, dry_run=True, effects=[]))
-                self.assertEqual(result.exit_kind.value, "success")
+                self.assertEqual(result.exit_kind.value, exit_kind)
                 for value in expected:
                     self.assertIn(value, result.run_args)
                 for value in absent:
