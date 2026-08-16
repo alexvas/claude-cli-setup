@@ -19,10 +19,10 @@ A phase MAY depend only on the earlier phases named in its `Depends on` line. Ph
 
 - [x] 1.1 **RED:** Add failing renderer tests that specify exact `build.stages.` prefix removal, unchanged non-matching paths, `YYYY-MM-DD` publication dates, invalid/missing date fallback, long-hex abbreviation with `sha256:` preservation, absent/equal candidate fallback, and `<current> -> <candidate>` values under the `CURR -> NEXT` heading.
 - [x] 1.2 **RED:** Add failing report tests that specify the exact compact headers, deterministic row ordering/alignment, original status values, reasons excluded from rows, complete reasons under a conditional `Details:` section, and output independence from terminal width.
-- [ ] 1.3 **GREEN:** Implement the compact formatting helpers required by task 1.1 without changing serialized result data.
-- [ ] 1.4 **GREEN:** Implement the default compact report and conditional `Details:` section required by task 1.2 while preserving the existing summary and suggestions placement.
-- [ ] 1.5 **INTROSPECT:** Review the compact renderer against the update-check-reporting spec and remove duplicated formatting logic, implicit dictionary-order coupling, or unnecessary terminal assumptions found in the phase diff.
-- [ ] 1.6 **VALIDATE:** Run the focused compact-renderer tests and existing text-rendering regression tests; record a passing result with no updated expectation outside the specified text-format change.
+- [x] 1.3 **GREEN:** Implement the compact formatting helpers required by task 1.1 without changing serialized result data.
+- [x] 1.4 **GREEN:** Implement the default compact report and conditional `Details:` section required by task 1.2 while preserving the existing summary and suggestions placement.
+- [x] 1.5 **INTROSPECT:** Review the compact renderer against the update-check-reporting spec and remove duplicated formatting logic, implicit dictionary-order coupling, or unnecessary terminal assumptions found in the phase diff.
+- [x] 1.6 **VALIDATE:** Run the focused compact-renderer tests and existing text-rendering regression tests; record a passing result with no updated expectation outside the specified text-format change.
 
 ## 2. Detailed Report Mode
 

@@ -1305,39 +1305,69 @@ def _abbreviate_identifier(value: str) -> str:
     return value
 
 
-def _format_published_at(published_at: object) -> str:
-    """Render an optional UTC RFC 3339 timestamp as human-readable.
+def _parse_published_at(published_at: object) -> Optional[str]:
+    """Return the RFC 3339 date-time portion of an authoritative UTC value.
 
-    Known UTC values → ``YYYY-MM-DD HH:MM:SS GMT``.
-    Absent, non-UTC, or unparseable → ``-``.
+    Only ``YYYY-MM-DDTHH:MM:SS[.fraction](Z|+00:00)`` is authoritative.
+    Absent, non-string, non-UTC, or unparseable values return ``None``.
     """
     import re
     from datetime import datetime
 
     if not isinstance(published_at, str) or not published_at:
-        return "-"
-
-    # RFC 3339 date-time with Z or +00:00 offset
+        return None
     m = re.fullmatch(
         r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?)"
         r"(Z|(?:\+00:00))",
         published_at,
     )
     if not m:
-        return "-"
+        return None
     try:
-        dt = datetime.fromisoformat(m.group(1))
+        datetime.fromisoformat(m.group(1))
     except ValueError:
+        return None
+    return m.group(1)
+
+
+def _format_published_date(published_at: object) -> str:
+    """Compact publication value: ``YYYY-MM-DD`` or ``-``."""
+    parsed = _parse_published_at(published_at)
+    if parsed is None:
         return "-"
-    return dt.strftime("%Y-%m-%d %H:%M:%S GMT")
+    return parsed[:10]
+
+
+def _format_published_at(published_at: object) -> str:
+    """Detailed publication value: ``YYYY-MM-DD HH:MM:SS GMT`` or ``-``."""
+    from datetime import datetime
+
+    parsed = _parse_published_at(published_at)
+    if parsed is None:
+        return "-"
+    return datetime.fromisoformat(parsed).strftime("%Y-%m-%d %H:%M:%S GMT")
+
+
+def _compact_target(path: str) -> str:
+    """Shorten a target path for compact text display.
+
+    Only a leading ``build.stages.`` prefix is removed; any other path
+    is returned unchanged to avoid ambiguous general-purpose shortening.
+    """
+    prefix = "build.stages."
+    if path.startswith(prefix):
+        return path[len(prefix):]
+    return path
 
 
 def _render_check_updates_text(data: object) -> str:
-    """Render check-updates data as a human-readable update report.
+    """Render check-updates data as a compact human-readable report.
 
     Produces a deterministic summary line with applicable-outdated
-    counts, a per-dependency table with dynamic column widths, and
-    an optional review-only TOML suggestions block.
+    counts, a per-dependency table with fixed columns
+    ``TARGET | PROVIDER | CURR -> NEXT | STATUS | PUBLISHED``, an
+    optional ``Details:`` section for non-empty reasons, and an
+    optional review-only TOML suggestions block.
     """
     if not isinstance(data, dict):
         return str(data)
@@ -1346,8 +1376,9 @@ def _render_check_updates_text(data: object) -> str:
     if not isinstance(results, list):
         return str(data)
 
-    # ── normalise cells (None → "-", abbreviate, deduplicate) ────
+    # ── normalise cells (None → "-", abbreviate, combine, shorten) ──
     rows: list[dict[str, str]] = []
+    details: list[tuple[str, str]] = []
     for r in results:
         if not isinstance(r, dict):
             continue
@@ -1368,18 +1399,17 @@ def _render_check_updates_text(data: object) -> str:
         if candidate_raw != "-" and candidate_raw == current_raw:
             candidate = "-"
 
-        published = _format_published_at(r.get("published_at"))
+        target = _compact_target(_cell("path"))
+        reason = r.get("reason")
+        if isinstance(reason, str) and reason:
+            details.append((target, reason))
 
         rows.append({
-            "path": _cell("path"),
+            "target": target,
             "provider": _cell("provider"),
-            "current": current,
-            "candidate": candidate,
+            "current_next": f"{current} -> {candidate}",
             "status": _cell("status"),
-            "kind": _cell("kind"),
-            "applicable": "yes" if r.get("applicable") else "no",
-            "published": published,
-            "detail": _cell("reason"),
+            "published": _format_published_date(r.get("published_at")),
         })
 
     # ── summary (applicable-outdated count made visible) ─────────
@@ -1405,30 +1435,40 @@ def _render_check_updates_text(data: object) -> str:
                 parts.append(f"{counts[s]} {s}")
     summary = "Updates: " + ", ".join(parts) if parts else "No update targets found."
 
-    # ── table (dynamic column widths, guaranteed 2-space gaps) ──
-    col_labels = ("PATH", "PROVIDER", "CURRENT", "CANDIDATE",
-                  "STATUS", "KIND", "APPLICABLE", "PUBLISHED", "DETAIL")
+    # ── table (fixed columns, dynamic widths, 2-space gaps) ──────
+    col_keys = ("target", "provider", "current_next", "status", "published")
+    col_labels = ("TARGET", "PROVIDER", "CURR -> NEXT", "STATUS", "PUBLISHED")
 
     def _col_width(idx: int, label: str) -> int:
         w = len(label)
         for row in rows:
-            val = list(row.values())[idx]
+            val = row[col_keys[idx]]
             if len(val) > w:
                 w = len(val)
         return w
 
     widths = tuple(_col_width(i, label) for i, label in enumerate(col_labels))
-    header = "  ".join(label.ljust(widths[i]) for i, label in enumerate(col_labels))
+    header = "  ".join(
+        label.ljust(widths[i]) for i, label in enumerate(col_labels)
+    )
     sep = "-" * len(header)
     table_lines = [sep, header, sep]
 
     for row in rows:
-        vals = list(row.values())
-        line = "  ".join(vals[i].ljust(widths[i]) for i in range(len(vals)))
+        line = "  ".join(
+            row[key].ljust(widths[i]) for i, key in enumerate(col_keys)
+        )
         table_lines.append(line)
     table_lines.append(sep)
 
     out = [summary, "", "\n".join(table_lines)]
+
+    # ── details (non-empty reasons, keyed by compact target) ─────
+    if details:
+        out.append("")
+        out.append("Details:")
+        for target, reason in details:
+            out.append(f"  {target}: {reason}")
 
     # ── suggestions ──────────────────────────────────────────────
     suggest_flag = bool(data.get("suggest", False))

@@ -782,14 +782,11 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
         }
         fake = _make_fake(self.m, exit_kind="success", data=data)
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        self.assertIn("PATH", out)
+        self.assertIn("TARGET", out)
         self.assertIn("PROVIDER", out)
-        self.assertIn("CURRENT", out)
-        self.assertIn("CANDIDATE", out)
+        self.assertIn("CURR -> NEXT", out)
         self.assertIn("STATUS", out)
-        self.assertIn("KIND", out)
-        self.assertIn("APPLICABLE", out)
-        self.assertIn("DETAIL", out)
+        self.assertIn("PUBLISHED", out)
 
     def test_table_rows_contain_values(self) -> None:
         data = {
@@ -804,11 +801,8 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
         self.assertIn("pkg", out)
         self.assertIn("pypi", out)
-        self.assertIn("1.2", out)
-        self.assertIn("1.3", out)
+        self.assertIn("1.2 -> 1.3", out)
         self.assertIn("outdated", out)
-        self.assertIn("version", out)
-        self.assertIn("yes", out)
         self.assertIn("available", out)
 
     def test_applicable_no_in_output(self) -> None:
@@ -822,7 +816,9 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
         }
         fake = _make_fake(self.m, exit_kind="success", data=data)
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        self.assertIn("no", out)
+        # Applicability is reported via the summary, not a table column.
+        self.assertIn("1 outdated (0 applicable)", out)
+        self.assertNotIn("APPLICABLE", out)
 
     def test_null_candidate_renders_dash(self) -> None:
         data = {
@@ -850,9 +846,9 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
         }
         fake = _make_fake(self.m, exit_kind="success", data=data)
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        # Detail column ends a row; dash for null reason appears
+        # A null reason contributes no Details: entry.
         self.assertIn("outdated", out)
-        self.assertIn("yes", out)
+        self.assertNotIn("Details:", out)
 
     # ── summary: applicable count visible ─────────────────────
 
@@ -950,6 +946,7 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
 
     def test_long_path_does_not_overflow_into_provider(self) -> None:
         long_path = "build.stages.toolchain.rust.version.artifact.linux-amd64"
+        compact_path = "toolchain.rust.version.artifact.linux-amd64"
         data = {
             "results": [
                 {"path": long_path, "provider": "gh",
@@ -960,11 +957,12 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
         }
         fake = _make_fake(self.m, exit_kind="success", data=data)
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        # The long path and provider must both appear, separated
-        self.assertIn(long_path, out)
+        # The compact target and provider must both appear, separated
+        self.assertIn(compact_path, out)
+        self.assertNotIn("build.stages.", out)
         self.assertIn("gh", out)
-        # Provider appears after the path, not glued to it
-        self.assertIn(long_path + "  ", out)
+        # Provider appears after the target, not glued to it
+        self.assertIn(compact_path + "  ", out)
 
     def test_columns_growth_expands_separator(self) -> None:
         data_small = {
@@ -1262,8 +1260,8 @@ class TestCheckUpdatesCompactIdentifiers(unittest.TestCase):
         self.assertIn("sha256:abcdef999-filesystem", out)
 
     def test_prefix_collision_does_not_hide_candidate(self) -> None:
-        """Distinct hashes sharing a five-char prefix must show
-        different abbreviated values — not collapse to '-'."""
+        """Distinct hashes sharing a five-char prefix are not collapsed
+        to '-' when they differ after the abbreviated prefix."""
         data = {
             "results": [
                 {"path": "x", "provider": "gh",
@@ -1277,10 +1275,10 @@ class TestCheckUpdatesCompactIdentifiers(unittest.TestCase):
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        # Both abbreviated forms appear (they differ after 5 chars)
-        self.assertIn("4acc9...", out)
-        # CANDIDATE column shows "4acc9..." (not "-") before STATUS
-        self.assertRegex(out, r"4acc9\.\.\.\s+outdated\s+digest-refresh\s+yes")
+        # The CURR -> NEXT cell keeps the candidate portion ("4acc9..."),
+        # it is not collapsed to "-".
+        self.assertIn("4acc9... -> 4acc9...", out)
+        self.assertNotIn("4acc9... -> -", out)
 
     def test_non_hex_unchanged(self) -> None:
         data = {
@@ -1308,11 +1306,10 @@ class TestCheckUpdatesCompactIdentifiers(unittest.TestCase):
         }
         fake = _make_fake(self.m, exit_kind="success", data=data)
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        self.assertIn("1.2.3", out)   # CURRENT column still present
-        # Candidate column shows "-" because candidate == current
-        self.assertIn("  -  ", out)
-        # Row: path  provider  current  candidate  status  kind  applicable  published  detail
-        self.assertRegex(out, r"x\s+gh\s+1\.2\.3\s+-\s+current")
+        # The CURR -> NEXT cell shows "<current> -> -" when the
+        # candidate equals current.
+        self.assertIn("1.2.3 -> -", out)
+        self.assertRegex(out, r"x\s+gh\s+1\.2\.3\s+->\s+-\s+current")
 
     # ── full values in JSON ─────────────────────────────────────
 
