@@ -1339,13 +1339,21 @@ class TestCheckUpdatesCompactIdentifiers(unittest.TestCase):
 
 
 class TestCheckUpdatesPublishedAt(unittest.TestCase):
-    """Publication times rendered as GMT, unknown as dash, full values in JSON."""
+    """Publication dates in compact text, unknown as dash, full values in JSON."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.m = _load_mod()
 
-    def test_known_published_at_rendered_as_gmt(self) -> None:
+    def _published_cell(self, out: str, target: str) -> str:
+        """Return the trailing PUBLISHED cell value for *target*'s row."""
+        lines = out.splitlines()
+        header_line = next(line for line in lines if "PUBLISHED" in line)
+        row_line = next(line for line in lines if target in line)
+        start = header_line.index("PUBLISHED")
+        return row_line[start:].rstrip()
+
+    def test_known_published_at_rendered_as_date(self) -> None:
         data = {
             "results": [
                 {"path": "x", "provider": "gh", "current": "1.0",
@@ -1357,7 +1365,9 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        self.assertIn("2025-03-15 10:30:00 GMT", out)
+        self.assertEqual("2025-03-15", self._published_cell(out, "x"))
+        self.assertNotIn("10:30:00", out)
+        self.assertNotIn("GMT", out)
 
     def test_null_published_at_renders_dash(self) -> None:
         data = {
@@ -1371,8 +1381,8 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        # PUBLISHED column contains "-" and the word "GMT" does not appear for null
-        self.assertIn("PUBLISHED", out)
+        self.assertEqual("-", self._published_cell(out, "x"))
+        self.assertNotIn("GMT", out)
 
     def test_malformed_published_at_renders_dash(self) -> None:
         data = {
@@ -1387,6 +1397,7 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
                           message="1 outdated")
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
         self.assertNotIn("not-a-timestamp", out)
+        self.assertEqual("-", self._published_cell(out, "x"))
 
     def test_timezone_less_published_at_renders_dash(self) -> None:
         """Timezone-less timestamps are not UTC — rendered as '-'."""
@@ -1402,6 +1413,7 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
                           message="1 outdated")
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
         self.assertNotIn("2025-01-01", out)
+        self.assertEqual("-", self._published_cell(out, "x"))
 
     def test_non_utc_offset_published_at_renders_dash(self) -> None:
         """Non-UTC offsets (e.g. +05:00) are rejected — rendered as '-'."""
@@ -1418,6 +1430,7 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
         self.assertNotIn("2025-01-01", out)
         self.assertNotIn("+05:00", out)
+        self.assertEqual("-", self._published_cell(out, "x"))
 
     def test_minus_00_00_renders_dash(self) -> None:
         """-00:00 is unknown local offset — rendered as '-'."""
@@ -1434,6 +1447,7 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
         self.assertNotIn("2025-01-01", out)
         self.assertNotIn("-00:00", out)
+        self.assertEqual("-", self._published_cell(out, "x"))
 
     def test_over_six_fraction_digits_renders_dash(self) -> None:
         """>6 fractional digits exceed resolution — rendered as '-'."""
@@ -1450,6 +1464,7 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
         self.assertNotIn("2025-01-01", out)
         self.assertNotIn("1234567", out)
+        self.assertEqual("-", self._published_cell(out, "x"))
 
     def test_plus_00_00_accepted_and_normalised_in_text(self) -> None:
         """+00:00 offset is valid UTC RFC 3339 — normalised to Z in text."""
@@ -1465,7 +1480,9 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
         _, out, _ = _run(self.m, ["check-updates"], dispatcher=fake)
-        self.assertIn("2025-06-01 12:30:00 GMT", out)
+        self.assertEqual("2025-06-01", self._published_cell(out, "x"))
+        self.assertNotIn("12:30:00", out)
+        self.assertNotIn("GMT", out)
 
     def test_fractional_seconds_preserved_in_json(self) -> None:
         """Fractional seconds like .000 and .123 are preserved in JSON."""
@@ -1588,6 +1605,333 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
         # Table abbreviates hex; TOML fragment below retains full value
         self.assertIn('revision = "fedcba0987654321fedcba0987654321fedcba09"', out)
         self.assertIn('fedcb...', out)  # abbreviated in table
+
+
+class TestCheckUpdatesCompactRenderer(unittest.TestCase):
+    """Compact cell formatting: target, date, identifier, value transitions."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _render(self, data: object) -> str:
+        return self.m._render_check_updates_text(data)
+
+    def _published_cell(self, out: str, target: str) -> str:
+        lines = out.splitlines()
+        header_line = next(line for line in lines if "PUBLISHED" in line)
+        row_line = next(line for line in lines if target in line)
+        start = header_line.index("PUBLISHED")
+        return row_line[start:].rstrip()
+
+    def test_build_stages_prefix_removed(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00Z"},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("toolchain.ty", out)
+        self.assertNotIn("build.stages.", out)
+
+    def test_non_matching_path_unchanged(self) -> None:
+        data = {
+            "results": [
+                {"path": "runtime.pi-extensions.foo", "provider": "gh",
+                 "current": "1.0.0", "candidate": "2.0.0",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None,
+                 "published_at": None},
+            ],
+        }
+        out = self._render(data)
+        # A path without the leading build.stages. prefix is kept intact.
+        self.assertIn("runtime.pi-extensions.foo", out)
+
+    def test_publication_date_rendered_as_date_only(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00Z"},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("2025-03-15", out)
+        # Compact publication values are calendar dates, not GMT timestamps.
+        self.assertNotIn("10:30:00", out)
+        self.assertNotIn("GMT", out)
+
+    def test_invalid_publication_date_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "pkg", "provider": "pypi", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": "not-a-timestamp"},
+            ],
+        }
+        out = self._render(data)
+        self.assertNotIn("not-a-timestamp", out)
+        self.assertEqual("-", self._published_cell(out, "pkg"))
+
+    def test_missing_publication_date_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "pkg", "provider": "pypi", "current": "1.0",
+                 "candidate": "2.0", "status": "outdated",
+                 "kind": "version", "applicable": True, "reason": None,
+                 "published_at": None},
+            ],
+        }
+        out = self._render(data)
+        self.assertEqual("-", self._published_cell(out, "pkg"))
+
+    def test_identifier_abbreviation_in_combined_cell(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "abc123def4567890abcdef0123456789abcdef01",
+                 "candidate": "fedcba0987654321fedcba0987654321fedcba09",
+                 "status": "outdated", "kind": "revision",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("abc12... -> fedcb...", out)
+
+    def test_sha256_identifier_abbreviation_in_combined_cell(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "sha256:deadbeefcafebabe0123456789abcdef01",
+                 "candidate": "sha256:abcdef0123456789abcdef0123456789ab",
+                 "status": "outdated", "kind": "digest-refresh",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("sha256:deadb... -> sha256:abcde...", out)
+        self.assertNotIn("deadbeefcafebabe", out)
+        self.assertNotIn("abcdef0123456789abcdef", out)
+
+    def test_equal_candidate_suppressed(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "gh",
+                 "current": "1.2.3", "candidate": "1.2.3",
+                 "status": "current", "kind": "version",
+                 "applicable": False, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("1.2.3 -> -", out)
+
+    def test_absent_candidate_renders_dash(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm",
+                 "current": "1.0.0", "candidate": None,
+                 "status": "unavailable", "kind": "version",
+                 "applicable": False, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("1.0.0 -> -", out)
+
+    def test_current_to_next_transition(self) -> None:
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm",
+                 "current": "1.0.0", "candidate": "2.0.0",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self.assertIn("1.0.0 -> 2.0.0", out)
+
+
+class TestCheckUpdatesCompactReport(unittest.TestCase):
+    """Default report structure: headers, alignment, status, reasons, width."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _render(self, data: object) -> str:
+        return self.m._render_check_updates_text(data)
+
+    def _assert_compact(self, out: str) -> None:
+        self.assertIn("TARGET", out)
+        self.assertIn("CURR -> NEXT", out)
+        self.assertNotIn("PATH", out)
+        self.assertNotIn("CANDIDATE", out)
+        self.assertNotIn("APPLICABLE", out)
+        self.assertNotIn("DETAIL", out)
+
+    def test_exact_compact_headers(self) -> None:
+        out = self._render({"results": []})
+        header_line = next(
+            line for line in out.splitlines()
+            if "TARGET" in line or "PATH" in line
+        )
+        self.assertEqual(
+            "TARGET  PROVIDER  CURR -> NEXT  STATUS  PUBLISHED",
+            header_line,
+        )
+
+    def test_deterministic_row_ordering(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None},
+                {"path": "runtime.pi-extensions.foo", "provider": "gh",
+                 "current": "1.0.0", "candidate": "2.0.0",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        self.assertLess(out.index("toolchain.ty"),
+                        out.index("runtime.pi-extensions.foo"))
+
+    def test_column_alignment_is_deterministic(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00Z"},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        lines = out.splitlines()
+        header_line = next(line for line in lines if "TARGET" in line)
+        row_line = next(line for line in lines if "toolchain.ty" in line)
+        self.assertEqual(header_line.index("TARGET"),
+                         row_line.index("toolchain.ty"))
+        self.assertEqual(header_line.index("PROVIDER"),
+                         row_line.index("pypi"))
+        self.assertEqual(header_line.index("CURR -> NEXT"),
+                         row_line.index("0.0.61 -> 0.0.62"))
+        self.assertEqual(header_line.index("STATUS"),
+                         row_line.index("outdated"))
+        self.assertEqual(header_line.index("PUBLISHED"),
+                         row_line.index("2025-03-15"))
+        self.assertEqual(len(header_line), len(row_line))
+
+    def test_original_status_value_preserved(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": None,
+                 "status": "unavailable", "kind": "version",
+                 "applicable": False, "reason": "provider down"},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        # The status cell uses the original serialized status value.
+        self.assertIn("unavailable", out)
+
+    def test_reason_excluded_from_row(self) -> None:
+        reason = "connection timed out after 30s"
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": None,
+                 "status": "unavailable", "kind": "version",
+                 "applicable": False, "reason": reason},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        row_line = next(line for line in out.splitlines()
+                        if "toolchain.ty" in line)
+        self.assertNotIn(reason, row_line)
+
+    def test_complete_reason_in_details_section(self) -> None:
+        reason = "connection timed out after 30s: connection refused"
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": None,
+                 "status": "unavailable", "kind": "version",
+                 "applicable": False, "reason": reason},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        self.assertIn("Details:", out)
+        self.assertIn(reason, out)
+        self.assertGreater(out.index(reason), out.index("Details:"))
+        details = out[out.index("Details:"):]
+        self.assertIn("toolchain.ty", details)
+        self.assertLess(details.index("toolchain.ty"), details.index(reason))
+        self.assertNotIn("build.stages.toolchain.ty", details)
+
+    def test_details_section_omitted_without_reasons(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        self.assertNotIn("Details:", out)
+
+    def test_empty_string_reason_omits_details(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": ""},
+            ],
+        }
+        out = self._render(data)
+        self._assert_compact(out)
+        self.assertNotIn("Details:", out)
+
+    def test_output_independent_of_terminal_width(self) -> None:
+        data = {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None,
+                 "published_at": "2025-03-15T10:30:00Z"},
+            ],
+        }
+        _, out_plain, _ = _run(
+            self.m, ["check-updates"],
+            dispatcher=_make_fake(self.m, exit_kind="success", data=data),
+            stdout_isatty=False,
+        )
+        _, out_tty, _ = _run(
+            self.m, ["check-updates"],
+            dispatcher=_make_fake(self.m, exit_kind="success", data=data),
+            stdout_isatty=True,
+        )
+        body_plain = re.sub(r"\x1b\[[0-9;]*m", "", out_plain)
+        body_tty = re.sub(r"\x1b\[[0-9;]*m", "", out_tty)
+        self.assertEqual(body_plain, body_tty)
+        self.assertIn("CURR -> NEXT", body_plain)
 
 
 class TestCheckUpdatesPolicyExits(unittest.TestCase):
