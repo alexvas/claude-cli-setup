@@ -22,9 +22,9 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 - [x] 1.2 **RED:** Add failing pure-resolution tests producing an explicit XDG candidate only for a non-empty absolute `XDG_CACHE_HOME`, otherwise a `~/.cache` fallback candidate, without filesystem I/O.
 - [x] 1.3 **RED:** Add failing resolver tests rejecting an empty, relative, or `~`-prefixed local `[cache].dir`, and rejecting an absolute local root equal to `XDG_CACHE_HOME`, `$HOME`, `/`, an ancestor of `XDG_CACHE_HOME`, and lexical equivalents of each.
 - [x] 1.4 **RED:** Add resolver tests accepting an absolute dedicated child of `XDG_CACHE_HOME` and rejecting lexical equivalents of unsafe roots without reading or mutating the filesystem.
-- [ ] 1.5 **GREEN:** Create `cache_storage.py` and implement pure cache-root resolution, lexical unsafe-root validation, and named child derivation without filesystem inspection or mutation.
-- [ ] 1.6 **INTROSPECT:** Review the module dependency boundary, normalization, home/XDG derivation, and ancestor comparison for cycles, path-string shortcuts, implicit CWD dependence, or unsafe resolution.
-- [ ] 1.7 **VALIDATE:** Run focused module-boundary, root-resolution, and local-config tests; confirm path resolution performs no filesystem I/O and rejected roots perform no cache, network, or Docker effects.
+- [x] 1.5 **GREEN:** Create `cache_storage.py` and implement pure cache-root resolution, lexical unsafe-root validation, and named child derivation without filesystem inspection or mutation.
+- [x] 1.6 **INTROSPECT:** Review the module dependency boundary, normalization, home/XDG derivation, and ancestor comparison for cycles, path-string shortcuts, implicit CWD dependence, or unsafe resolution.
+- [x] 1.7 **VALIDATE:** Run focused module-boundary, root-resolution, and local-config tests; confirm path resolution performs no filesystem I/O and rejected roots perform no cache, network, or Docker effects.
 
 ## 2. Private Cache-Path Security
 

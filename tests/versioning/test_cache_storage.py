@@ -371,6 +371,25 @@ class TestLocalRootResolution(_PureResolutionTestCase):
             with self.subTest(value=value):
                 self._assert_rejected(value)
 
+    def test_double_leading_slash_roots_rejected(self) -> None:
+        # ``os.path.normpath`` preserves ``//`` while Linux resolves it to
+        # ``/``; canonicalization must collapse it before unsafe-root checks
+        # so ``//`` cannot bypass the filesystem-root, XDG, or ancestor guard.
+        cases = {
+            "//": "dedicated",
+            "//xdg/cache": "XDG_CACHE_HOME",
+            "//xdg/cache/": "XDG_CACHE_HOME",
+            "//xdg/./cache": "XDG_CACHE_HOME",
+            "//xdg/cache/sub/..": "XDG_CACHE_HOME",
+            "//xdg": "dedicated",
+            "//xdg/..": "dedicated",
+            "//home/testuser": "dedicated",
+            "//home/testuser/.": "dedicated",
+        }
+        for value, pattern in cases.items():
+            with self.subTest(value=value):
+                self._assert_rejected(value, pattern=pattern)
+
 
 class TestCacheChildDerivation(_PureResolutionTestCase):
     """Phase 1 — derive named children from a resolved dedicated root."""
