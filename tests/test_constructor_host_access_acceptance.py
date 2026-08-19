@@ -736,27 +736,7 @@ class TestCustomInventoryWithCache(unittest.TestCase):
                 "repository-root cache dir must not leak into local config",
             )
 
-            # 3. The cache-directory consumer (resolve_cache_settings)
-            #    combines reviewed TTL with the local directory
-            from docker.versioning.transports import resolve_cache_settings
-
-            settings = resolve_cache_settings(reviewed.cache, local_cfg)
-            self.assertEqual(
-                Path(custom_cache_dir), settings.directory,
-                "resolve_cache_settings must use the local companion"
-                " cache dir, not repo",
-            )
-            self.assertNotEqual(
-                Path(repo_cache_dir), settings.directory,
-                "repository-root cache dir must not reach"
-                " resolve_cache_settings",
-            )
-            self.assertEqual(
-                custom_ttl, settings.ttl,
-                "resolve_cache_settings must use reviewed TTL",
-            )
-
-            # 4. Run resolves the custom companion, not the repo one
+            # 3. Run resolves the custom companion, not the repo one
             from docker.launcher import orchestrate_run
             from docker.launcher import ProjectSelection
 

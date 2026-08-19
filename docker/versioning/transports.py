@@ -9,8 +9,8 @@ this API — domain services never depend on CLI parsing modules.
 from __future__ import annotations
 
 import os as _os
-from dataclasses import dataclass, field
 from pathlib import Path
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Mapping
 
@@ -18,13 +18,6 @@ from .immutable import deep_freeze
 
 if TYPE_CHECKING:
     from .providers.base import HttpTransport, GitRefTransport
-
-
-@dataclass(frozen=True)
-class CacheSettings:
-    """Resolved cache settings from reviewed TTL and local directory."""
-    directory: Path
-    ttl: int | None
 
 
 @dataclass(frozen=True)
@@ -53,22 +46,10 @@ class TransportConfig:
         object.__setattr__(self, "tokens", deep_freeze(self.tokens))
 
 
-def resolve_cache_settings(inventory_cache: object | None, local_config: object | None) -> CacheSettings:
-    """Combine portable reviewed TTL with machine-local cache directory."""
-    from .cache import _default_cache_dir
-    from .model import CacheConfig, LocalConfig
-    ttl = inventory_cache.ttl if isinstance(inventory_cache, CacheConfig) else None
-    directory = None
-    if isinstance(local_config, LocalConfig):
-        directory = local_config.cache.dir
-    return CacheSettings(Path(directory) if directory is not None else _default_cache_dir(), ttl)
-
-
 def build_transports(
     *,
     no_cache: bool = False,
     cache_ttl: int | None = None,
-    cache_dir: str | None = None,
     inventory_cache: object | None = None,
     local_config: object | None = None,
     suggest_mode: bool = False,
@@ -83,9 +64,6 @@ def build_transports(
     cache_ttl:
         Override the cache TTL (seconds).  If *inventory_cache* also
         declares a TTL, this takes precedence.
-    cache_dir:
-        Override the disk-cache directory.  If *inventory_cache* also
-        declares a directory, this takes precedence.
     inventory_cache:
         Optional ``CacheConfig`` from the validated inventory
         (``[cache]`` section of ``docker-constructor.toml``).
@@ -146,21 +124,23 @@ def build_transports(
             except FileNotFoundError:
                 raise RuntimeError("git executable not found")
 
-    from .cache import CachingHttpTransport, DiskCache, _default_cache_dir
-    from .model import CacheConfig
+    from .cache import CachingHttpTransport, DiskCache
+    from .cache_storage import (
+        prepare_default_root,
+        prepare_local_root,
+        versioning_child,
+    )
+    from .model import CacheConfig, LocalConfig
 
     http = _ProductionHttp()
 
     if not no_cache:
         # Let explicit CLI args take precedence over inventory cache
         resolved_cache_ttl = cache_ttl
-        resolved_cache_dir = cache_dir
 
         if inventory_cache is not None and isinstance(inventory_cache, CacheConfig):
             if resolved_cache_ttl is None and inventory_cache.ttl is not None:
                 resolved_cache_ttl = inventory_cache.ttl
-        if resolved_cache_dir is None:
-            resolved_cache_dir = resolve_cache_settings(inventory_cache, local_config).directory
 
         if suggest_mode:
             disk = None
@@ -168,14 +148,27 @@ def build_transports(
                 http, ttl=resolved_cache_ttl, disk_cache=disk,
             )
         else:
-            if resolved_cache_dir is not None:
-                disk = DiskCache(Path(resolved_cache_dir), ttl=resolved_cache_ttl)
-            else:
-                disk = (
-                    DiskCache(_default_cache_dir(), ttl=resolved_cache_ttl)
-                    if resolved_cache_ttl is not None
-                    else None
+            # Resolve and prepare the shared dedicated constructor root
+            # before constructing DiskCache. cache_storage owns root
+            # validation/hardening; DiskCache owns JSON format and TTL.
+            local_dir = (
+                local_config.cache.dir
+                if isinstance(local_config, LocalConfig)
+                else None
+            )
+            xdg = _os.environ.get("XDG_CACHE_HOME")
+            home = Path(_os.path.expanduser("~"))
+
+            if local_dir is not None:
+                prepared_root = prepare_local_root(
+                    local_dir, xdg_cache_home=xdg, home=home,
                 )
+            else:
+                prepared_root = prepare_default_root(xdg, home=home)
+
+            disk = DiskCache(
+                versioning_child(prepared_root), ttl=resolved_cache_ttl,
+            )
             http = CachingHttpTransport(
                 http, ttl=resolved_cache_ttl, disk_cache=disk,
             )

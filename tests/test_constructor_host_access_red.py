@@ -266,20 +266,23 @@ class TestCacheAndProjectionRed(_InventoryTest):
         with self.assertRaisesRegex(InventoryError, r"cache\.dir.*local"):
             load_inventory(self.inventory(cache='dir = "/reviewed"'))
 
+        from docker.versioning.cache_storage import resolve_local_root
         from docker.versioning.inventory import load_local_config
-        from docker.versioning.transports import resolve_cache_settings
 
         reviewed = load_inventory(self.inventory(cache="ttl = 123"))
-        local_path = self.local("[cache]\ndir = \"/local-cache\"\n")
-        settings = resolve_cache_settings(reviewed.cache, load_local_config(local_path))
-        self.assertEqual(settings.directory, Path("/local-cache"))
-        self.assertEqual(settings.ttl, 123)
+        local_cfg = load_local_config(self.local("[cache]\ndir = \"/local-cache\"\n"))
 
-        default = resolve_cache_settings(reviewed.cache, None)
-        self.assertEqual(
-            default.directory,
-            Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pi-cli/versioning",
+        # Directory is machine-local; TTL stays reviewed policy.
+        self.assertEqual(local_cfg.cache.dir, "/local-cache")
+        self.assertEqual(reviewed.cache.ttl, 123)
+
+        # The local directory is the dedicated constructor root.
+        root = resolve_local_root(
+            local_cfg.cache.dir,
+            xdg_cache_home=os.environ.get("XDG_CACHE_HOME"),
+            home=Path.home(),
         )
+        self.assertEqual(root, Path("/local-cache"))
 
     def test_host_and_local_state_never_enter_dependency_projections(self) -> None:
         from docker.versioning.inventory import load_local_config_for_inventory

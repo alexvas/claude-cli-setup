@@ -1091,8 +1091,6 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
             self.assertNotIn("gateway-diagnosis", effects)
 
     def test_corporate_sections_do_not_change_cache_resolution(self) -> None:
-        from docker.versioning.transports import resolve_cache_settings
-
         local = load_local_config(
             self.local(
                 '[cache]\ndir = "/tmp/cache"\n'
@@ -1100,8 +1098,9 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                 '[network.proxy]\nurl = "http://proxy.corp.example:3128"\n'
             )
         )
-        settings = resolve_cache_settings(None, local)
-        self.assertEqual(settings.directory, Path("/tmp/cache"))
+        # Corporate-trust and proxy sections must not alter the cache
+        # directory resolved from the local companion.
+        self.assertEqual(local.cache.dir, "/tmp/cache")
 
 
 if __name__ == "__main__":

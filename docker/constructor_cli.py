@@ -2100,12 +2100,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Cache TTL in seconds",
     )
     p_upd.add_argument(
-        "--cache-dir",
-        default=None,
-        metavar="PATH",
-        help="Disk cache directory",
-    )
-    p_upd.add_argument(
         "--no-cache",
         action="store_true",
         default=False,

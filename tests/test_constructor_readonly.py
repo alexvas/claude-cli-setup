@@ -625,12 +625,14 @@ class TestCheckUpdatesControls(unittest.TestCase):
         self.assertEqual(300,
                          fake.calls[0][1].command_args["cache_ttl"])
 
-    def test_cache_dir_passed(self) -> None:
-        fake = _make_recording_fake(self.m)
-        _run(self.m, ["check-updates", "--cache-dir", "/tmp/pi-cache"],
-             dispatcher=fake)
-        self.assertEqual("/tmp/pi-cache",
-                         fake.calls[0][1].command_args["cache_dir"])
+    def test_cache_dir_is_rejected(self) -> None:
+        # Retired HTTP-only cache location must fail in argparse before
+        # dispatch, so no cache path can be selected or migrated.
+        with self.assertRaises(SystemExit) as caught:
+            self.m._build_parser().parse_args(
+                ["check-updates", "--cache-dir", "/tmp/pi-cache"]
+            )
+        self.assertEqual(2, caught.exception.code)
 
     def test_no_cache_passed(self) -> None:
         fake = _make_recording_fake(self.m)

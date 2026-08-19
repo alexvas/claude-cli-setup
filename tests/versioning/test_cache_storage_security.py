@@ -215,6 +215,7 @@ class TestHttpEntryMode(_CacheSecurityTestCase):
         xdg = self._xdg_dir()
         root = self._prepare_default(str(xdg))
         versioning = root / "versioning"
+        self.assertEqual(_mode(versioning), 0o700)
 
         cache = DiskCache(versioning, ttl=3600)
         response = types.SimpleNamespace(
@@ -225,6 +226,24 @@ class TestHttpEntryMode(_CacheSecurityTestCase):
         entries = [p for p in versioning.iterdir() if p.is_file()]
         self.assertEqual(len(entries), 1)
         self.assertEqual(_mode(entries[0]), 0o600)
+
+    def test_xdg_mode_unchanged_after_http_write(self) -> None:
+        """An existing XDG_CACHE_HOME keeps its mode through an HTTP write."""
+        from docker.versioning.cache import DiskCache
+
+        xdg = self._xdg_dir(mode=0o755)
+        root = self._prepare_default(str(xdg))
+        versioning = root / "versioning"
+
+        cache = DiskCache(versioning, ttl=3600)
+        cache.set(
+            "GET",
+            "https://example.test/entry",
+            types.SimpleNamespace(status=200, headers={}, body=b"payload"),
+        )
+
+        self.assertEqual(_mode(xdg), 0o755)
+        self.assertEqual(_mode(versioning), 0o700)
 
 
 class _FakeStreamingTransport:
@@ -337,6 +356,64 @@ class TestXdgEligibility(_CacheSecurityTestCase):
 
         self.assertFalse((self.home / ".cache").exists())
 
+    def test_xdg_component_symlink_rejected_without_following(self) -> None:
+        """A symlinked component beneath the XDG parent is rejected and
+        never followed; no constructor root appears under the target."""
+        real = self.base / "real-xdg"
+        real.mkdir()
+        link = self.base / "xdg-link"
+        link.symlink_to(real, target_is_directory=True)
+        xdg = link / "cache"
+
+        with self.assertRaises(_cache_storage().CacheStorageError):
+            self._prepare_default(str(xdg))
+
+        self.assertFalse((real / "cache").exists())
+        self.assertFalse((real / "docker-constructor").exists())
+        self.assertFalse((self.home / ".cache").exists())
+
+    def test_xdg_itself_symlink_rejected_without_following(self) -> None:
+        """An XDG path that is itself a symlink is rejected; the target is
+        left untouched and no fallback cache is created."""
+        real = self.base / "real-cache"
+        real.mkdir()
+        parent = self.base / "xdg"
+        parent.mkdir()
+        xdg = parent / "cache"
+        xdg.symlink_to(real, target_is_directory=True)
+
+        with self.assertRaises(_cache_storage().CacheStorageError):
+            self._prepare_default(str(xdg))
+
+        self.assertFalse((real / "docker-constructor").exists())
+        self.assertFalse((self.home / ".cache").exists())
+
+    def test_missing_xdg_component_swapped_to_symlink_rejected(self) -> None:
+        """A missing XDG component replaced by a symlink during creation is
+        caught by the no-follow reopen and never followed."""
+        parent = self.base / "xdg"
+        parent.mkdir()
+        xdg = parent / "cache"
+        real = self.base / "real-cache"
+        real.mkdir()
+
+        real_mkdir = os.mkdir
+
+        def racing_mkdir(path, *args, **kwargs):
+            result = real_mkdir(path, *args, **kwargs)
+            if os.path.basename(str(path)) == "cache":
+                dir_fd = kwargs.get("dir_fd")
+                os.rmdir(path, dir_fd=dir_fd)
+                os.symlink(str(real), path, dir_fd=dir_fd)
+            return result
+
+        with mock.patch("os.mkdir", side_effect=racing_mkdir):
+            with self.assertRaises(_cache_storage().CacheStorageError):
+                self._prepare_default(str(xdg))
+
+        self.assertFalse((real / "docker-constructor").exists())
+        self.assertFalse((self.home / ".cache").exists())
+
     def test_xdg_unwritable_rejected_without_fallback(self) -> None:
         xdg = self._xdg_dir(mode=0o000)
         try:
@@ -370,6 +447,18 @@ class TestLocalRootSecurity(_CacheSecurityTestCase):
 
         self.assertEqual(_mode(value), 0o700)
         self.assert_secured_tree(root)
+
+    def test_unsafe_local_roots_rejected_before_write(self) -> None:
+        """Roots equal to XDG_CACHE_HOME, ``/``, ``$HOME``, or an XDG
+        ancestor are rejected during preparation — before any cache write."""
+        xdg = self._xdg_dir()
+        for bad in (str(xdg), "/", str(self.home), str(self.base)):
+            with self.subTest(value=bad):
+                with self.assertRaises(_cache_storage().CacheStorageError):
+                    self._prepare_local(bad, xdg=str(xdg))
+
+        self.assertFalse((self.home / ".cache").exists())
+        self.assertFalse((xdg / "docker-constructor").exists())
 
     def test_symlinked_selected_root_rejected(self) -> None:
         target = self.base / "real"
@@ -505,3 +594,31 @@ class TestLocalRootSecurity(_CacheSecurityTestCase):
         )
         self.assertEqual(_mode(locks), 0o755)
         self.assertFalse((value / "runtime-artifacts" / "tmp").exists())
+
+
+class TestEntryNameValidation(_CacheSecurityTestCase):
+    """Entry helpers reject non-basename names and never escape the
+    prepared directory."""
+
+    def _prepared_versioning(self) -> Path:
+        xdg = self._xdg_dir()
+        root = self._prepare_default(str(xdg))
+        return root / "versioning"
+
+    def test_unsafe_names_rejected_without_escape(self) -> None:
+        cache_storage = _cache_storage()
+        versioning = self._prepared_versioning()
+
+        for bad in ("../outside", "nested/file", "/absolute", ".", "..", "", "a/"):
+            with self.subTest(name=bad):
+                with self.assertRaises(cache_storage.CacheStorageError):
+                    cache_storage.open_private_entry(versioning, bad)
+                with self.assertRaises(cache_storage.CacheStorageError):
+                    cache_storage.publish_private_entry(versioning, bad, "final")
+                with self.assertRaises(cache_storage.CacheStorageError):
+                    cache_storage.publish_private_entry(versioning, "tmp", bad)
+
+        # Nothing may have been created inside or escaped outside.
+        self.assertEqual(sorted(p.name for p in versioning.iterdir()), [])
+        self.assertFalse((versioning.parent / "outside").exists())
+        self.assertFalse((self.base / "outside").exists())

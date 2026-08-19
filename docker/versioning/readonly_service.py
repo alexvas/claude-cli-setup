@@ -210,7 +210,6 @@ def _handle_check_updates(
     config = build_transports(
         no_cache=bool(command_args.get("no_cache", False)),
         cache_ttl=command_args.get("cache_ttl"),
-        cache_dir=command_args.get("cache_dir"),
         inventory_cache=inventory_cache,
         local_config=local_config,
         suggest_mode=bool(command_args.get("suggest", False)),

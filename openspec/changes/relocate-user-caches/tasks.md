@@ -35,10 +35,10 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 - [x] 2.1 **RED:** Add failing filesystem tests requiring `0700` on a new dedicated root and its constructor-created `versioning`, `runtime-artifacts`, blob, lock, and temporary directories, including creation of a missing explicit absolute `XDG_CACHE_HOME` with `0700`.
 - [x] 2.2 **RED:** Add failing tests requiring `0600` HTTP entries, `0444` verified blobs, no mode change to an existing `XDG_CACHE_HOME`, and no permission changes to any other resolved-root parent.
 - [x] 2.3 **RED:** Add failing filesystem tests accepting an existing writable XDG directory, rejecting an explicit absolute XDG non-directory or unwritable path without fallback, and using the `~/.cache` fallback only for empty or non-absolute XDG; require existing invoking-user-owned roots to be secured to `0700`, and symlinked selected roots, non-directory entries, foreign-owned directories, and unsecurable paths to be rejected through no-follow inspection before mutation.
-- [ ] 2.4 **GREEN:** Implement the filesystem-validation and hardening layer in `cache_storage.py` using no-follow and descriptor-relative operations where filesystem access occurs; do not chmod any parent directory.
-- [ ] 2.5 **GREEN:** Make HTTP cache writes consume `cache_storage.py` and fail with the same path-specific recovery behavior when their resolved root or entry cannot be secured.
-- [ ] 2.6 **INTROSPECT:** Review ownership checks, descriptor lifetime, mode enforcement, exception mapping, and parent boundaries; remove duplicated root and directory-security logic from HTTP and artifact caches.
-- [ ] 2.7 **VALIDATE:** Run focused HTTP-cache, artifact-cache, permission, symlink, and containment tests; confirm failures happen before network, artifact publication, and Docker execution.
+- [x] 2.4 **GREEN:** Implement the filesystem-validation and hardening layer in `cache_storage.py` using no-follow and descriptor-relative operations where filesystem access occurs; do not chmod any parent directory.
+- [x] 2.5 **GREEN:** Make HTTP cache writes consume `cache_storage.py` and fail with the same path-specific recovery behavior when their resolved root or entry cannot be secured.
+- [x] 2.6 **INTROSPECT:** Review HTTP-cache ownership checks, descriptor lifetime, entry-mode enforcement, exception mapping, and parent boundaries; remove duplicated HTTP root and directory-security logic. Artifact-cache directory-security removal and handoff are deferred to Phase 5.
+- [x] 2.7 **VALIDATE:** Run focused HTTP-cache, artifact-cache, permission, symlink, and containment tests; confirm failures happen before network, artifact publication, and Docker execution.
 
 ## 3. HTTP Cache Namespace and `--cache-dir` Removal
 
@@ -46,13 +46,13 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 
 **Deliverables:** update discovery reads and writes only the resolved `versioning/` child; the retired HTTP-only `check-updates --cache-dir` option is rejected as unsupported without fallback; no automatic interaction with the legacy `${XDG_CACHE_HOME:-~/.cache}/pi-cli/versioning` cache.
 
-- [ ] 3.1 **RED:** Add failing transport/cache tests requiring HTTP paths under `${XDG_CACHE_HOME}/docker-constructor/versioning` for valid XDG, under `~/.cache/docker-constructor/versioning` for empty/non-absolute XDG, and under an absolute local override's `versioning/` child.
-- [ ] 3.2 **RED:** Add failing CLI parser/help tests requiring `check-updates --cache-dir` to be rejected as unsupported without guidance or fallback.
-- [ ] 3.3 **RED:** Add failing migration tests proving the legacy `pi-cli/versioning` cache is neither read, copied, chmodded, mutated, nor deleted when the new root is used.
-- [ ] 3.4 **GREEN:** Remove `--cache-dir` from the parser, command request/argument propagation, help, and command-specific documentation; reject its use without selecting a cache path, fallback, or migrating cache data.
-- [ ] 3.5 **GREEN:** Remove the HTTP directory override from `readonly_service.py` and `build_transports()`; route HTTP cache construction through `cache_storage.py`'s resolved `versioning/` child without changing reviewed TTL, request, or token-isolation behavior.
-- [ ] 3.6 **INTROSPECT:** Review every HTTP cache construction path, including suggest/no-cache modes, so no legacy default, HTTP-only location override, or unnamespaced local directory remains reachable.
-- [ ] 3.7 **VALIDATE:** Run parser/help, update-discovery cache, local-config, JSON, suggest, no-cache, and reviewed-TTL regression suites; confirm a first request populates only the new HTTP cache.
+- [x] 3.1 **RED:** Add failing transport/cache tests requiring HTTP paths under `${XDG_CACHE_HOME}/docker-constructor/versioning` for valid XDG, under `~/.cache/docker-constructor/versioning` for empty/non-absolute XDG, and under an absolute local override's `versioning/` child.
+- [x] 3.2 **RED:** Add failing CLI parser/help tests requiring `check-updates --cache-dir` to be rejected as unsupported without guidance or fallback.
+- [x] 3.3 **RED:** Add failing migration tests proving the legacy `pi-cli/versioning` cache is neither read, copied, chmodded, mutated, nor deleted when the new root is used.
+- [x] 3.4 **GREEN:** Remove `--cache-dir` from the parser, command request/argument propagation, help, and command-specific documentation; reject its use without selecting a cache path, fallback, or migrating cache data.
+- [x] 3.5 **GREEN:** Remove the HTTP directory override from `readonly_service.py` and `build_transports()`; route HTTP cache construction through `cache_storage.py`'s resolved `versioning/` child without changing reviewed TTL, request, or token-isolation behavior.
+- [x] 3.6 **INTROSPECT:** Review every HTTP cache construction path, including suggest/no-cache modes, so no legacy default, HTTP-only location override, or unnamespaced local directory remains reachable.
+- [x] 3.7 **VALIDATE:** Run parser/help, update-discovery cache, local-config, JSON, suggest, no-cache, and reviewed-TTL regression suites; confirm a first request populates only the new HTTP cache.
 
 ## 4. Reviewed TTL CLI Contract
 
@@ -77,9 +77,9 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 - [ ] 5.1 **RED:** Add failing launcher and artifact-cache tests requiring default and local-override runtime paths to resolve under `runtime-artifacts/blobs`.
 - [ ] 5.2 **RED:** Add failing dry-run and rendering tests requiring planned artifact mount sources to use the new root while retaining existing container targets.
 - [ ] 5.3 **RED:** Add failing migration tests proving `.docker-generated/runtime-artifacts` is neither read, copied, chmodded, mutated, nor deleted.
-- [ ] 5.4 **GREEN:** Route materialization, read-only inspection, locks, temporary state, dry-run planning, and mount planning through `cache_storage.py`'s resolved runtime-artifact cache child.
-- [ ] 5.5 **GREEN:** Update cache-root containment and symlink checks for the resolved root without weakening atomic publication, verification, content identity, or individual read-only mounts.
-- [ ] 5.6 **INTROSPECT:** Trace every runtime-artifact path producer and consumer; remove checkout-local cache assumptions while preserving `.docker-generated/runtime/` projections and evidence output.
+- [ ] 5.4 **GREEN:** Route materialization, read-only inspection, locks, temporary state, dry-run planning, and mount planning through `cache_storage.py`'s resolved runtime-artifact cache child; remove artifact-cache root and directory-security logic superseded by cache-storage preparation.
+- [ ] 5.5 **GREEN:** Update cache-root containment and symlink checks for the resolved root without weakening atomic publication, verification, content identity, or individual read-only mounts; retain artifact-cache ownership of content addressing, locks, verification, and atomic publication.
+- [ ] 5.6 **INTROSPECT:** Trace every runtime-artifact path producer and consumer; remove checkout-local cache assumptions and duplicated artifact directory-security logic while preserving `.docker-generated/runtime/` projections and evidence output.
 - [ ] 5.7 **VALIDATE:** Run artifact materialization, launcher, dry-run, rendering, runtime projection, and container-mount regression suites; confirm Docker starts only after new-root blobs are verified.
 
 ## 6. Cross-Consumer Integration

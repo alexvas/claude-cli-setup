@@ -5,9 +5,10 @@ in-memory (fast) and an on-disk (persistent across invocations) store.
 
 **Security**: Authenticated responses are keyed by a non-secret hash of
 the ``Authorization`` header so that cached private data is never served
-to unauthenticated callers (or callers with a different token).  Disk
-files and directories are created with owner-only permissions (``0600`` /
-``0700``).
+to unauthenticated callers (or callers with a different token).  Cache
+files are written with owner-only permissions (``0600``); directory
+creation and ``0700`` hardening are owned by ``cache_storage.py`` at
+construction time, not by :class:`DiskCache`.
 """
 from __future__ import annotations
 
@@ -15,7 +16,6 @@ import base64
 import hashlib
 import json
 import os
-import stat
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,20 +24,6 @@ if TYPE_CHECKING:
     from .providers.base import HttpResponse
 
 from .providers.base import HttpTransport
-
-
-# ---------------------------------------------------------------------------
-# Default cache directory
-# ---------------------------------------------------------------------------
-
-_CACHE_DIR = (
-    os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
-)
-_DEFAULT_CACHE_SUBDIR = "pi-cli/versioning"
-
-
-def _default_cache_dir() -> Path:
-    return Path(_CACHE_DIR) / _DEFAULT_CACHE_SUBDIR
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +100,10 @@ class DiskCache:
     """On-disk cache for HTTP responses keyed by ``(method, url, scope)``.
 
     Each entry is stored as a JSON file whose name is the SHA-256 of the
-    cache key.  Files and directories are created with owner-only
-    permissions (``0600`` / ``0700``).
+    cache key.  Files are written with owner-only permissions (``0600``).
+    The cache directory itself is prepared and hardened to ``0700`` by
+    ``cache_storage.py`` before the cache is constructed; ``DiskCache``
+    never chmods its directory.
 
     Entries older than *ttl* seconds are treated as expired.
     """
@@ -161,10 +149,16 @@ class DiskCache:
     def set(
         self, method: str, url: str, response: object, *, scope: str = "public", representation: str = "wildcard",
     ) -> None:
-        """Persist *response* to disk.  No-op when the cache is read-only."""
+        """Persist *response* to disk.  No-op when the cache is read-only.
+
+        The cache directory must already be prepared by ``cache_storage``;
+        entries are published no-follow with ``0600`` and the directory is
+        never recreated or chmod-ed here.
+        """
         if self._read_only:
             return
-        _ensure_dir(self._dir)
+        from .cache_storage import open_private_entry, publish_private_entry
+
         path = self._path_for(method, url, scope, representation)
         body = getattr(response, "body", b"")
         if not isinstance(body, bytes):
@@ -179,11 +173,11 @@ class DiskCache:
             "headers": stored_headers,
             "body_b64": base64.b64encode(body).decode("ascii"),
         }
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
+        tmp_name = path.name + ".tmp"
+        fd = open_private_entry(self._dir, tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
-        os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)  # 0600
-        os.replace(tmp, path)  # atomic on POSIX
+        publish_private_entry(self._dir, tmp_name, path.name)
 
     def clear(self) -> None:
         """Remove all cached entries from disk."""
@@ -201,39 +195,6 @@ class DiskCache:
         key = f"{method}:{url}:{scope}:{representation}"
         digest = hashlib.sha256(key.encode()).hexdigest()
         return self._dir / digest
-
-
-def _ensure_dir(directory: Path) -> None:
-    """Create *directory* with ``0700`` permissions, including missing
-    parents.  Pre-existing parent directories are **never** chmod-ed —
-    only the target directory itself and any missing ancestors are
-    clamped to ``0700``."""
-    # Collect ancestors that do not exist yet so we only fix
-    # permissions on directories we actually created.  The target
-    # directory itself is always clamped regardless of whether it
-    # pre-existed.
-    missing: list[Path] = []
-    p = directory
-    while not p.exists():
-        missing.append(p)
-        p = p.parent
-
-    directory.mkdir(parents=True, exist_ok=True)
-    for created in missing:
-        try:
-            created.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-        except (OSError, PermissionError):
-            pass
-
-    # Always clamp the target directory even if it existed before we
-    # were called — it may have been created with permissive
-    # permissions by another process or an earlier bug.
-    if not missing or missing[-1] != directory:
-        # Directory existed before; clamp it.
-        try:
-            directory.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-        except (OSError, PermissionError):
-            pass
 
 
 def _cached_response(status: int, headers: dict[str, str], body: bytes) -> object:
@@ -269,12 +230,12 @@ class CachingHttpTransport(HttpTransport):
 
     Parameters:
         delegate: The underlying transport to call on cache miss.
-        ttl: Cache TTL in seconds.  ``None`` means entries never expire.
+        ttl: Cache TTL in seconds.  ``None`` means entries never expire
+            for an explicitly supplied disk cache.
         disk_cache: Optional :class:`DiskCache` for persistence.
-            When omitted **and** *ttl* is a non-``None`` int, a disk
-            cache is created automatically at the default location.
-            Pass ``None`` explicitly to disable disk persistence
-            regardless of *ttl* (useful in tests).
+            Persistent disk caching requires an explicitly supplied,
+            already-prepared ``DiskCache``.  When omitted, caching is
+            memory-only (equivalent to passing ``None``).
     """
 
     __slots__ = ("_delegate", "_ttl", "_mem", "_disk")
@@ -290,10 +251,7 @@ class CachingHttpTransport(HttpTransport):
         # Key: (method, url, scope, representation)
         self._mem: dict[tuple[str, str, str, str], tuple[float, object]] = {}
         if disk_cache is _DISK_CACHE_UNSET:
-            if ttl is not None:
-                disk_cache = DiskCache(_default_cache_dir(), ttl=ttl)
-            else:
-                disk_cache = None
+            disk_cache = None
         self._disk = disk_cache
 
     # ------------------------------------------------------------------

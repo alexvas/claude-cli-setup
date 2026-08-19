@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from docker.versioning.cache import CachingHttpTransport, DiskCache, _cached_response
+from docker.versioning.cache_storage import CacheStorageError
 from tests.versioning.support.fake_http import FakeHttpTransport
 
 
@@ -66,6 +68,41 @@ class TestCachingHttpTransport(unittest.TestCase):
         self.assertEqual(self.delegate.call_counts.get(("GET", "https://example.com/a")), 1)
         self.assertEqual(self.delegate.call_counts.get(("GET", "https://example.com/b")), 1)
         self.assertEqual(cache.size, 2)
+
+    def test_omitted_disk_cache_is_memory_only(self):
+        """A finite TTL with an omitted ``disk_cache`` must not create or
+        read any legacy or constructor cache directory — caching is
+        memory-only until an explicit prepared disk cache is supplied."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_xdg = os.environ.get("XDG_CACHE_HOME")
+            old_home = os.environ.get("HOME")
+            xdg = Path(tmp) / "xdg" / "cache"
+            home = Path(tmp) / "home"
+            os.environ["XDG_CACHE_HOME"] = str(xdg)
+            os.environ["HOME"] = str(home)
+            try:
+                home.mkdir(parents=True, exist_ok=True)
+                cache = CachingHttpTransport(self.delegate, ttl=3600)
+                resp = cache.request("GET", "https://example.com/a")
+                self.assertEqual(resp.body, b"hello")
+                # Second request is served from memory, not disk.
+                cache.request("GET", "https://example.com/a")
+                self.assertEqual(
+                    self.delegate.call_counts.get(("GET", "https://example.com/a")),
+                    1,
+                )
+                self.assertFalse((xdg / "pi-cli" / "versioning").exists())
+                self.assertFalse((xdg / "docker-constructor").exists())
+                self.assertFalse((home / ".cache").exists())
+            finally:
+                if old_xdg is None:
+                    os.environ.pop("XDG_CACHE_HOME", None)
+                else:
+                    os.environ["XDG_CACHE_HOME"] = old_xdg
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
 
     # ------------------------------------------------------------------
     # TTL behaviour
@@ -559,6 +596,7 @@ class TestFilePermissions(unittest.TestCase):
                          f"expected 0600, got {oct(mode)}")
 
     def test_cache_dir_is_owner_only(self):
+        """A prepared 0700 directory is preserved (never widened) by writes."""
         dc = DiskCache(self._dir)
         resp = _cached_response(200, {}, b"x")
         dc.set("GET", "https://example.com/x", resp)
@@ -579,12 +617,14 @@ class TestFilePermissions(unittest.TestCase):
         self.assertEqual(mode, 0o600)
 
     def test_pre_existing_parent_not_chmodded(self):
-        """When the cache directory is created inside a pre-existing
-        parent, the parent's permissions must not be altered."""
+        """DiskCache must not chmod a pre-existing parent; the supplied
+        cache directory itself must already be prepared 0700."""
         parent = self._dir / "pre-existing"
         parent.mkdir()
         parent.chmod(0o755)  # deliberately world-readable
-        cache_dir = parent / "sub" / "cache"  # two levels deep
+        cache_dir = parent / "cache"
+        cache_dir.mkdir()
+        os.chmod(cache_dir, 0o700)  # prepared owner-only
         dc = DiskCache(cache_dir)
         dc.set("GET", "https://example.com/x", _cached_response(200, {}, b"x"))
         # Parent must still have its original 0755 permissions
@@ -595,25 +635,34 @@ class TestFilePermissions(unittest.TestCase):
         gp_mode = self._dir.stat().st_mode & 0o777
         self.assertEqual(gp_mode, 0o700,
                          f"expected 0700, got {oct(gp_mode)}")
-        # Only the newly-created subdirectories get 0700
-        sub_mode = (parent / "sub").stat().st_mode & 0o777
-        self.assertEqual(sub_mode, 0o700)
-        cache_mode = cache_dir.stat().st_mode & 0o777
-        self.assertEqual(cache_mode, 0o700)
 
-    def test_existing_target_dir_clamped_to_0700(self):
-        """When the cache directory already exists with permissive
-        permissions (e.g. 0777), _ensure_dir must clamp it to 0700.
-        Parent directories are left untouched."""
-        # Create the target directory with bad permissions
+    def test_unprepared_0755_directory_fails_closed(self):
+        """DiskCache must reject an owned-but-non-private (0755)
+        caller-supplied directory without chmodding it — the write fails
+        closed through the cache-storage helper, no entry is created, and
+        the 0755 mode is preserved."""
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._dir.chmod(0o777)
-        # DiskCache construction calls _ensure_dir which must fix it
+        self._dir.chmod(0o755)
         dc = DiskCache(self._dir)
-        dc.set("GET", "https://example.com/x", _cached_response(200, {}, b"x"))
+        with self.assertRaises(CacheStorageError):
+            dc.set("GET", "https://example.com/x", _cached_response(200, {}, b"x"))
+        # No entry file was created.
+        path = dc._path_for("GET", "https://example.com/x")
+        self.assertFalse(path.exists())
+        # The directory was rejected, not chmodded.
         mode = self._dir.stat().st_mode & 0o777
-        self.assertEqual(mode, 0o700,
-                         f"expected 0700, got {oct(mode)}")
+        self.assertEqual(mode, 0o755,
+                         f"expected 0755 unchanged, got {oct(mode)}")
+
+    def test_missing_directory_fails_closed(self):
+        """DiskCache must not recreate an absent prepared directory as
+        0755; it fails closed with the cache-storage error instead."""
+        missing = self._dir / "not-prepared" / "versioning"
+        dc = DiskCache(missing)
+        with self.assertRaises(CacheStorageError):
+            dc.set("GET", "https://example.com/x", _cached_response(200, {}, b"x"))
+        self.assertFalse(missing.exists())
+        self.assertFalse((self._dir / "not-prepared").exists())
 
 
 class TestCorruptEntryResilience(unittest.TestCase):
