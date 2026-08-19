@@ -97,7 +97,11 @@ ttl = 3600
 dir = "/home/dev/.cache/pi-docker"
 ```
 
-`cache.ttl` 属于 `docker-constructor.toml`；`cache.dir` 只能位于 `docker-constructor.local.toml`。未设置 `[cache].dir` 时，仍使用现有的 XDG 默认缓存目录。使用本地缓存目录不需要启用主机访问。
+`cache.ttl` 属于已审核的 `docker-constructor.toml`；`cache.dir` 只能位于 `docker-constructor.local.toml`。`--no-cache` 只为一次更新检查绕过 HTTP 缓存，不会修改已审核的 TTL。
+
+未设置 `[cache].dir` 时，若 `XDG_CACHE_HOME` 非空且为绝对路径，持久化根目录为 `${XDG_CACHE_HOME}/docker-constructor`；否则为 `~/.cache/docker-constructor`。HTTP 响应位于 `versioning/`；已验证工件、锁和临时状态分别位于 `runtime-artifacts/blobs`、`runtime-artifacts/locks` 和 `runtime-artifacts/tmp`。运行时投影和 evidence 保持在 checkout 的 `.docker-generated/` 下。
+
+本地 `cache.dir` 必须是绝对、专用且由构造器拥有的根目录。不得选择 `/`、主目录、`XDG_CACHE_HOME` 本身或其祖先。构造器目录使用 `0700`，HTTP entries 使用 `0600`，已验证 blobs 使用 `0444`；不会 chmod 包括 `XDG_CACHE_HOME` 在内的现有父目录。若所选路径由其他用户拥有或无法加固，请恢复其所有权或删除陈旧的构造器子树后重试。使用本地缓存目录不需要启用主机访问。
 
 ### 企业信任与应用代理
 

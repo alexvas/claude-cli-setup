@@ -631,15 +631,15 @@ class TestCustomInventoryWithCache(unittest.TestCase):
 
     def test_custom_inventory_with_local_cache(self):
         custom_ttl = 7200
-        custom_cache_dir = "/custom/cache/dir"
         custom_address = "10.0.2.2"
 
         # Conflicting repository-root values — must be ignored
         repo_address = "192.168.99.1"
-        repo_cache_dir = "/repo/cache/should-be-ignored"
 
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
+            custom_cache_dir = str(root_path / "custom-constructor-cache")
+            repo_cache_dir = str(root_path / "ignored-repo-cache")
             repo_root = root_path / "repo"
             repo_root.mkdir()
             stem = "custom-inv"

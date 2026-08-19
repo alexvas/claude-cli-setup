@@ -21,12 +21,13 @@ single evidence root:
   04-corrupt-cache-recovery/   optional corrupt-cache recovery launch
 
 Options:
+  --inventory PATH       Reviewed inventory (default: docker-constructor.toml)
   --output-dir DIR       Evidence root (default: .docker-generated/evidence/runtime-artifacts-acceptance-<UTC timestamp>)
   --main-project DIR     Main project to mount (default: repository root)
   --image IMAGE          Runtime image/tag (default: pi-cli-pi:latest)
   --duration SECONDS     Per-launch inspection window (default: 30)
   --build                Build the image once before launch scenarios
-  --fresh-cache          Remove generated runtime cache before scenario 01
+  --fresh-cache          Remove the active constructor runtime cache before scenario 01
   --offline-wrapper PATH Executable that applies offline policy, then execs its arguments
   --override KEY=VALUE   Reviewed runtime override for scenario 03 (repeatable)
   --recover-corrupt-cache
@@ -34,8 +35,10 @@ Options:
   -h, --help             Show this help text
 
 The coordinator never changes the reviewed inventory. --recover-corrupt-cache
-only changes .docker-generated/runtime-artifacts and requires network access
-for the following recovery launch. The offline wrapper must be an executable
+only changes one selected blob under the active `runtime-artifacts/blobs`
+cache and requires network access for the following recovery launch. The
+checkout-local `.docker-generated/` tree remains evidence/projection output.
+The offline wrapper must be an executable
 that receives the evidence collector command and its arguments, for example:
 
   #!/usr/bin/env bash
@@ -46,6 +49,7 @@ EOF
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 collector="$repo_root/docker/collect-runtime-artifact-evidence.sh"
+inventory="$repo_root/docker-constructor.toml"
 output_dir=""
 main_project="$repo_root"
 image="pi-cli-pi:latest"
@@ -58,6 +62,10 @@ recover_corrupt_cache=false
 
 while (($#)); do
   case "$1" in
+    --inventory)
+      inventory=${2:?--inventory requires a path}
+      shift 2
+      ;;
     --output-dir)
       output_dir=${2:?--output-dir requires a directory}
       shift 2
@@ -120,6 +128,7 @@ if [[ -n "$offline_wrapper" && ! -x "$offline_wrapper" ]]; then
 fi
 
 main_project="$(cd "$main_project" && pwd)"
+inventory="$(cd "$(dirname "$inventory")" && pwd)/$(basename "$inventory")"
 if [[ -z "$output_dir" ]]; then
   output_dir="$repo_root/.docker-generated/evidence/runtime-artifacts-acceptance-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
@@ -136,6 +145,7 @@ run_scenario() {
   local scenario_dir="$output_dir/$name"
   local -a args=(
     "$collector"
+    --inventory "$inventory"
     --output-dir "$scenario_dir"
     --main-project "$main_project"
     --image "$image"
@@ -149,19 +159,39 @@ run_scenario() {
 if [[ "$collect_build" == true ]]; then
   build_dir="$output_dir/00-build"
   mkdir -p "$build_dir"
-  printf '%q ' "$repo_root/docker/docker-constructor.py" build --tag "$image" --yes --progress plain \
+  printf '%q ' "$repo_root/docker/docker-constructor.py" --inventory "$inventory" build --tag "$image" --yes --progress plain \
     >"$build_dir/constructor-command.txt"
   printf '\n' >>"$build_dir/constructor-command.txt"
   (
     cd "$repo_root"
-    "$repo_root/docker/docker-constructor.py" build \
+    "$repo_root/docker/docker-constructor.py" --inventory "$inventory" build \
       --tag "$image" --yes --progress plain
   ) >"$build_dir/constructor.stdout.log" 2>"$build_dir/constructor.stderr.log"
   printf '%s\n' "$?" >"$build_dir/constructor-exit-status.txt"
 fi
 
+cache_root="$(
+  cd "$repo_root"
+  CONSTRUCTOR_INVENTORY="$inventory" python3 - <<'PY'
+import os
+from pathlib import Path
+from docker.versioning.cache_storage import (
+    prepare_default_root, prepare_local_root, runtime_artifacts_child,
+)
+from docker.versioning.inventory import load_local_config_for_inventory
+inventory = Path(os.environ["CONSTRUCTOR_INVENTORY"])
+local = load_local_config_for_inventory(inventory)
+configured = local.cache.dir if local is not None else None
+root = (
+    prepare_local_root(configured, xdg_cache_home=os.environ.get("XDG_CACHE_HOME"), home=Path(os.path.expanduser("~")))
+    if configured is not None
+    else prepare_default_root(os.environ.get("XDG_CACHE_HOME"), home=Path(os.path.expanduser("~")))
+)
+print(runtime_artifacts_child(root))
+PY
+)"
+
 if [[ "$fresh_cache" == true ]]; then
-  cache_root="$repo_root/.docker-generated/runtime-artifacts"
   rm -rf "$cache_root"
   printf '%s\n' "$cache_root" >"$output_dir/cache-cleared-before-scenario-01.txt"
 else
@@ -174,6 +204,7 @@ run_scenario 01-first-materialization
 if [[ -n "$offline_wrapper" ]]; then
   printf 'Collecting 02-cache-hit-offline\n'
   "$offline_wrapper" "$collector" \
+    --inventory "$inventory" \
     --output-dir "$output_dir/02-cache-hit-offline" \
     --main-project "$main_project" \
     --image "$image" \

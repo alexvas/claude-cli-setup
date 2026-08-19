@@ -11,7 +11,9 @@
 # Fields you may add manually:
 #
 #   [cache]
-#   dir = "/path/to/cache"  # overrides the XDG default cache location
+#   # Absolute, dedicated constructor-owned root. Do not use /, $HOME,
+#   # XDG_CACHE_HOME itself, or an ancestor of XDG_CACHE_HOME.
+#   dir = "/path/to/docker-constructor-custom"
 #
 #   [corporate-trust]
 #   enabled = true  # requires .docker-local/corporate-ca-bundle.crt
@@ -24,4 +26,4 @@
 address = "10.0.2.2"
 
 [cache]
-dir = "/home/dev/.cache/pi-docker"
+dir = "/home/dev/.cache/docker-constructor-custom"

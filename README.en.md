@@ -97,7 +97,11 @@ ttl = 3600
 dir = "/home/dev/.cache/pi-docker"
 ```
 
-`cache.ttl` belongs in `docker-constructor.toml`; `cache.dir` belongs only in `docker-constructor.local.toml`. When `[cache].dir` is absent, the existing XDG cache-directory default is used. Host access does not need to be enabled to use a local cache directory.
+`cache.ttl` belongs in reviewed `docker-constructor.toml`; `cache.dir` belongs only in `docker-constructor.local.toml`. `--no-cache` bypasses HTTP caching for one update check without changing the reviewed TTL.
+
+Without `[cache].dir`, the persistent root is `${XDG_CACHE_HOME}/docker-constructor` when `XDG_CACHE_HOME` is non-empty and absolute, otherwise `~/.cache/docker-constructor`. HTTP responses use `versioning/`; verified artifacts, locks, and temporary state use `runtime-artifacts/blobs`, `runtime-artifacts/locks`, and `runtime-artifacts/tmp`. Runtime projections and evidence remain checkout-local under `.docker-generated/`.
+
+A local `cache.dir` must be an absolute, dedicated constructor-owned root. Do not select `/`, the home directory, `XDG_CACHE_HOME` itself, or its ancestor. Constructor-owned directories are secured to `0700`, HTTP entries to `0600`, and verified blobs to `0444`; existing parent directories, including `XDG_CACHE_HOME`, are not chmodded. If a selected cache path has foreign ownership or cannot be secured, restore its ownership or remove that stale constructor subtree and retry. Host access does not need to be enabled.
 
 ### Corporate trust and application proxy
 

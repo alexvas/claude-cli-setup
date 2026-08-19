@@ -120,19 +120,24 @@ def versioning_child(root: Path) -> Path:
     return Path(root) / _VERSIONING_CHILD
 
 
+def runtime_artifacts_child(root: Path) -> Path:
+    """Return the runtime-artifact state subtree beneath *root*."""
+    return Path(root) / "runtime-artifacts"
+
+
 def runtime_artifacts_blobs_child(root: Path) -> Path:
     """Return the verified artifact blob child beneath *root*."""
-    return Path(root) / _RUNTIME_ARTIFACTS_BLOBS_CHILD
+    return runtime_artifacts_child(root) / "blobs"
 
 
 def runtime_artifacts_tmp_child(root: Path) -> Path:
     """Return the runtime-artifact temporary-state child beneath *root*."""
-    return Path(root) / "runtime-artifacts" / "tmp"
+    return runtime_artifacts_child(root) / "tmp"
 
 
 def runtime_artifacts_locks_child(root: Path) -> Path:
     """Return the runtime-artifact lock child beneath *root*."""
-    return Path(root) / "runtime-artifacts" / "locks"
+    return runtime_artifacts_child(root) / "locks"
 
 
 # ---------------------------------------------------------------------------
