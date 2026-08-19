@@ -88,11 +88,11 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 
 **Deliverables:** one consistent resolved root across all persistent cache consumers; reviewed TTL is the sole TTL policy; legacy caches remain untouched; generated output remains checkout-local.
 
-- [ ] 6.1 **RED:** Add failing end-to-end tests covering a default XDG root and a dedicated local root across both HTTP update discovery and runtime artifact materialization.
-- [ ] 6.2 **RED:** Add failing integration tests proving both legacy caches remain unchanged while runtime projections and evidence remain under `.docker-generated/`.
-- [ ] 6.3 **GREEN:** Resolve only integration defects exposed by tasks 6.1–6.2 without changing reviewed cache TTL, artifact identity, network policy, container mount targets, or local-companion ownership.
-- [ ] 6.4 **INTROSPECT:** Trace each cache path and TTL source from configuration through `cache_storage.py`, consumer, security hardening, and cleanup; remove conflicting root constants, duplicated directory hardening, or TTL/cache-location documentation in code.
-- [ ] 6.5 **VALIDATE:** Run focused cross-consumer, launch, update, projection, reviewed-TTL, and local-config suites; confirm no test requires a checkout-local persistent cache or CLI TTL override.
+- [x] 6.1 **RED:** Add failing end-to-end tests covering a default XDG root and a dedicated local root across both HTTP update discovery and runtime artifact materialization.
+- [x] 6.2 **RED:** Add failing integration tests proving both legacy caches remain unchanged while runtime projections and evidence remain under `.docker-generated/`.
+- [x] 6.3 **GREEN:** Resolve only integration defects exposed by tasks 6.1–6.2 without changing reviewed cache TTL, artifact identity, network policy, container mount targets, or local-companion ownership.
+- [x] 6.4 **INTROSPECT:** Trace each cache path and TTL source from configuration through `cache_storage.py`, consumer, security hardening, and cleanup; remove conflicting root constants, duplicated directory hardening, or TTL/cache-location documentation in code.
+- [x] 6.5 **VALIDATE:** Run focused cross-consumer, launch, update, projection, reviewed-TTL, and local-config suites; confirm no test requires a checkout-local persistent cache or CLI TTL override.
 
 ## 7. Documentation and Release Validation
 

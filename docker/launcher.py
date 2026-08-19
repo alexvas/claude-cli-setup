@@ -826,8 +826,15 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         # uses atomic hard-link promotion with no-clobber
         # semantics.
         def _real_factory(projection: object, *, parent_dir: str) -> object:
+            # Keep generated projections checkout-local even when persistent
+            # cache roots are redirected.  Supply a unique non-existent path
+            # so create_runtime_projection retains atomic no-clobber publish.
+            import uuid
+            from docker.versioning.effective import Filesystem
             return create_runtime_projection(
                 projection,  # type: ignore[arg-type]
+                host_path=os.path.join(parent_dir, f"runtime-{uuid.uuid4().hex}.toml"),
+                _fs=Filesystem(repo_runtime_dir=parent_dir),
             )
 
         factory = _real_factory

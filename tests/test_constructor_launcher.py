@@ -1288,10 +1288,7 @@ class TestRunTransaction(unittest.TestCase):
         result = self._run(req)
         self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
         self.assertIsNotNone(result.projection_path)
-        expected_prefix = os.path.realpath(
-            os.path.join(os.path.dirname(__file__), "..",
-                         ".docker-generated", "runtime"),
-        )
+        expected_prefix = os.path.realpath(self._proj_parent)
         self.assertTrue(
             os.path.realpath(
                 result.projection_path  # type: ignore[arg-type]
