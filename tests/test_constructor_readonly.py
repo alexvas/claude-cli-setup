@@ -600,11 +600,48 @@ class TestCheckUpdatesFilters(unittest.TestCase):
 
 
 class TestCheckUpdatesControls(unittest.TestCase):
-    """``check-updates`` preserves ``--suggest``, prerelease, cache controls."""
+    """``check-updates`` preserves supported discovery controls."""
+
+    def test_help_omits_retired_cache_ttl(self) -> None:
+        # Render the command-specific help directly and assert the retired
+        # option is absent.
+        out = io.StringIO()
+        with redirect_stdout(out):
+            try:
+                self.m._build_parser().parse_args(["check-updates", "--help"])
+            except SystemExit as exc:
+                self.assertEqual(0, exc.code)
+        self.assertNotIn("--cache-ttl", out.getvalue())
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.m = _load_mod()
+
+    def test_reviewed_ttl_modes_preserve_suggest_json_and_policy_flags(self) -> None:
+        for argv in (
+            ["check-updates", "--suggest"],
+            ["--output", "json", "check-updates"],
+            ["check-updates", "--fail-on-outdated"],
+        ):
+            with self.subTest(argv=argv):
+                fake = _make_recording_fake(self.m)
+                _run(self.m, argv, dispatcher=fake)
+                args = fake.calls[0][1].command_args
+                self.assertNotIn("cache_ttl", args)
+                self.assertFalse(args["no_cache"])
+
+    def test_no_cache_modes_do_not_add_a_ttl_override(self) -> None:
+        for argv in (
+            ["check-updates", "--suggest", "--no-cache"],
+            ["--output", "json", "check-updates", "--no-cache"],
+            ["check-updates", "--fail-on-outdated", "--no-cache"],
+        ):
+            with self.subTest(argv=argv):
+                fake = _make_recording_fake(self.m)
+                _run(self.m, argv, dispatcher=fake)
+                args = fake.calls[0][1].command_args
+                self.assertTrue(args["no_cache"])
+                self.assertNotIn("cache_ttl", args)
 
     def test_suggest_flag_passed(self) -> None:
         fake = _make_recording_fake(self.m)
@@ -618,12 +655,14 @@ class TestCheckUpdatesControls(unittest.TestCase):
         self.assertTrue(
             fake.calls[0][1].command_args["include_prerelease"])
 
-    def test_cache_ttl_passed(self) -> None:
-        fake = _make_recording_fake(self.m)
-        _run(self.m, ["check-updates", "--cache-ttl", "300"],
-             dispatcher=fake)
-        self.assertEqual(300,
-                         fake.calls[0][1].command_args["cache_ttl"])
+    def test_cache_ttl_is_rejected(self) -> None:
+        # Reviewed inventory policy is the sole TTL source; the retired CLI
+        # override must fail in argparse before dispatch.
+        with self.assertRaises(SystemExit) as caught:
+            self.m._build_parser().parse_args(
+                ["check-updates", "--cache-ttl", "300"]
+            )
+        self.assertEqual(2, caught.exception.code)
 
     def test_cache_dir_is_rejected(self) -> None:
         # Retired HTTP-only cache location must fail in argparse before

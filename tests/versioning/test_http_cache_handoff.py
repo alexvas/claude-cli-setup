@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 from docker.versioning.cache_storage import CacheStorageError
-from docker.versioning.model import LocalCacheConfig, LocalConfig
+from docker.versioning.model import CacheConfig, LocalCacheConfig, LocalConfig
 
 
 def _mode(path: Path) -> int:
@@ -45,7 +45,9 @@ class _HandoffTestCase(unittest.TestCase):
             else:
                 os.environ[key] = value
 
-    def _build(self, *, xdg: str, local_dir: str | None = None):
+    def _build(self, *, xdg: str, local_dir: str | None = None,
+               inventory_cache: CacheConfig | None = None,
+               no_cache: bool = False):
         from docker.versioning.transports import build_transports
 
         os.environ["XDG_CACHE_HOME"] = xdg
@@ -55,8 +57,8 @@ class _HandoffTestCase(unittest.TestCase):
             else None
         )
         return build_transports(
-            no_cache=False,
-            cache_ttl=3600,
+            no_cache=no_cache,
+            inventory_cache=inventory_cache,
             local_config=local,
         )
 
@@ -111,6 +113,23 @@ class TestTransportRootPreparation(_HandoffTestCase):
         self.assertFalse((xdg / "docker-constructor").exists())
         self.assertFalse((self.home / ".cache").exists())
 
+    def test_reviewed_ttl_is_used_with_and_without_local_companion(self) -> None:
+        xdg = self.base / "xdg" / "cache"
+        reviewed = CacheConfig(ttl=123)
+        self.assertEqual(self._build(xdg=str(xdg), inventory_cache=reviewed)
+                         .http.ttl, 123)
+        self.assertEqual(self._build(
+            xdg=str(xdg), local_dir=str(self.base / "dedicated"),
+            inventory_cache=reviewed,
+        ).http.ttl, 123)
+
+    def test_no_cache_bypasses_disk_without_changing_reviewed_ttl(self) -> None:
+        config = self._build(
+            xdg=str(self.base / "xdg"),
+            inventory_cache=CacheConfig(ttl=123), no_cache=True,
+        )
+        self.assertFalse(hasattr(config.http, "disk"))
+
     def test_no_ttl_still_constructs_persistent_disk_cache(self) -> None:
         """No reviewed TTL and no CLI TTL still produce a persistent
         ``ttl=None`` (infinite) disk cache that survives re-reads."""
@@ -125,7 +144,7 @@ class TestTransportRootPreparation(_HandoffTestCase):
         os.environ["XDG_CACHE_HOME"] = str(xdg)
 
         config = build_transports(
-            no_cache=False, cache_ttl=None, suggest_mode=False,
+            no_cache=False, suggest_mode=False,
         )
         disk = config.http.disk
         self.assertIsNotNone(disk)
@@ -162,7 +181,6 @@ class TestSuggestModeNoPreparation(_HandoffTestCase):
 
         config = build_transports(
             no_cache=False,
-            cache_ttl=3600,
             suggest_mode=True,
         )
 

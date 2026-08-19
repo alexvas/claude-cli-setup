@@ -193,7 +193,7 @@ URL прокси требует явные host и port и поддержива�
 
 - **Интерактивный просмотр:** `--only <provider-or-path>` сужает поиск, `--suggest` добавляет non-mutating TOML-предложения.
 - **Автоматизация и policy:** `--json` выдаёт машинный формат, `--strict` завершает работу при ошибке provider, `--fail-on-outdated` — при найденном обновлении.
-- **Расширенный поиск и cache:** `--include-prerelease` включает prerelease; `--cache-ttl`, `--cache-dir` и `--no-cache` управляют HTTP-кэшем поиска.
+- **Расширенный поиск и cache:** `--include-prerelease` включает prerelease; reviewed `[cache].ttl` задаёт TTL HTTP-кэша, а `--no-cache` отключает его для одного запуска.
 
 Обычные сборка, validate, запуск и установка расширений никогда не ищут обновления.
 

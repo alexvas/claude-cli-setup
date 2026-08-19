@@ -2093,13 +2093,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include non-mutating TOML suggestions in output",
     )
     p_upd.add_argument(
-        "--cache-ttl",
-        type=int,
-        default=None,
-        metavar="SECONDS",
-        help="Cache TTL in seconds",
-    )
-    p_upd.add_argument(
         "--no-cache",
         action="store_true",
         default=False,

@@ -185,7 +185,7 @@ no_proxy = "localhost,.corp.example"
 
 - **交互审核：** `--only <provider-or-path>` 缩小范围；`--suggest` 添加 non-mutating TOML 建议。
 - **自动化和策略：** `--json` 输出机器可读格式；`--strict` 在 provider 错误时失败；`--fail-on-outdated` 在存在更新时失败。
-- **高级发现/缓存：** `--include-prerelease` 包含 prerelease；`--cache-ttl`、`--cache-dir` 和 `--no-cache` 控制更新发现 HTTP 缓存。
+- **高级发现/缓存：** `--include-prerelease` 包含 prerelease；reviewed `[cache].ttl` 控制 HTTP 缓存 TTL，`--no-cache` 可单次绕过缓存。
 
 普通构建、验证、启动和扩展安装不会执行更新发现。
 

@@ -9,7 +9,7 @@
 schema = 1
 
 [cache]
-# Default TTL in seconds (can be overridden with --cache-ttl)
+# Default TTL in seconds (reviewed policy; no command-line override)
 # ttl = 3600
 #
 # The cache directory is configured in docker-constructor.local.toml,

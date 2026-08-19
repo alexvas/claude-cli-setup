@@ -60,13 +60,13 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 
 **Deliverables:** reviewed `[cache].ttl` is the only HTTP TTL source; `check-updates --cache-ttl` is rejected as unsupported; `--no-cache` remains a one-invocation cache bypass.
 
-- [ ] 4.1 **RED:** Add parser/help tests proving `check-updates --cache-ttl` is no longer accepted or advertised and is rejected before network or cache mutation.
-- [ ] 4.2 **RED:** Add compatibility tests proving reviewed `[cache].ttl` remains effective with and without a local companion, absent reviewed TTL preserves current defaults, and `--no-cache` bypasses HTTP cache reads/writes without modifying TTL.
-- [ ] 4.3 **RED:** Add update-discovery compatibility tests for reviewed TTL and `--no-cache` under suggest mode, JSON output, and policy exit handling.
-- [ ] 4.4 **GREEN:** Remove `--cache-ttl` from the parser, command request, readonly service, and transport override parameters.
-- [ ] 4.5 **GREEN:** Make HTTP transport construction obtain TTL only from reviewed `[cache].ttl` while preserving `--no-cache` and suggest-mode behavior.
-- [ ] 4.6 **INTROSPECT:** Verify no command argument, DTO field, service parameter, documentation, or test still treats TTL as a CLI override.
-- [ ] 4.7 **VALIDATE:** Run parser/help, reviewed-TTL, no-cache, update-discovery, JSON, suggest, policy-exit, and cache regression suites.
+- [x] 4.1 **RED:** Add parser/help tests proving `check-updates --cache-ttl` is no longer accepted or advertised and is rejected before network or cache mutation.
+- [x] 4.2 **RED:** Add compatibility tests proving reviewed `[cache].ttl` remains effective with and without a local companion, absent reviewed TTL preserves current defaults, and `--no-cache` bypasses HTTP cache reads/writes without modifying TTL.
+- [x] 4.3 **RED:** Add update-discovery compatibility tests for reviewed TTL and `--no-cache` under suggest mode, JSON output, and policy exit handling.
+- [x] 4.4 **GREEN:** Remove `--cache-ttl` from the parser, command request, readonly service, and transport override parameters.
+- [x] 4.5 **GREEN:** Make HTTP transport construction obtain TTL only from reviewed `[cache].ttl` while preserving `--no-cache` and suggest-mode behavior.
+- [x] 4.6 **INTROSPECT:** Verify no command argument, DTO field, service parameter, documentation, or test still treats TTL as a CLI override.
+- [x] 4.7 **VALIDATE:** Run parser/help, reviewed-TTL, no-cache, update-discovery, JSON, suggest, policy-exit, and cache regression suites.
 
 ## 5. Runtime-Artifact Cache Namespace Migration
 

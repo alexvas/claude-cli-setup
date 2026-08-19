@@ -185,7 +185,7 @@ For another managed component, locate its inventory path, run `check-updates --o
 
 - **Interactive review:** `--only <provider-or-path>` narrows discovery; `--suggest` adds non-mutating TOML candidates.
 - **Automation and policy:** `--json` emits machine-readable output; `--strict` fails on provider errors; `--fail-on-outdated` fails when an update exists.
-- **Advanced discovery/cache:** `--include-prerelease` includes prerelease results; `--cache-ttl`, `--cache-dir`, and `--no-cache` control update-discovery HTTP caching.
+- **Advanced discovery/cache:** `--include-prerelease` includes prerelease results; reviewed `[cache].ttl` controls update-discovery HTTP caching, and `--no-cache` bypasses it for one invocation.
 
 Ordinary builds, validation, launch, and extension setup never perform update discovery.
 

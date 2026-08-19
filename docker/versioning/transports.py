@@ -49,7 +49,6 @@ class TransportConfig:
 def build_transports(
     *,
     no_cache: bool = False,
-    cache_ttl: int | None = None,
     inventory_cache: object | None = None,
     local_config: object | None = None,
     suggest_mode: bool = False,
@@ -61,9 +60,6 @@ def build_transports(
     no_cache:
         When ``True``, skip the caching layer entirely — every request
         hits the network.
-    cache_ttl:
-        Override the cache TTL (seconds).  If *inventory_cache* also
-        declares a TTL, this takes precedence.
     inventory_cache:
         Optional ``CacheConfig`` from the validated inventory
         (``[cache]`` section of ``docker-constructor.toml``).
@@ -135,13 +131,12 @@ def build_transports(
     http = _ProductionHttp()
 
     if not no_cache:
-        # Let explicit CLI args take precedence over inventory cache
-        resolved_cache_ttl = cache_ttl
-
-        if inventory_cache is not None and isinstance(inventory_cache, CacheConfig):
-            if resolved_cache_ttl is None and inventory_cache.ttl is not None:
-                resolved_cache_ttl = inventory_cache.ttl
-
+        # Reviewed inventory policy is the sole TTL source.
+        resolved_cache_ttl = (
+            inventory_cache.ttl
+            if isinstance(inventory_cache, CacheConfig)
+            else None
+        )
         if suggest_mode:
             disk = None
             http = CachingHttpTransport(
