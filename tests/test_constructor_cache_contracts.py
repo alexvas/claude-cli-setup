@@ -17,7 +17,9 @@ exists yet.
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -112,6 +114,39 @@ class TestCacheKeySafety(unittest.TestCase):
 class TestCacheLayout(unittest.TestCase):
     """Cache layout is deterministic and algorithm+depth fixed."""
 
+    def test_default_runtime_path_uses_namespaced_cache_storage_root(self) -> None:
+        from docker.versioning.artifact_cache import derive_cache_path
+        from docker.versioning.cache_storage import (
+            resolve_default_root, runtime_artifacts_blobs_child,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            xdg = str(Path(tmp) / "xdg")
+            expected_root = runtime_artifacts_blobs_child(
+                resolve_default_root(xdg, home=Path(tmp) / "home")
+            )
+            path = derive_cache_path("sha512", "abcdef", root=str(expected_root))
+            self.assertTrue(path.startswith(str(expected_root) + os.sep))
+
+    def test_local_override_runtime_path_uses_blobs_child(self) -> None:
+        from docker.versioning.artifact_cache import derive_cache_path
+        from docker.versioning.cache_storage import (
+            resolve_local_root, runtime_artifacts_blobs_child,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "constructor-cache"
+            root = resolve_local_root(
+                str(local), xdg_cache_home=str(Path(tmp) / "xdg"),
+                home=Path(tmp) / "home",
+            )
+            assert root is not None
+            expected = runtime_artifacts_blobs_child(root)
+            self.assertTrue(
+                derive_cache_path("sha512", "abcdef", root=str(expected))
+                .startswith(str(local / "runtime-artifacts" / "blobs") + os.sep)
+            )
+
     def test_path_is_algorithm_then_digest(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
@@ -133,18 +168,17 @@ class TestCacheLayout(unittest.TestCase):
 
     def test_default_root_is_constructor_owned(self) -> None:
         from docker.versioning.artifact_cache import (
-            DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
             derive_cache_path,
         )
 
-        path = derive_cache_path("sha512", "d")
+        path = derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs")
         self.assertTrue(
-            path.startswith(DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT),
+            path.startswith("/tmp/runtime-artifacts/blobs"),
         )
         self.assertIn("sha512", path)
         self.assertTrue(path.endswith(".tgz"))
 
-    def test_derive_cache_path_from_integrity(self) -> None:
+    def test_derive_cache_path_from_integrity(self, root="/tmp/runtime-artifacts/blobs") -> None:
         from docker.versioning.artifact_cache import (
             derive_cache_path_from_integrity,
         )
@@ -153,7 +187,7 @@ class TestCacheLayout(unittest.TestCase):
             "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5"
             "ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="
         )
-        path, algo = derive_cache_path_from_integrity(integrity)
+        path, algo = derive_cache_path_from_integrity(integrity, root="/tmp/runtime-artifacts/blobs")
         self.assertEqual(algo, "sha512")
         self.assertIn("sha512", path)
         self.assertTrue(path.endswith(".tgz"))
@@ -183,9 +217,9 @@ class TestCacheSafety(unittest.TestCase):
 
     @staticmethod
     def _assert_rejected(
-        reason: str, host_path: str,
+        reason: str, host_path: str, *, cache_root: str | None = None,
     ) -> None:
-        """Assert ``validate_cache_blob(host_path)`` raises
+        """Assert ``validate_cache_blob(host_path, cache_root=(cache_root or ("/tmp/runtime-artifacts/blobs" if host_path == "/etc/passwd" else os.path.dirname(host_path))))`` raises
         ``ArtifactMaterializationError`` with the given *reason*.
 
         When the validator is not yet implemented this helper
@@ -196,7 +230,7 @@ class TestCacheSafety(unittest.TestCase):
         )
 
         try:
-            validate_cache_blob(host_path)
+            validate_cache_blob(host_path, cache_root=(cache_root or ("/tmp/runtime-artifacts/blobs" if host_path == "/etc/passwd" else os.path.dirname(host_path))))
         except NotImplementedError:
             import unittest as _ut
             raise _ut.TestCase.failureException(  # noqa: TRY102
@@ -220,8 +254,8 @@ class TestCacheSafety(unittest.TestCase):
             )
 
     @staticmethod
-    def _assert_accepted(host_path: str) -> None:
-        """Assert ``validate_cache_blob(host_path)`` returns
+    def _assert_accepted(host_path: str, *, cache_root: str | None = None) -> None:
+        """Assert ``validate_cache_blob(host_path, cache_root=(cache_root or ("/tmp/runtime-artifacts/blobs" if host_path == "/etc/passwd" else os.path.dirname(host_path))))`` returns
         without raising (the blob is structurally sound).
 
         Converts ``NotImplementedError`` to a clean FAIL so the
@@ -230,7 +264,7 @@ class TestCacheSafety(unittest.TestCase):
         from docker.versioning.artifact_cache import validate_cache_blob
 
         try:
-            validate_cache_blob(host_path)
+            validate_cache_blob(host_path, cache_root=(cache_root or ("/tmp/runtime-artifacts/blobs" if host_path == "/etc/passwd" else os.path.dirname(host_path))))
         except NotImplementedError:
             import unittest as _ut
             raise _ut.TestCase.failureException(
@@ -247,31 +281,26 @@ class TestCacheSafety(unittest.TestCase):
         self._assert_rejected("containment", "/etc/passwd")
 
     def test_symlink_parent_escape_rejected(self) -> None:
-        """RED — a blob whose lexical path is inside the root but
-        whose resolved path escapes through a symlinked parent
-        directory is rejected with reason ``"containment"``."""
-        import tempfile
-        from unittest import mock
+        """A blob reached through an in-root symlinked parent escapes containment."""
+        from docker.versioning.artifact_cache import (
+            ArtifactMaterializationError,
+            validate_cache_blob,
+        )
 
-        # ── arrange a blob in a directory *outside* the root ──
-        with tempfile.TemporaryDirectory() as outside_dir:
-            blob_real = os.path.join(outside_dir, "blob.tgz")
-            with open(blob_real, "wb") as fh:
-                fh.write(b"legitimate-bytes")
-            os.chmod(blob_real, 0o600)
+        with tempfile.TemporaryDirectory() as root, \
+             tempfile.TemporaryDirectory() as outside:
+            outside_blob = os.path.join(outside, "blob.tgz")
+            with open(outside_blob, "wb") as file:
+                file.write(b"outside blob")
+            os.chmod(outside_blob, 0o444)
 
-            # ── create a symlink *inside* the root that points to the
-            #    outside directory ──
-            with tempfile.TemporaryDirectory() as root:
-                link_parent = os.path.join(root, "link_parent")
-                os.symlink(outside_dir, link_parent)
-                blob_via_link = os.path.join(link_parent, "blob.tgz")
+            link_parent = os.path.join(root, "linked-parent")
+            os.symlink(outside, link_parent)
+            blob_via_link = os.path.join(link_parent, "blob.tgz")
 
-                with mock.patch(
-                    "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                    root,
-                ):
-                    self._assert_rejected("containment", blob_via_link)
+            with self.assertRaises(ArtifactMaterializationError) as raised:
+                validate_cache_blob(blob_via_link, cache_root=root)
+            self.assertEqual(raised.exception.reason, "containment")
 
     # ── missing blob ───────────────────────────────────────────────
 
@@ -283,11 +312,7 @@ class TestCacheSafety(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root:
             nonexistent = os.path.join(root, "nonexistent.tgz")
-            with mock.patch(
-                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                root,
-            ):
-                self._assert_rejected("missing", nonexistent)
+            self._assert_rejected("missing", nonexistent, cache_root=root)
 
     # ── symlink (fixture inside a patched root, containment satisfied) ─
 
@@ -303,12 +328,7 @@ class TestCacheSafety(unittest.TestCase):
             with open(target, "wb") as fh:
                 fh.write(b"data")
             os.symlink(target, link)
-
-            with mock.patch(
-                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                root,
-            ):
-                self._assert_rejected("symlink", link)
+            self._assert_rejected("symlink", link, cache_root=root)
 
     # ── not-regular-file (directory / non-regular inside root) ─────
 
@@ -321,12 +341,7 @@ class TestCacheSafety(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             subdir = os.path.join(root, "subdir")
             os.mkdir(subdir)
-
-            with mock.patch(
-                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                root,
-            ):
-                self._assert_rejected("not_regular_file", subdir)
+            self._assert_rejected("not_regular_file", subdir, cache_root=root)
 
     def test_fifo_at_blob_path_rejected(self) -> None:
         """RED — within the cache root, a named pipe (FIFO) is
@@ -337,12 +352,7 @@ class TestCacheSafety(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             fifo_path = os.path.join(root, "fifo")
             os.mkfifo(fifo_path)
-
-            with mock.patch(
-                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                root,
-            ):
-                self._assert_rejected("not_regular_file", fifo_path)
+            self._assert_rejected("not_regular_file", fifo_path, cache_root=root)
 
             os.unlink(fifo_path)
 
@@ -358,12 +368,7 @@ class TestCacheSafety(unittest.TestCase):
             fd, path = tempfile.mkstemp(dir=root)
             os.close(fd)
             os.chmod(path, 0o666)
-
-            with mock.patch(
-                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                root,
-            ):
-                self._assert_rejected("permissions", path)
+            self._assert_rejected("permissions", path, cache_root=root)
 
             os.unlink(path)
 
@@ -381,11 +386,7 @@ class TestCacheSafety(unittest.TestCase):
             os.close(fd)
             os.chmod(path, 0o600)
 
-            with mock.patch(
-                "docker.versioning.artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                root,
-            ):
-                self._assert_accepted(path)
+            self._assert_accepted(path, cache_root=root)
 
             os.unlink(path)
 
@@ -415,24 +416,24 @@ class TestNoURLPackageVersionInPath(unittest.TestCase):
         # that URL never participates in path derivation.
         # The functions don't even accept a URL parameter.
         self.assertEqual(
-            derive_cache_path("sha512", "d"),
-            derive_cache_path("sha512", "d"),
+            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
         )
 
     def test_version_does_not_affect_derived_path(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         self.assertEqual(
-            derive_cache_path("sha512", "d"),
-            derive_cache_path("sha512", "d"),
+            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
         )
 
     def test_package_name_does_not_affect_derived_path(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         self.assertEqual(
-            derive_cache_path("sha512", "d"),
-            derive_cache_path("sha512", "d"),
+            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
         )
 
 
@@ -614,13 +615,13 @@ class TestDerivationInputValidation(unittest.TestCase):
         for bad in ("md5", "sha1", "SHA512", "sha3-256", ""):
             with self.subTest(algorithm=bad):
                 with self.assertRaises(ValueError):
-                    derive_cache_path(bad, "safe-digest")
+                    derive_cache_path(bad, "safe-digest", root="/tmp/runtime-artifacts/blobs")
 
     def test_empty_digest_raises_valueerror(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         with self.assertRaises(ValueError):
-            derive_cache_path("sha512", "")
+            derive_cache_path("sha512", "", root="/tmp/runtime-artifacts/blobs")
 
     def test_traversal_dot_dot_in_digest_raises_valueerror(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
@@ -628,7 +629,7 @@ class TestDerivationInputValidation(unittest.TestCase):
         for bad in (".", ".."):
             with self.subTest(digest=bad):
                 with self.assertRaises(ValueError):
-                    derive_cache_path("sha512", bad)
+                    derive_cache_path("sha512", bad, root="/tmp/runtime-artifacts/blobs")
 
     def test_path_separator_in_digest_raises_valueerror(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
@@ -636,19 +637,19 @@ class TestDerivationInputValidation(unittest.TestCase):
         for bad in ("/", "a/b", "trailing/", "//", "/etc"):
             with self.subTest(digest=bad):
                 with self.assertRaises(ValueError):
-                    derive_cache_path("sha512", bad)
+                    derive_cache_path("sha512", bad, root="/tmp/runtime-artifacts/blobs")
 
     def test_backslash_in_digest_raises_valueerror(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         with self.assertRaises(ValueError):
-            derive_cache_path("sha512", "dig\\est")
+            derive_cache_path("sha512", "dig\\est", root="/tmp/runtime-artifacts/blobs")
 
     def test_null_byte_in_digest_raises_valueerror(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         with self.assertRaises(ValueError):
-            derive_cache_path("sha512", "dig\x00est")
+            derive_cache_path("sha512", "dig\x00est", root="/tmp/runtime-artifacts/blobs")
 
     def test_non_base64url_characters_rejected(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
@@ -657,7 +658,7 @@ class TestDerivationInputValidation(unittest.TestCase):
                     "has\ttab", "+", "plus+sign"):
             with self.subTest(digest=bad):
                 with self.assertRaises(ValueError):
-                    derive_cache_path("sha512", bad)
+                    derive_cache_path("sha512", bad, root="/tmp/runtime-artifacts/blobs")
 
     def test_padding_only_in_trailing_position_allowed(self) -> None:
         """Padding ``=`` is only allowed at the end (at most two)."""
@@ -666,13 +667,13 @@ class TestDerivationInputValidation(unittest.TestCase):
         # Valid trailing padding (1 or 2 chars)
         for ok in ("abc=", "abc=="):
             with self.subTest(digest=ok):
-                derive_cache_path("sha512", ok)  # must not raise
+                derive_cache_path("sha512", ok, root="/tmp/runtime-artifacts/blobs")  # must not raise
 
         # Invalid: padding in the middle
         for bad in ("a=b", "a==b", "==", "========", "=abc", "==abc"):
             with self.subTest(digest=bad):
                 with self.assertRaises(ValueError):
-                    derive_cache_path("sha512", bad)
+                    derive_cache_path("sha512", bad, root="/tmp/runtime-artifacts/blobs")
 
     def test_derive_cache_path_from_integrity_rejects_malformed(self) -> None:
         from docker.versioning.artifact_cache import (
@@ -681,7 +682,7 @@ class TestDerivationInputValidation(unittest.TestCase):
 
         # Missing separator
         with self.assertRaises(ValueError):
-            derive_cache_path_from_integrity("not-an-integrity")
+            derive_cache_path_from_integrity("not-an-integrity", root="/tmp/runtime-artifacts/blobs")
 
     def test_derive_cache_path_from_integrity_rejects_unsupported_algo(self) -> None:
         from docker.versioning.artifact_cache import (
@@ -689,7 +690,7 @@ class TestDerivationInputValidation(unittest.TestCase):
         )
 
         with self.assertRaises(ValueError):
-            derive_cache_path_from_integrity("md5-AAAA")
+            derive_cache_path_from_integrity("md5-AAAA", root="/tmp/runtime-artifacts/blobs")
 
 
 if __name__ == "__main__":

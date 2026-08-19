@@ -74,13 +74,13 @@ A phase MAY depend only on earlier phases named in its `Depends on` line. Phases
 
 **Deliverables:** materialization, inspection, locks, dry-run planning, and artifact mount planning use only the resolved `runtime-artifacts/blobs` child; legacy checkout cache remains untouched.
 
-- [ ] 5.1 **RED:** Add failing launcher and artifact-cache tests requiring default and local-override runtime paths to resolve under `runtime-artifacts/blobs`.
-- [ ] 5.2 **RED:** Add failing dry-run and rendering tests requiring planned artifact mount sources to use the new root while retaining existing container targets.
-- [ ] 5.3 **RED:** Add failing migration tests proving `.docker-generated/runtime-artifacts` is neither read, copied, chmodded, mutated, nor deleted.
-- [ ] 5.4 **GREEN:** Route materialization, read-only inspection, locks, temporary state, dry-run planning, and mount planning through `cache_storage.py`'s resolved runtime-artifact cache child; remove artifact-cache root and directory-security logic superseded by cache-storage preparation.
-- [ ] 5.5 **GREEN:** Update cache-root containment and symlink checks for the resolved root without weakening atomic publication, verification, content identity, or individual read-only mounts; retain artifact-cache ownership of content addressing, locks, verification, and atomic publication.
-- [ ] 5.6 **INTROSPECT:** Trace every runtime-artifact path producer and consumer; remove checkout-local cache assumptions and duplicated artifact directory-security logic while preserving `.docker-generated/runtime/` projections and evidence output.
-- [ ] 5.7 **VALIDATE:** Run artifact materialization, launcher, dry-run, rendering, runtime projection, and container-mount regression suites; confirm Docker starts only after new-root blobs are verified.
+- [x] 5.1 **RED:** Add failing launcher and artifact-cache tests requiring default and local-override runtime paths to resolve under `runtime-artifacts/blobs`.
+- [x] 5.2 **RED:** Add failing dry-run and rendering tests requiring planned artifact mount sources to use the new root while retaining existing container targets.
+- [x] 5.3 **RED:** Add failing migration tests proving `.docker-generated/runtime-artifacts` is neither read, copied, chmodded, mutated, nor deleted.
+- [x] 5.4 **GREEN:** Route materialization, read-only inspection, locks, temporary state, dry-run planning, and mount planning through `cache_storage.py`'s resolved runtime-artifact cache child; remove artifact-cache root and directory-security logic superseded by cache-storage preparation.
+- [x] 5.5 **GREEN:** Update cache-root containment and symlink checks for the resolved root without weakening atomic publication, verification, content identity, or individual read-only mounts; retain artifact-cache ownership of content addressing, locks, verification, and atomic publication.
+- [x] 5.6 **INTROSPECT:** Trace every runtime-artifact path producer and consumer; remove checkout-local cache assumptions and duplicated artifact directory-security logic while preserving `.docker-generated/runtime/` projections and evidence output.
+- [x] 5.7 **VALIDATE:** Run artifact materialization, launcher, dry-run, rendering, runtime projection, and container-mount regression suites; confirm Docker starts only after new-root blobs are verified.
 
 ## 6. Cross-Consumer Integration
 

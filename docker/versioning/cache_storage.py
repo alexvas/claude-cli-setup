@@ -125,6 +125,16 @@ def runtime_artifacts_blobs_child(root: Path) -> Path:
     return Path(root) / _RUNTIME_ARTIFACTS_BLOBS_CHILD
 
 
+def runtime_artifacts_tmp_child(root: Path) -> Path:
+    """Return the runtime-artifact temporary-state child beneath *root*."""
+    return Path(root) / "runtime-artifacts" / "tmp"
+
+
+def runtime_artifacts_locks_child(root: Path) -> Path:
+    """Return the runtime-artifact lock child beneath *root*."""
+    return Path(root) / "runtime-artifacts" / "locks"
+
+
 # ---------------------------------------------------------------------------
 # Filesystem validation and hardening
 # ---------------------------------------------------------------------------

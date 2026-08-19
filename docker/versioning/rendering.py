@@ -613,17 +613,22 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
 
 def plan_dry_run_artifact_mounts(
     selected_artifacts: "Iterable[SelectedArtifact]",
+    *,
+    cache_root: str,
 ) -> "tuple[ArtifactMount, ...]":
+
     """Build artifact mounts for dry-run display from resolution output.
 
-    Derives *host_path* from ``DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT``
+    Derives *host_path* from the explicitly resolved runtime-artifact
+    cache root
     (the deterministic cache location) and *container_target* from
     ``_RUNTIME_ARTIFACT_ROOT``.  No filesystem access — the blobs may
     not exist yet.  Duplicate integrities are collapsed; results are
     sorted by *container_target*.
     """
-    from . import artifact_cache
     from .model import _derive_artifact_id
+
+    resolved_root = cache_root
 
     seen: set[str] = set()
     mounts: list[ArtifactMount] = []
@@ -635,7 +640,7 @@ def plan_dry_run_artifact_mounts(
         mounts.append(ArtifactMount(
             host_path=os.path.abspath(
                 os.path.join(
-                    artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
+                    resolved_root,
                     artifact_id,
                 )
             ),

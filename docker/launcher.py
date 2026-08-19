@@ -420,6 +420,9 @@ class RunRequest:
     download transport; a test double returns controlled
     bytes so digest-mismatch paths are network-independent."""
 
+    _artifact_cache_root: str | None = None
+    """Test-only resolved runtime-artifact cache injection seam."""
+
     def __post_init__(self) -> None:
         if not isinstance(self.overrides, MappingProxyType):
             object.__setattr__(self, "overrides", MappingProxyType(
@@ -585,6 +588,57 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     proxy_url = local_corporate.network_proxy.url
     proxy_no_proxy = local_corporate.network_proxy.no_proxy
 
+    # All persistent runtime-artifact state lives beneath the shared,
+    # secured constructor cache root; checkout-local generated output is
+    # reserved for projections and evidence.
+    from docker.versioning.cache_storage import (
+        prepare_default_root, prepare_local_root,
+        runtime_artifacts_blobs_child, runtime_artifacts_locks_child,
+        runtime_artifacts_tmp_child,
+    )
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    cache_home = Path(os.path.expanduser("~"))
+    local_cache_dir = getattr(
+        getattr(local_corporate, "cache", None), "dir", None,
+    )
+    try:
+        if request._artifact_cache_root is None:
+            prepared_cache_root = (
+                prepare_local_root(
+                    local_cache_dir,
+                    xdg_cache_home=xdg_cache_home,
+                    home=cache_home,
+                )
+                if local_cache_dir is not None
+                else prepare_default_root(xdg_cache_home, home=cache_home)
+            )
+            runtime_cache_root = str(
+                runtime_artifacts_blobs_child(prepared_cache_root)
+            )
+            runtime_locks_root = str(
+                runtime_artifacts_locks_child(prepared_cache_root)
+            )
+            runtime_tmp_root = str(
+                runtime_artifacts_tmp_child(prepared_cache_root)
+            )
+        else:
+            runtime_cache_root = request._artifact_cache_root
+            runtime_locks_root = str(
+                runtime_artifacts_locks_child(
+                    Path(runtime_cache_root).parent.parent
+                )
+            )
+            runtime_tmp_root = str(
+                runtime_artifacts_tmp_child(
+                    Path(runtime_cache_root).parent.parent
+                )
+            )
+    except Exception as exc:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message=f"Failed to prepare runtime artifact cache: {exc}",
+        )
+
     # ── Step 1c: resolve host-access policy ─────────────────
     try:
         host_access = _resolve_host_access(
@@ -644,8 +698,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             # materialization — host paths are deterministic cache
             # locations, container targets are fixed beneath the
             # runtime-artifacts root.
-            dry_run_mounts = \
-                plan_dry_run_artifact_mounts(selected_artifacts)
+            dry_run_mounts = plan_dry_run_artifact_mounts(
+                selected_artifacts, cache_root=runtime_cache_root,
+            )
             # Inspect the cache read-only — verify each unique
             # blob's bytes against its declared SRI integrity
             # using the no-follow, descriptor-relative inspection
@@ -661,7 +716,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 artifact_id = _derive_artifact_id(art.integrity)
                 if artifact_cache.inspect_verified_blob_readonly(
                     art.integrity,
-                    cache_root=artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
+                    cache_root=runtime_cache_root,
                 ):
                     hits.append(artifact_id)
                 else:
@@ -724,9 +779,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
 
         transport = (_InjectedTransport() if request._artifact_fetcher
                      else artifact_cache.HttpStreamingTransport())
-        configured_root = os.path.abspath(
-            artifact_cache.DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
-        )
+        if request._artifact_cache_root is not None:
+            os.makedirs(runtime_tmp_root, mode=0o700, exist_ok=True)
+        configured_root = os.path.abspath(runtime_cache_root)
         if os.path.islink(configured_root):
             raise artifact_cache.ArtifactMaterializationError(
                 "containment", "runtime artifact cache root is a symlink",
@@ -736,8 +791,11 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             selected_artifacts,
             transport=transport,
             filesystem=artifact_cache.LocalCacheFilesystem(),
-            lock_factory=artifact_cache.FileIdentityLockFactory(root),
+            lock_factory=artifact_cache.FileIdentityLockFactory(
+                root, lock_root=runtime_locks_root,
+            ),
             temp_dir=artifact_cache.LocalTemporaryDirectory(),
+            temp_root=runtime_tmp_root,
             cache_root=root,
         )
         artifact_mounts = plan_artifact_mounts(blobs.values())

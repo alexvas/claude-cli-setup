@@ -132,7 +132,6 @@ class CacheBlobInspection:
 # selected artifacts under this root before publishing the projection
 # or invoking Docker.
 
-DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT = ".docker-generated/runtime-artifacts/blobs"
 
 # Only these algorithms may appear in a cache path.  An algorithm
 # outside this set is rejected before path construction.
@@ -169,7 +168,7 @@ def derive_cache_path(
     algorithm: str,
     digest: str,
     *,
-    root: str | None = None,
+    root: str,
 ) -> str:
     """Return the deterministic content-addressed cache path for a
     validated *algorithm* and *digest*.
@@ -192,7 +191,7 @@ def derive_cache_path(
         ``ValueError``.
     root:
         Cache root directory.  When ``None`` the constructor-owned
-        ``DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT`` is used.
+        An explicit resolved cache root is required.
 
     Returns
     -------
@@ -220,15 +219,13 @@ def derive_cache_path(
         raise ValueError(
             f"digest contains unsafe characters: {digest!r}"
         )
-    if root is None:
-        root = DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
     return os.path.join(root, algorithm, f"{digest}.tgz")
 
 
 def derive_cache_path_from_integrity(
     integrity: str,
     *,
-    root: str | None = None,
+    root: str,
 ) -> tuple[str, str]:
     """Convenience that combines SRI parsing and cache-path derivation.
 
@@ -495,16 +492,13 @@ def inspect_verified_blob_readonly(
 def validate_cache_blob(
     host_path: str,
     *,
-    cache_root: str | None = None,
+    cache_root: str,
 ) -> None:
     """Validate that *host_path* is a regular file, not a symlink,
     contained within *cache_root*, and has no group/world write bits.
 
     Raises :class:`ArtifactMaterializationError` on any violation.
     """
-    if cache_root is None:
-        cache_root = DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
-
     root = os.path.realpath(cache_root)
     real_path = os.path.realpath(host_path)
 
@@ -569,7 +563,8 @@ def materialize_selected_artifacts(
     filesystem: CacheFilesystem,
     lock_factory: IdentityLock.Factory,
     temp_dir: TemporaryDirectory,
-    cache_root: str | None = None,
+    cache_root: str,
+    temp_root: str | None = None,
 ) -> dict[str, VerifiedCacheBlob]:
     """Materialize and verify every *selected* artifact in the
     content-addressed host cache.
@@ -586,7 +581,9 @@ def materialize_selected_artifacts(
     failure, integrity mismatch, publication error, or
     cancellation.
     """
-    root = cache_root or DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT
+    root = cache_root
+    if temp_root is None:
+        temp_root = os.path.join(os.path.dirname(root), "tmp")
 
     # ── 0. validate and deduplicate ──────────────────────────────
     _validate_selected(selected)
@@ -606,6 +603,7 @@ def materialize_selected_artifacts(
             filesystem=filesystem,
             lock_factory=lock_factory,
             temp_dir=temp_dir,
+            temp_root=temp_root,
             root=root,
         )
         results[integrity] = blob
@@ -686,6 +684,7 @@ def _materialize_one(
     filesystem: CacheFilesystem,
     lock_factory: IdentityLock.Factory,
     temp_dir: TemporaryDirectory,
+    temp_root: str,
     root: str,
 ) -> VerifiedCacheBlob:
     """Materialize a single integrity identity.
@@ -709,7 +708,6 @@ def _materialize_one(
     # ── 0. harden private subtrees before any access ───────────
     cache_root = os.path.dirname(os.path.dirname(path))
     algorithm_dir = os.path.dirname(path)
-    _ensure_dir_private(cache_root)
     _ensure_dir_private(algorithm_dir)
 
     # ── 1. fast path: valid cache hit ────────────────────────────
@@ -736,11 +734,10 @@ def _materialize_one(
 
         # ── 5. streaming download + hash ─────────────────────────
         filesystem.ensure_secure_dir(algorithm_dir)
-        _ensure_dir_private(cache_root)
         expected_raw = _sri_to_algorithm_digest(integrity)[1]
 
         tmp_root = temp_dir.mkdtemp(
-            prefix="materialize-", parent=algorithm_dir,
+            prefix="materialize-", parent=temp_root,
         )
         filesystem.ensure_secure_dir(tmp_root)
 
@@ -1350,8 +1347,10 @@ class FileIdentityLock:
 
 
 class FileIdentityLockFactory:
-    def __init__(self, cache_root: str):
-        self._lock_root = os.path.join(os.path.dirname(cache_root), "locks")
+    def __init__(self, cache_root: str, *, lock_root: str | None = None):
+        self._lock_root = lock_root or os.path.join(
+            os.path.dirname(cache_root), "locks",
+        )
 
     def __call__(self, identity: str) -> IdentityLock:
         return FileIdentityLock(self._lock_root)

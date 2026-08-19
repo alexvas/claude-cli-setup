@@ -295,6 +295,7 @@ class TestVerifiedBlobMode(_CacheSecurityTestCase):
             filesystem=LocalCacheFilesystem(),
             lock_factory=FileIdentityLockFactory(str(blobs)),
             temp_dir=LocalTemporaryDirectory(),
+            temp_root=str(root / "runtime-artifacts" / "tmp"),
             cache_root=str(blobs),
         )
 

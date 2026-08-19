@@ -1036,23 +1036,16 @@ class TestRunTransaction(unittest.TestCase):
 
     Covers: runtime overrides, private projection creation, read-only
     mount, gateway mapping, TTY modes, dry-run, Docker failure, and
-    projection cleanup."""
+    projection cleanup.
+    """
 
     def setUp(self) -> None:
         self._lock_leak_before = _shared_lock_leak_snapshot()
         import tempfile
         self._tmpdir = tempfile.TemporaryDirectory()
-        import docker.versioning.artifact_cache as artifact_cache
-        from unittest import mock
         self._artifact_cache_root = os.path.join(
             self._tmpdir.name, "runtime-artifacts", "blobs",
         )
-        self._cache_root_patch = mock.patch.object(
-            artifact_cache,
-            "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-            self._artifact_cache_root,
-        )
-        self._cache_root_patch.start()
         # ── repo-cache leak guard ───────────────────────────
         self._repo_cache_snapshot = _repo_cache_file_set()
         # projection_parent_dir must contain the .docker-generated/runtime
@@ -1115,7 +1108,6 @@ class TestRunTransaction(unittest.TestCase):
         return ("launcher-fixture-artifact:" + url).encode("utf-8")
 
     def tearDown(self) -> None:
-        self._cache_root_patch.stop()
         self._tmpdir.cleanup()
         _ = _assert_repo_cache_unchanged(self._repo_cache_snapshot)
         _assert_no_shared_lock_created(self._lock_leak_before)
@@ -1132,6 +1124,7 @@ class TestRunTransaction(unittest.TestCase):
             "projection_parent_dir": self._proj_parent,
             "_create_projection": RecordingProjectionFactory(),
             "_artifact_fetcher": self._artifact_bytes,
+            "_artifact_cache_root": self._artifact_cache_root,
         }
         kwargs.update(overrides)
         return RunRequest(**kwargs)  # type: ignore[arg-type]
@@ -1416,7 +1409,7 @@ class TestRunTransaction(unittest.TestCase):
             ),
         )
 
-        def _patched_plan(selected) -> tuple[ArtifactMount, ...]:
+        def _patched_plan(selected, *, cache_root: str) -> tuple[ArtifactMount, ...]:
             return injected
 
         req = self._request(
@@ -3672,8 +3665,6 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         symlink so the spy and the orchestrator observe the
         same path."""
         from pathlib import Path
-        import docker.versioning.artifact_cache as _artifact_cache
-
         cache_root = Path(self._tmpdir.name, "sub", "runtime-artifacts")
         symlink_dest = Path(self._tmpdir.name, "nowhere")
         os.mkdir(str(cache_root.parent))
@@ -3683,22 +3674,16 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         cache_ops, restore_spy = self._install_cache_spy(
             watch_prefix=watch,
         )
-        # Monkey-patch the constructor-owned default so the
-        # orchestrator targets the same corrupt path the spy
-        # is watching.
-        import unittest.mock as _mock
-        with _mock.patch.object(
-            _artifact_cache, "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT", watch,
-        ):
-            try:
-                req = self._request(
-                    executor=self._spy_executor(self._stages),
-                    inspector=FakeContainerNameInspector(set()),
-                    _create_projection=self._spy_factory(self._stages),
-                )
-                result = self._run(req)
-            finally:
-                restore_spy()
+        try:
+            req = self._request(
+                _artifact_cache_root=watch,
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
+        finally:
+            restore_spy()
 
         # RED: cache root is a constructor-owned constant but
         # orchestrate_run never inspects it — execution proceeds.
@@ -3762,19 +3747,15 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
 
         cache_ops, restore_spy = self._install_cache_spy()
         try:
-            with mock.patch.object(
-                _artifact_cache,
-                "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-                cache_root,
-            ):
-                req = self._request(
-                    inventory_path=malformed,
-                    _artifact_fetcher=_wrong_bytes,
-                    executor=self._spy_executor(self._stages),
-                    inspector=FakeContainerNameInspector(set()),
-                    _create_projection=self._spy_factory(self._stages),
-                )
-                result = self._run(req)
+            req = self._request(
+                _artifact_cache_root=cache_root,
+                inventory_path=malformed,
+                _artifact_fetcher=_wrong_bytes,
+                executor=self._spy_executor(self._stages),
+                inspector=FakeContainerNameInspector(set()),
+                _create_projection=self._spy_factory(self._stages),
+            )
+            result = self._run(req)
 
             # RED: no materialization layer — the fetcher is never
             # called, the inventory loads, projection is created,
@@ -3925,17 +3906,9 @@ class TestOrchestrationOrdering(unittest.TestCase):
         import tempfile
         self._lock_leak_before = _shared_lock_leak_snapshot()
         self._tmpdir = tempfile.TemporaryDirectory()
-        import docker.versioning.artifact_cache as artifact_cache
-        from unittest import mock
         self._artifact_cache_root = os.path.join(
             self._tmpdir.name, "runtime-artifacts", "blobs",
         )
-        self._cache_root_patch = mock.patch.object(
-            artifact_cache,
-            "DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT",
-            self._artifact_cache_root,
-        )
-        self._cache_root_patch.start()
         self._repo_cache_snapshot = _repo_cache_file_set()
         self._proj_parent = os.path.join(
             self._tmpdir.name, ".docker-generated", "runtime",
@@ -3978,7 +3951,6 @@ class TestOrchestrationOrdering(unittest.TestCase):
         return fixture
 
     def tearDown(self) -> None:
-        self._cache_root_patch.stop()
         self._tmpdir.cleanup()
         _ = _assert_repo_cache_unchanged(self._repo_cache_snapshot)
         _assert_no_shared_lock_created(self._lock_leak_before)
@@ -3997,6 +3969,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             "projection_parent_dir": self._proj_parent,
             "_create_projection": _LoggedProjectionFactory(self._event_log),
             "_artifact_fetcher": self._artifact_bytes,
+            "_artifact_cache_root": self._artifact_cache_root,
         }
         kwargs.update(overrides)
         return RunRequest(**kwargs)  # type: ignore[arg-type]
@@ -4067,6 +4040,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             lock_factory,
             temp_dir,
             cache_root,
+            temp_root,
         ):
             self._event_log.append("materialize")
             self._materialized_selected[:] = selected
@@ -4163,6 +4137,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
             lock_factory,
             temp_dir,
             cache_root,
+            temp_root,
         ):
             self._event_log.append("materialize")
             from docker.versioning.artifact_cache import (

@@ -904,15 +904,12 @@ class TestArtifactMounts(unittest.TestCase):
     @staticmethod
     def _blob_result(*, integrity: str, host_path: str = "") -> "VerifiedCacheBlob":
         """Synthetic ``VerifiedCacheBlob`` — no filesystem access."""
-        from docker.versioning.artifact_cache import (
-            VerifiedCacheBlob, DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
-        )
+        from docker.versioning.artifact_cache import VerifiedCacheBlob
         algo, raw_b64 = integrity.split("-", 1)
         digest = raw_b64.replace("+", "-").replace("/", "_")
         if not host_path:
             host_path = (
-                f"/home/dev/work/my-project/"
-                f"{DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT}/"
+                f"/tmp/runtime-artifacts/blobs/"
                 f"{algo}/{digest}.tgz"
             )
         return VerifiedCacheBlob(
@@ -1013,14 +1010,10 @@ class TestArtifactMounts(unittest.TestCase):
         ])
         self.assertEqual(mounts[0].host_path, custom)
 
-    def test_plan_host_paths_follow_default_cache_root(self):
-        """When no explicit host_path is supplied the synthetic blob
-        uses ``DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT``."""
-        from docker.versioning.artifact_cache import (
-            DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT,
-        )
+    def test_plan_host_paths_follow_explicit_cache_root(self):
+        """Verified blobs retain their explicit resolved host path."""
         blob = self._blob_result(integrity=self._integrity())
-        self.assertIn(DEFAULT_RUNTIME_ARTIFACT_CACHE_ROOT, blob.host_path)
+        self.assertIn("/tmp/runtime-artifacts/blobs", blob.host_path)
         mounts = self._plan([blob])
         self.assertEqual(mounts[0].host_path, blob.host_path)
 
