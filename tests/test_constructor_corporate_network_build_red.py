@@ -369,7 +369,10 @@ class TestDockerfileTrustReplacementRed(unittest.TestCase):
         # on bundle-file presence alone, so a stale bundle cannot change trust.
         text = (_REPO_ROOT / "Dockerfile").read_text()
         self.assertIn("ARG CORPORATE_TRUST_ENABLED", text)
-        self.assertIn('"${CORPORATE_TRUST_ENABLED}" = "true"', text)
+        self.assertEqual(
+            2,
+            text.count('"${CORPORATE_TRUST_ENABLED:-}" = "true"'),
+        )
 
     def test_every_networked_run_sources_ca_helper(self) -> None:
         # Every networked RUN in every build stage — including the base and

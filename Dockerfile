@@ -40,7 +40,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 COPY .docker-local/ /tmp/corporate-ca/
 COPY docker/validate-corporate-bundle.sh /tmp/validate-corporate-bundle.sh
 RUN set -eux; \
-    if [ "${CORPORATE_TRUST_ENABLED}" = "true" ]; then \
+    if [ "${CORPORATE_TRUST_ENABLED:-}" = "true" ]; then \
         sh /tmp/validate-corporate-bundle.sh /tmp/corporate-ca/corporate-ca-bundle.crt; \
         cp /tmp/corporate-ca/corporate-ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
     fi
@@ -65,7 +65,7 @@ RUN --mount=type=cache,id=apt-cache-trixie,target=/var/cache/apt,sharing=locked 
 # the final image must replace it again to preserve complete-replacement
 # semantics.
 RUN set -eux; \
-    if [ "${CORPORATE_TRUST_ENABLED}" = "true" ]; then \
+    if [ "${CORPORATE_TRUST_ENABLED:-}" = "true" ]; then \
         cp /tmp/corporate-ca/corporate-ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
     fi; \
     rm -rf /tmp/corporate-ca
