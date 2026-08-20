@@ -18,6 +18,8 @@
 ./docker/docker-constructor.py build -y
 ```
 
+普通文本构建会在 Docker/BuildKit 产生进度时原样显示。需要单个机器可读结果时，请使用 `--output json`。
+
 构建不需要项目路径、`.env` 或可访问的 host gateway。gateway 诊断只用于运行时容器到主机的连通性；对于 rootless Docker，请在需要检查或修复该连通性时单独运行 `doctor`：
 
 ```bash

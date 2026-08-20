@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+from enum import Enum
 import threading
 import time
 from dataclasses import dataclass
@@ -261,6 +262,17 @@ class SystemClock:
 # ---------------------------------------------------------------------------
 
 
+class BuildOutputPolicy(str, Enum):
+    """How a Docker build exposes its output.
+
+    ``CAPTURED`` is the backwards-compatible default; ``STREAMED`` lets
+    Docker inherit the constructor's stdout and stderr.
+    """
+
+    STREAMED = "streamed"
+    CAPTURED = "captured"
+
+
 @dataclass(frozen=True)
 class ProcessResult:
     """Explicit fake-process outcome — never wraps a live ``subprocess``.
@@ -273,6 +285,7 @@ class ProcessResult:
     return_code: int
     stdout: str
     stderr: str
+    output_policy: BuildOutputPolicy = BuildOutputPolicy.CAPTURED
 
 
 class ProcessRunner:

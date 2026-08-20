@@ -18,6 +18,8 @@ Validate the reviewed inventory, then build the image:
 ./docker/docker-constructor.py build -y
 ```
 
+Normal text builds show native Docker/BuildKit progress as it is produced. Use `--output json` when a single machine-readable result is required.
+
 The build needs no project path, `.env`, or host-gateway reachability. Gateway diagnostics are only for runtime host connectivity. For rootless Docker, use `doctor` separately when that connectivity needs troubleshooting or repair:
 
 ```bash

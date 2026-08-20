@@ -32,6 +32,7 @@ from docker.networking import (
     OverrideFailure,
     OverrideState,
     PersistenceResult,
+    BuildOutputPolicy,
     ProcessResult,
     ProcessRunner,
     RootlessOverridePlan,
@@ -77,8 +78,12 @@ class BuildExecutor(Protocol):
 
 
 class SubprocessBuildExecutor:
-    """Production :class:`BuildExecutor` that delegates to ``subprocess.run``
-    with ``shell=False``, capturing stdout and stderr."""
+    """Production executor with a fixed, typed output policy."""
+
+    def __init__(self, output_policy: BuildOutputPolicy = BuildOutputPolicy.CAPTURED) -> None:
+        if not isinstance(output_policy, BuildOutputPolicy):
+            raise ValueError("output_policy must be a BuildOutputPolicy")
+        self.output_policy = output_policy
 
     def run(self, argv: tuple[str, ...]) -> ProcessResult:
         """Execute *argv* via ``subprocess.run``.
@@ -87,16 +92,16 @@ class SubprocessBuildExecutor:
             FileNotFoundError: when the ``docker`` binary is missing.
             OSError: on permission or other low-level failures.
         """
-        completed = subprocess.run(
-            list(argv),
-            capture_output=True,
-            text=True,
-        )
+        kwargs: dict[str, object] = {"shell": False, "text": True}
+        if self.output_policy is BuildOutputPolicy.CAPTURED:
+            kwargs["capture_output"] = True
+        completed = subprocess.run(list(argv), **kwargs)
         return ProcessResult(
             argv=argv,
             return_code=completed.returncode,
-            stdout=completed.stdout or "",
-            stderr=completed.stderr or "",
+            stdout=(completed.stdout or "") if self.output_policy is BuildOutputPolicy.CAPTURED else "",
+            stderr=(completed.stderr or "") if self.output_policy is BuildOutputPolicy.CAPTURED else "",
+            output_policy=self.output_policy,
         )
 
 
@@ -149,6 +154,9 @@ class BuildRequest:
 
     progress: str = "auto"
     """Progress output style: ``auto``, ``plain``, or ``tty``."""
+
+    output_policy: BuildOutputPolicy = BuildOutputPolicy.CAPTURED
+    """Build output policy. Captured is the backwards-compatible default."""
 
     uid: int | None = None
     """Host user UID injected via ``--build-arg DEV_UID=...``.
@@ -209,6 +217,8 @@ class BuildRequest:
         holding a reference to the original dict could mutate the request
         after construction.  This normalizes any mutable ``dict`` to a
         ``MappingProxyType``."""
+        if not isinstance(self.output_policy, BuildOutputPolicy):
+            raise ValueError("output_policy must be a BuildOutputPolicy")
         if not isinstance(self.overrides, MappingProxyType):
             object.__setattr__(self, "overrides", MappingProxyType(
                 dict(self.overrides),
@@ -510,7 +520,7 @@ def execute_build(
         )
 
     # 2. Execute Docker build
-    runner = request.runner or SubprocessBuildExecutor()
+    runner = request.runner or SubprocessBuildExecutor(request.output_policy)
     try:
         proc = runner.run(build_args)
     except FileNotFoundError as exc:
@@ -530,9 +540,14 @@ def execute_build(
             publish_result=publish_result,
         )
     exit_kind = ExitKind.SUCCESS if proc.return_code == 0 else ExitKind.OPERATIONAL
-    message: str | None = None
+    message: str | None = "image build completed" if proc.return_code == 0 else None
     if proc.return_code != 0:
-        message = proc.stderr or f"build exited with code {proc.return_code}"
+        message = (
+            f"build exited with code {proc.return_code}"
+            if getattr(proc, "output_policy", BuildOutputPolicy.CAPTURED)
+            is BuildOutputPolicy.STREAMED
+            else (proc.stderr or f"build exited with code {proc.return_code}")
+        )
 
     return BuildResult(
         exit_kind=exit_kind,

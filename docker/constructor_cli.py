@@ -468,6 +468,7 @@ def _real_dispatcher(
     prompt = _stdin_prompt if _prompt_user is None else _prompt_user
     # ── build confirmation ───────────────────────────────────────────
     if command == "build":
+        from docker.networking import BuildOutputPolicy
         from docker.versioning.build_orchestration import (
             BuildRequest,
             orchestrate_build,
@@ -515,6 +516,9 @@ def _real_dispatcher(
             cache=_to_bool(c_args.get("cache", True)),
             pull=_to_bool(c_args.get("pull", False)),
             progress=str(c_args.get("progress", "auto")),
+            output_policy=(BuildOutputPolicy.CAPTURED
+                           if request.output == "json"
+                           else BuildOutputPolicy.STREAMED),
             uid=c_args.get("uid") if c_args.get("uid") is not None else None,
             gid=c_args.get("gid") if c_args.get("gid") is not None else None,
             confirmed=_to_bool(c_args.get("yes", False)),
@@ -525,11 +529,23 @@ def _real_dispatcher(
 
         # BuildResult → CommandResult
         data: dict[str, object] | None = None
-        if result.build_args:
+        # A normal text build has already shown Docker's native output; do
+        # not turn its command vector into a second primary result.
+        show_vector = dry_run or request.output == "json" or request.verbose
+        if show_vector and result.build_args:
             data = {
                 "build_args": list(result.build_args),
                 "display_string": result.display_string,
             }
+        if result.process_result and request.output == "json":
+            if data is None:
+                data = {}
+            data.update({
+                "return_code": result.process_result.return_code,
+                "output_policy": result.process_result.output_policy.value,
+                "stdout": result.process_result.stdout,
+                "stderr": result.process_result.stderr,
+            })
         if result.publish_result:
             if data is None:
                 data = {}
