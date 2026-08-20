@@ -546,10 +546,17 @@ def _real_dispatcher(
                 "stdout": result.process_result.stdout,
                 "stderr": result.process_result.stderr,
             })
-        if result.publish_result:
+        if result.publish_result and (request.output == "json" or request.verbose):
             if data is None:
                 data = {}
             data["published_path"] = result.publish_result.published_path
+            # The generic text renderer displays ``display_string`` verbatim.
+            # Keep build-specific diagnostic metadata at this facade boundary.
+            if request.verbose and request.output == "text" and data.get("display_string"):
+                data["display_string"] = (
+                    f"{data['display_string']}\n"
+                    f"published_path: {result.publish_result.published_path}"
+                )
 
         return CommandResult(
             exit_kind=result.exit_kind,

@@ -17,7 +17,9 @@ import os
 import sys
 import time
 scenario = os.environ['FAKE_DOCKER_SCENARIO']
-if scenario == 'stream-success':
+if scenario == 'success-silent':
+    pass
+elif scenario == 'stream-success':
     print('first', flush=True)
     release_file = os.environ['FAKE_DOCKER_RELEASE_FILE']
     while not os.path.exists(release_file):
@@ -126,6 +128,36 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         self.assertEqual("docker-stdout\n", payload["data"]["stdout"])
         self.assertEqual("docker-stderr\n", payload["data"]["stderr"]) 
         self.assertEqual("", completed.stderr)
+
+    def test_normal_text_hides_published_path_but_verbose_and_json_expose_it(self):
+        expected_path = self.root / ".docker-generated/docker-constructor.build.effective.toml"
+
+        env, _ = self._env("success-silent")
+        text = subprocess.run(
+            self._command("build", "-y"), cwd=self.root, env=env,
+            capture_output=True, text=True, timeout=3,
+        )
+        self.assertEqual(0, text.returncode, text.stderr)
+        self.assertTrue(expected_path.is_file())
+        self.assertNotIn("published_path", text.stdout)
+        self.assertNotIn(str(expected_path), text.stdout)
+
+        env, _ = self._env("success-silent")
+        verbose = subprocess.run(
+            self._command("--verbose", "build", "-y"), cwd=self.root, env=env,
+            capture_output=True, text=True, timeout=3,
+        )
+        self.assertEqual(0, verbose.returncode, verbose.stderr)
+        self.assertIn("published_path", verbose.stdout)
+        self.assertIn(str(expected_path), verbose.stdout)
+
+        env, _ = self._env("success-silent")
+        structured = subprocess.run(
+            self._command("--output", "json", "build", "-y"), cwd=self.root, env=env,
+            capture_output=True, text=True, timeout=3,
+        )
+        self.assertEqual(0, structured.returncode, structured.stderr)
+        self.assertEqual(str(expected_path), json.loads(structured.stdout)["data"]["published_path"])
 
     def test_json_failure_contains_captured_diagnostics_and_operational_exit(self):
         env, _ = self._env("json-failure")

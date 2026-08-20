@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from docker.networking import BuildOutputPolicy, ProcessResult
 from docker.versioning.build_orchestration import (
-    BuildRequest, BuildResult, SubprocessBuildExecutor, orchestrate_build,
+    BuildRequest, BuildResult, PublishResult, SubprocessBuildExecutor, orchestrate_build,
 )
 from docker.versioning.dispatch_types import ExitKind
 
@@ -149,3 +149,22 @@ class TestFacadeOutputPolicyAndRendering(unittest.TestCase):
         self.assertIn("docker build .", dry_out)
         _, verbose_out, _, _ = self._run(["--verbose", "build", "-y"])
         self.assertIn("docker build .", verbose_out)
+
+    def test_published_path_visibility_follows_output_mode(self):
+        published_path = "/tmp/effective.toml"
+        result = BuildResult(
+            ExitKind.SUCCESS, "image build completed", ("docker", "build", "."),
+            "docker build .", publish_result=PublishResult(published_path),
+        )
+        _, text_out, _, _ = self._run(["build", "-y"], result=result)
+        self.assertNotIn("published_path", text_out)
+        self.assertNotIn(published_path, text_out)
+        self.assertEqual(published_path, result.publish_result.published_path)  # type: ignore[union-attr]
+
+        _, verbose_out, _, _ = self._run(["--verbose", "build", "-y"], result=result)
+        self.assertIn("published_path", verbose_out)
+        self.assertIn(published_path, verbose_out)
+
+        _, json_out, _, _ = self._run(["--output", "json", "build", "-y"], result=result)
+        self.assertEqual(published_path, json.loads(json_out)["data"]["published_path"])
+
