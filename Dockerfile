@@ -43,6 +43,7 @@ COPY docker/validate-corporate-bundle.sh /tmp/validate-corporate-bundle.sh
 RUN set -eux; \
     if [ "${CORPORATE_TRUST_ENABLED:-}" = "true" ]; then \
         sh /tmp/validate-corporate-bundle.sh /tmp/corporate-ca/corporate-ca-bundle.crt; \
+        mkdir -p /etc/ssl/certs; \
         cp /tmp/corporate-ca/corporate-ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; \
     fi
 

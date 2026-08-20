@@ -8,6 +8,8 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
+from tests.build_test_support import INVENTORY_PATH
+
 from docker.networking import BuildOutputPolicy, ProcessResult
 from docker.versioning.build_orchestration import (
     BuildRequest, BuildResult, PublishResult, SubprocessBuildExecutor, orchestrate_build,
@@ -26,7 +28,7 @@ class RecordingExecutor:
 
 def _request(policy: BuildOutputPolicy, runner: RecordingExecutor, *, progress: str = "auto") -> BuildRequest:
     return BuildRequest(
-        inventory_path="docker-constructor.toml", confirmed=True, progress=progress,
+        inventory_path=str(INVENTORY_PATH), confirmed=True, progress=progress,
         output_policy=policy, runner=runner,
         _publish_projection=lambda *_args, **_kwargs: __import__(
             "docker.versioning.build_orchestration", fromlist=["PublishResult"]

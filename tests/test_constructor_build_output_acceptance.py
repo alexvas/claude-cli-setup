@@ -50,7 +50,10 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]
         shutil.copytree(source, cls.root, ignore=shutil.ignore_patterns(
             ".git", "__pycache__", ".docker-generated", ".docker-local",
+            "docker-constructor.local.toml",
         ))
+        if (cls.root / "docker-constructor.local.toml").exists():
+            raise AssertionError("acceptance repository must not inherit a local companion")
         fake_dir = cls.root / "fake-bin"
         fake_dir.mkdir()
         fake = fake_dir / "docker"

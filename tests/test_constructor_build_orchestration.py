@@ -19,6 +19,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
+from tests.build_test_support import INVENTORY_PATH
+
 from docker.networking import (
     DockerMode,
     GatewayDiagnosis,
@@ -127,8 +129,8 @@ class TestBuildRequestDto(unittest.TestCase):
     """Task 7 — immutable BuildRequest fields."""
 
     def test_minimal_request_has_all_defaults(self):
-        req = BuildRequest(inventory_path="docker-constructor.toml")
-        self.assertEqual("docker-constructor.toml", req.inventory_path)
+        req = BuildRequest(inventory_path=str(INVENTORY_PATH))
+        self.assertEqual(str(INVENTORY_PATH), req.inventory_path)
         self.assertEqual("linux-amd64", req.platform)
         self.assertIsNone(req.tag)
         self.assertEqual({}, dict(req.overrides))
@@ -150,7 +152,7 @@ class TestBuildRequestDto(unittest.TestCase):
 
     def test_all_fields_assignable(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             platform="linux-arm64",
             tag="pi:custom",
             overrides=MappingProxyType({"a": "b"}),
@@ -199,7 +201,7 @@ class TestBuildRequestDto(unittest.TestCase):
         self.assertIs(pr, result.process_result)
 
     def test_dtos_are_frozen(self):
-        req = BuildRequest(inventory_path="docker-constructor.toml")
+        req = BuildRequest(inventory_path=str(INVENTORY_PATH))
         with self.assertRaises(Exception):
             req.platform = "linux-arm64"  # type: ignore[misc]
         result = BuildResult(exit_kind=ExitKind.SUCCESS)
@@ -211,7 +213,7 @@ class TestBuildRequestDto(unittest.TestCase):
         must **not** alter the frozen ``BuildRequest`` after construction."""
         mutable = {"A": "1", "B": "2"}
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             overrides=mutable,
         )
         self.assertIsInstance(req.overrides, MappingProxyType)
@@ -230,7 +232,7 @@ class TestBuildRequestDto(unittest.TestCase):
     def test_overrides_default_is_empty_immutable(self):
         """Default ``overrides`` (no argument) must be an empty immutable
         mapping."""
-        req = BuildRequest(inventory_path="docker-constructor.toml")
+        req = BuildRequest(inventory_path=str(INVENTORY_PATH))
         self.assertIsInstance(req.overrides, MappingProxyType)
         self.assertEqual({}, dict(req.overrides))
 
@@ -272,7 +274,7 @@ class TestInjectablesWired(unittest.TestCase):
         """BuildRequest must carry every injectable slot."""
         runner = FakeBuildExecutor()
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -293,7 +295,7 @@ class TestDefaultBuild(unittest.TestCase):
     def test_default_produces_success(self):
         """Real impl must return SUCCESS for a valid inventory."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -305,7 +307,7 @@ class TestDefaultBuild(unittest.TestCase):
     def test_default_tag_is_pi_cli_pi_latest(self):
         """Default image tag is exactly ``pi-cli-pi:latest`` — canonical identity."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -328,7 +330,7 @@ class TestDefaultBuild(unittest.TestCase):
     def test_default_target_is_runtime(self):
         """Default target stage is 'runtime'."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -350,7 +352,7 @@ class TestDefaultBuild(unittest.TestCase):
     def test_command_is_docker_build_not_compose(self):
         """The first token must be 'docker', never 'docker-compose'."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -363,7 +365,7 @@ class TestDefaultBuild(unittest.TestCase):
     def test_deterministic_vector(self):
         """Same inputs must produce identical build_args."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -386,7 +388,7 @@ class TestBuildOverrides(unittest.TestCase):
     def test_accepted_build_override_reaches_projection(self):
         """A build-owned override must be reflected in the build vector."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             overrides=MappingProxyType({
                 "build.stages.toolchain.python.version": "3.15.0",
@@ -404,7 +406,7 @@ class TestBuildOverrides(unittest.TestCase):
     def test_unsupported_override_rejected(self):
         """A path not in the inventory schema must cause CONFIG error."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             overrides=MappingProxyType({
                 "build.nonexistent.thing": "val",
@@ -419,7 +421,7 @@ class TestBuildOverrides(unittest.TestCase):
     def test_runtime_override_rejected_in_build(self):
         """A runtime-scoped override must not be accepted by build."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             overrides=MappingProxyType({
                 "runtime.pi-extensions.x.version": "1.0.0",
@@ -441,7 +443,7 @@ class TestPlatformSelection(unittest.TestCase):
 
     def test_amd64_platform_in_build_vector(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             platform="linux-amd64",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
@@ -455,7 +457,7 @@ class TestPlatformSelection(unittest.TestCase):
 
     def test_arm64_platform_in_build_vector(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             platform="linux-arm64",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
@@ -505,7 +507,7 @@ class TestProjectionPublication(unittest.TestCase):
             return PublishResult(published_path="/tmp/eff.toml")
 
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=record_publish,
@@ -532,7 +534,7 @@ class TestCacheControls(unittest.TestCase):
 
     def test_cache_disabled_adds_no_cache(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             cache=False,
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
@@ -545,7 +547,7 @@ class TestCacheControls(unittest.TestCase):
 
     def test_pull_enabled_adds_pull(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             pull=True,
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
@@ -558,7 +560,7 @@ class TestCacheControls(unittest.TestCase):
 
     def test_progress_plain_controls_output(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             progress="plain",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
@@ -576,7 +578,7 @@ class TestCacheControls(unittest.TestCase):
 
     def test_custom_tag_appears_in_vector(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             tag="pi-cli-pi:latest",
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
@@ -589,7 +591,7 @@ class TestCacheControls(unittest.TestCase):
 
     def test_uid_gid_surface_in_build_args(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             uid=1000,
             gid=1000,
             dry_run=True,
@@ -606,7 +608,7 @@ class TestCacheControls(unittest.TestCase):
 
     def test_context_and_dockerfile_override(self):
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             context="/custom/context",
             dockerfile="Dockerfile.custom",
             dry_run=True,
@@ -708,7 +710,7 @@ class TestFailureOrdering(unittest.TestCase):
     def test_invalid_override_returns_config_and_zero_calls(self):
         """A completely invalid override path must fail before side effects."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             overrides=MappingProxyType({"not.a.real.path.at.all": "val"}),
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
@@ -723,7 +725,7 @@ class TestFailureOrdering(unittest.TestCase):
     def test_projection_resolution_failure_returns_config_and_zero_calls(self):
         """When the effective projection cannot be built, stop before side effects."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             platform="nonexistent/cpu",
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
@@ -747,7 +749,7 @@ class TestRenderValidationFailures(unittest.TestCase):
     def test_negative_uid_returns_config(self):
         """Negative ``uid`` must produce CONFIG from ``plan_build``."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             uid=-5,
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
@@ -762,7 +764,7 @@ class TestRenderValidationFailures(unittest.TestCase):
     def test_negative_gid_returns_config(self):
         """Negative ``gid`` must produce CONFIG from ``plan_build``."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             gid=-3,
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
@@ -778,7 +780,7 @@ class TestRenderValidationFailures(unittest.TestCase):
         """Negative UID must return CONFIG even with ``confirmed=True``
         and no dry-run — planning happens before execution."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             uid=-1,
             confirmed=True,
             _diagnose_gateway=self._bomb_diagnose,
@@ -796,7 +798,7 @@ class TestRenderValidationFailures(unittest.TestCase):
         """An explicit empty ``tag`` must reach the renderer's validation
         and return CONFIG — not be silently replaced with the default."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             tag="",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
@@ -812,7 +814,7 @@ class TestRenderValidationFailures(unittest.TestCase):
         """An explicit empty ``context`` must reach the renderer's
         validation and return CONFIG."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             context="",
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
@@ -862,7 +864,7 @@ class TestBuildGatewayIsolation(unittest.TestCase):
 
         runner = FakeBuildExecutor()
         result = orchestrate_build(BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=diagnose,
             _publish_projection=_publish_ok,
@@ -912,7 +914,7 @@ class TestConfirmation(unittest.TestCase):
         user decision — SUCCESS no-op.  Every side-effecting boundary
         carries a bomb; the test passes only if none of them fire."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=False,
             dry_run=False,
             _diagnose_gateway=self._bomb_diagnose,
@@ -937,7 +939,7 @@ class TestConfirmation(unittest.TestCase):
         """When ``confirmed=True`` the full build transaction executes."""
         docker_runner = FakeBuildExecutor()
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -961,7 +963,7 @@ class TestConfirmation(unittest.TestCase):
                 return super().run(argv)
 
         result = orchestrate_build(BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=lambda **kw: (_ for _ in ()).throw(
                 AssertionError("build must not diagnose gateway")),
@@ -1007,7 +1009,7 @@ class TestDryRun(unittest.TestCase):
         """Dry-run must not invoke Docker execution, persistence,
         or publication.  Only the build vector is rendered."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
@@ -1025,7 +1027,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_no_gateway_probe(self):
         """Dry-run must not spawn a gateway probe container."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
@@ -1041,7 +1043,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_no_persistence(self):
         """Dry-run must not write .env or effective.toml."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
@@ -1056,7 +1058,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_no_publication(self):
         """Dry-run must not publish the effective projection."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
@@ -1071,7 +1073,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_no_docker_process(self):
         """Dry-run must not execute Docker."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
@@ -1088,7 +1090,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_returns_complete_display(self):
         """Dry-run must return full build_args and a display_string."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1104,7 +1106,7 @@ class TestDryRun(unittest.TestCase):
     def test_dry_run_no_source_mutation(self):
         """Source inventory must never be touched during dry-run."""
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1125,7 +1127,7 @@ class TestDirectExecution(unittest.TestCase):
         """The runner must receive a tuple (shell=False semantics)."""
         runner = FakeBuildExecutor()
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1141,7 +1143,7 @@ class TestDirectExecution(unittest.TestCase):
     def test_runner_command_starts_with_docker(self):
         runner = FakeBuildExecutor()
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1164,7 +1166,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
     def test_zero_exit_returns_success(self):
         runner = FakeBuildExecutor(returncode=0)
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1181,7 +1183,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
     def test_nonzero_exit_returns_operational_failure(self):
         runner = FakeBuildExecutor(returncode=1)
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1196,7 +1198,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
     def test_stderr_included_on_failure(self):
         runner = FakeBuildExecutor(returncode=1)
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1225,7 +1227,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
 
         runner = FakeBuildExecutor()
         result = orchestrate_build(BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=broken_diagnose,
             _publish_projection=_publish_ok,
@@ -1243,7 +1245,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             raise PublishError(detail="disk full")
 
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
@@ -1262,7 +1264,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             raise IOError("permission denied")
 
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
@@ -1283,7 +1285,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
                 raise FileNotFoundError("No such file: 'docker'")
 
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1301,7 +1303,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
                 raise PermissionError("docker: permission denied")
 
         req = BuildRequest(
-            inventory_path="docker-constructor.toml",
+            inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,

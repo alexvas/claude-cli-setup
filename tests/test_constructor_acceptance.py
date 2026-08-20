@@ -23,6 +23,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from tests.build_test_support import INVENTORY_PATH
+
 # ── helpers ────────────────────────────────────────────────────────────
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -404,9 +406,9 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.m = _load_mod()
-        # Use the real project inventory so plan_build passes.
-        repo = Path(__file__).parent.parent.resolve()
-        cls._INVENTORY = str(repo / "docker-constructor.toml")
+        # A copied inventory prevents machine-local companions from affecting
+        # orchestration tests that do not exercise companion resolution.
+        cls._INVENTORY = str(INVENTORY_PATH)
 
     # ── helpers ────────────────────────────────────────────────────
 
