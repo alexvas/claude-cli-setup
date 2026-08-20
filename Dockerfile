@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# check=skip=InvalidDefaultArgInFrom
 # BuildKit cache boundaries:
 #   base -> toolchain -> pi-tools and base -> openspec-tools
 # Version arguments are scoped to the stage that consumes them.
