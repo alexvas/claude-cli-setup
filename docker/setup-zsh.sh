@@ -40,6 +40,7 @@ export ZSH="${HOME}/.oh-my-zsh"
 ZSH_DISABLE_COMPFIX=true
 ZSH_THEME=""
 plugins=(git)
+zstyle ':omz:update' mode disabled
 source "$ZSH/oh-my-zsh.sh"
 
 # Pi zsh prompt
