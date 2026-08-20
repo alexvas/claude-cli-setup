@@ -411,8 +411,17 @@ class RunRequest:
     """Injected projection-file factory; defaults to
     :func:`~docker.versioning.effective.create_runtime_projection`."""
 
-    projection_parent_dir: str = ".docker-generated/runtime"
-    """Parent directory for private runtime projection files."""
+    projection_parent_dir: str = field(default_factory=lambda: os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".docker-generated",
+        "runtime",
+    ))
+    """Absolute parent directory for private runtime projection files.
+
+    The default is anchored to the constructor checkout rather than the
+    caller's current working directory because Docker bind-mount sources and
+    runtime projection validation require an absolute host path.
+    """
 
     _artifact_fetcher: ArtifactByteFetcher | None = None
     """Injected byte-fetch boundary for deterministic
