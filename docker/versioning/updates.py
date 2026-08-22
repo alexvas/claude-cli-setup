@@ -4,6 +4,7 @@ No network — delegates all HTTP/git through injected transports.
 """
 from __future__ import annotations
 
+import copy
 import json
 from enum import Enum
 from types import MappingProxyType
@@ -219,6 +220,254 @@ def build_update_targets(
         ))
 
     return tuple(result)
+
+
+# ---------------------------------------------------------------------------
+# Replacement ownership and raw block evidence
+# ---------------------------------------------------------------------------
+
+_REPLACEMENT_OWNERS: Mapping[str, str] = MappingProxyType({
+    "build.stages.base.node": "build.stages.base.node",
+    "build.stages.toolchain.rust": "build.stages.toolchain.rust",
+    "build.stages.toolchain.rust.rustup": "build.stages.toolchain.rust",
+    "build.stages.toolchain.uv": "build.stages.toolchain.uv",
+    "build.stages.toolchain.python": "build.stages.toolchain.python",
+    "build.stages.toolchain.ty": "build.stages.toolchain.ty",
+    "build.stages.rtk-prebuilt.rtk": "build.stages.rtk-prebuilt.rtk",
+    "build.stages.fd-prebuilt.fd": "build.stages.fd-prebuilt.fd",
+    "build.stages.pi-tools.pi": "build.stages.pi-tools.pi",
+    "build.stages.openspec-tools.openspec": "build.stages.openspec-tools.openspec",
+    "build.stages.runtime.oh-my-zsh": "build.stages.runtime.oh-my-zsh",
+})
+
+
+def replacement_owner(path: str) -> str:
+    """Return the replaceable raw inventory block owning update target *path*.
+
+    Every current update target maps to exactly one replaceable raw
+    inventory block.  Rust and its nested rustup bootstrap share the
+    ``build.stages.toolchain.rust`` block; Pi extensions each own their
+    ``runtime.pi-extensions.<name>`` block.
+    """
+    owner = _REPLACEMENT_OWNERS.get(path)
+    if owner is not None:
+        return owner
+    if path.startswith("runtime.pi-extensions."):
+        return path
+    raise KeyError(f"no replacement owner registered for update target {path!r}")
+
+
+_RUNTIME_EXTENSIONS_PREFIX = "runtime.pi-extensions."
+
+
+def path_segments(path: str) -> tuple[str, ...]:
+    """Split a dotted canonical path into raw inventory key segments.
+
+    ``runtime.pi-extensions.<name>`` is special-cased: everything after
+    the fixed ``runtime.pi-extensions.`` prefix is a single extension
+    name that may itself contain dots, matching the quoted TOML table key
+    ``runtime.pi-extensions."<name>"``.  All other paths split on ``.``
+    because their segments never contain dots.
+    """
+    if path.startswith(_RUNTIME_EXTENSIONS_PREFIX):
+        return ("runtime", "pi-extensions", path[len(_RUNTIME_EXTENSIONS_PREFIX):])
+    return tuple(path.split("."))
+
+
+def group_targets_by_owner(
+    targets: Sequence[UpdateTarget],
+) -> tuple[tuple[str, tuple[UpdateTarget, ...]], ...]:
+    """Group update targets by replacement owner in first-appearance order.
+
+    Deterministic: owners appear in the order their first target appeared
+    in *targets*, and each owner appears exactly once (no overlapping
+    owner blocks).
+    """
+    grouped: dict[str, list[UpdateTarget]] = {}
+    order: list[str] = []
+    for target in targets:
+        owner = replacement_owner(target.path)
+        if owner not in grouped:
+            grouped[owner] = []
+            order.append(owner)
+        grouped[owner].append(target)
+    return tuple((owner, tuple(grouped[owner])) for owner in order)
+
+
+def extract_raw_block(
+    raw: Mapping[str, object],
+    segments: Sequence[str],
+) -> dict[str, object]:
+    """Return a deep copy of the raw reviewed inventory block at *segments*.
+
+    *segments* are raw TOML key segments (e.g. ``("build", "stages",
+    "toolchain", "rust")``).  Each segment is used as a literal table key,
+    so extension names containing dots
+    (``runtime.pi-extensions."foo.bar"``) are handled correctly.  The
+    returned dict is a deep copy, so callers may overlay candidates
+    without mutating the source inventory.
+    """
+    node: object = raw
+    for part in segments:
+        if not isinstance(node, Mapping):
+            raise KeyError(f"raw inventory has no table at {segments!r}")
+        if part not in node:
+            raise KeyError(f"raw inventory missing key {segments!r}")
+        node = node[part]
+    if not isinstance(node, Mapping):
+        raise KeyError(f"raw inventory node {segments!r} is not a table")
+    return copy.deepcopy(dict(node))
+
+
+def _overlay_key_path(
+    block: dict[str, object],
+    key_path: tuple[str, ...],
+    value: object,
+) -> None:
+    """Set *value* at *key_path* within *block*, creating intermediate tables."""
+    node: dict[str, object] = block
+    for part in key_path[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            node[part] = child
+        node = child
+    node[key_path[-1]] = value
+
+
+def _target_suffix(owner: str, path: str) -> tuple[str, ...]:
+    """Return the raw key path of *path* relative to owner *owner*."""
+    owner_segments = path_segments(owner)
+    target_segments = path_segments(path)
+    if target_segments == owner_segments:
+        return ()
+    if (
+        len(target_segments) <= len(owner_segments)
+        or target_segments[:len(owner_segments)] != owner_segments
+    ):
+        raise KeyError(f"target {path!r} is not under owner {owner!r}")
+    return target_segments[len(owner_segments):]
+
+
+def overlay_candidates(
+    raw_block: Mapping[str, object],
+    *,
+    owner: str,
+    targets: Sequence[UpdateTarget],
+    results: Mapping[str, UpdateResult],
+) -> dict[str, object]:
+    """Return *raw_block* with applicable candidate leaves overlaid.
+
+    Only ``OUTDATED`` + applicable results are applied.  The candidate's
+    version / tag / digest / revision and artifact URL / checksum values
+    replace the matching raw leaves; every other raw value (unchanged
+    source, update policy, override, validation, and non-updated artifact
+    platforms) is preserved verbatim.  The input is never mutated.
+    """
+    block = copy.deepcopy(dict(raw_block))
+
+    for target in targets:
+        result = results.get(target.path)
+        if result is None:
+            continue
+        if result.status != UpdateStatus.OUTDATED or not result.applicable:
+            continue
+        if result.candidate is None:
+            continue
+
+        suffix = _target_suffix(owner, target.path)
+
+        if result.kind == UpdateKind.VERSION:
+            _overlay_key_path(block, suffix + ("version",), result.candidate)
+            if result.provider == "github-release":
+                _overlay_key_path(
+                    block, suffix + ("source", "tag"), result.candidate,
+                )
+        elif result.kind == UpdateKind.DIGEST_REFRESH:
+            if result.artifacts:
+                for platform, art in sorted(result.artifacts.items()):
+                    if art.url:
+                        _overlay_key_path(
+                            block,
+                            suffix + ("artifacts", platform, "url"),
+                            art.url,
+                        )
+                    if art.sha256 is not None:
+                        _overlay_key_path(
+                            block,
+                            suffix + ("artifacts", platform, "sha256"),
+                            art.sha256,
+                        )
+            else:
+                _overlay_key_path(block, suffix + ("digest",), result.candidate)
+        elif result.kind == UpdateKind.REVISION:
+            _overlay_key_path(block, suffix + ("revision",), result.candidate)
+
+        # Artifact URL / checksum overlay for candidates carrying artifacts
+        # (already handled above for DIGEST_REFRESH static-url refreshes).
+        if result.artifacts and result.kind != UpdateKind.DIGEST_REFRESH:
+            for platform, art in sorted(result.artifacts.items()):
+                if art.url:
+                    _overlay_key_path(
+                        block,
+                        suffix + ("artifacts", platform, "url"),
+                        art.url,
+                    )
+                if art.sha256 is not None:
+                    _overlay_key_path(
+                        block,
+                        suffix + ("artifacts", platform, "sha256"),
+                        art.sha256,
+                    )
+
+    return block
+
+
+def build_replacement_blocks(
+    raw: Mapping[str, object],
+    targets: Sequence[UpdateTarget],
+    results: Sequence[UpdateResult],
+) -> tuple[tuple[str, dict[str, object]], ...]:
+    """Build ``(owner, overlaid raw block)`` pairs for every owner with an
+    applicable candidate.
+
+    Owners are emitted in inventory order (first-appearance order of
+    their targets).  Each block is the complete raw reviewed subtree for
+    that owner with every applicable candidate leaf overlaid.
+
+    Known limitations (Phase 1 INTROSPECT findings, deferred to the
+    canonical rendering/round-trip phases):
+
+    * Rust ``source.manifest`` embeds the version and is retained
+      verbatim; a version-only overlay therefore leaves the old version in
+      the manifest URL until rendering reconstructs or documents it.
+    * npm Pi-extension candidates carry only ``version`` (no tarball URL or
+      SRI integrity), so the version-keyed ``artifacts`` table is retained
+      unchanged rather than re-keyed to the candidate version.
+    """
+    applicable: dict[str, UpdateResult] = {}
+    for result in results:
+        if (
+            result.status == UpdateStatus.OUTDATED
+            and result.applicable
+            and result.candidate is not None
+        ):
+            applicable[result.path] = result
+
+    blocks: list[tuple[str, dict[str, object]]] = []
+    for owner, group_targets in group_targets_by_owner(targets):
+        if not any(target.path in applicable for target in group_targets):
+            continue
+        raw_block = extract_raw_block(raw, path_segments(owner))
+        overlaid = overlay_candidates(
+            raw_block,
+            owner=owner,
+            targets=group_targets,
+            results=applicable,
+        )
+        blocks.append((owner, overlaid))
+
+    return tuple(blocks)
 
 
 # ---------------------------------------------------------------------------
