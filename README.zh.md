@@ -158,7 +158,7 @@ no_proxy = "localhost,.corp.example"
    ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` 是 **non-mutating**：核对上游发布，然后手动把接受的值及相关元数据应用到 `docker-constructor.toml` 的 `build.stages.pi-tools.pi`。
+2. `--suggest` 是 **non-mutating**：它输出的是完整的手动替换块，绝不会自动编辑文件，也不能追加到 TOML 末尾。在规范的 `docker-constructor.toml` 中，找到 `# --- pi-tools.pi ---` 标题，并替换该块直到下一个 `# --- ... ---` 标题。片段会保留未变更的 source、update-policy、override、validation 和所有已配置平台工件；请与候选值一并审核。标题只用于视觉定位，在自定义 inventory 中是可选的；在那里请使用完整的 TOML 表路径。
 3. 验证并审查准确变更：
 
    ```bash
@@ -185,11 +185,11 @@ no_proxy = "localhost,.corp.example"
 | Pi extensions | pi-read、usage、proxy、rtk 注册 | 主机挂载的 `/home/dev/.pi` | `runtime.pi-extensions` npm 元数据 |
 | Debian packages | 系统工具和库 | 镜像系统路径 | APT；不属于 `docker-constructor.toml` 更新发现 |
 
-更新其他托管组件时，找到清单路径，运行 `check-updates --only <path> --suggest`，手动审核并编辑，然后执行验证、diff 审查、重建和运行时验证。对于 `runtime.pi-extensions`，重建只更新镜像的有效清单，不更新挂载状态；请在"维护"中刷新。
+更新其他托管组件时，找到清单路径，运行 `check-updates --only <path> --suggest`，替换完整的建议块而不是追加单独字段。审核保留字段和所有已配置平台工件，然后执行验证、diff 审查、重建和运行时验证。对于 `runtime.pi-extensions`，重建只更新镜像的有效清单，不更新挂载状态；请在"维护"中刷新。
 
 ### 更新检查控制项
 
-- **交互审核：** `--only <provider-or-path>` 缩小范围；`--suggest` 添加 non-mutating TOML 建议。
+- **交互审核：** `--only <provider-or-path>` 缩小范围；`--suggest` 添加 non-mutating 的完整手动替换 TOML 块。
 - **自动化和策略：** `--json` 输出机器可读格式；`--strict` 在 provider 错误时失败；`--fail-on-outdated` 在存在更新时失败。
 - **高级发现/缓存：** `--include-prerelease` 包含 prerelease；reviewed `[cache].ttl` 控制 HTTP 缓存 TTL，`--no-cache` 可单次绕过缓存。
 

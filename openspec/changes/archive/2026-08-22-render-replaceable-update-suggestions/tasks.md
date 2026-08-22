@@ -44,6 +44,6 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4
 - [x] 4.1 **RED:** Add no-effect regression tests proving `check-updates --suggest` does not write the inventory, working tree, cache policy, or any generated file while producing complete fragments.
 - [x] 4.2 **RED:** Add no-candidate and incomplete-candidate tests requiring an explicit no-replacement-block message and no empty/unlabelled fragment.
 - [x] 4.3 **GREEN:** Preserve normal report ordering, no-suggestion/incomplete diagnostics, provider behavior, result ordering, JSON fields/values, and exit policies around the new text renderer.
-- [ ] 4.4 Update maintained documentation and examples to show locating a visual header, replacing the complete block through the next header, preserved fields/platforms, optional headers in custom inventories, and the no-automatic-application boundary.
-- [ ] 4.5 **INTROSPECT:** Reconcile implementation, raw inventory ownership, main semantic source, delta spec, design, tasks, docs, and CLI diagnostics; remove stale candidate-only or falsely appendable-TOML claims.
-- [ ] 4.6 **VALIDATE:** Run the complete project test suite and `openspec validate render-replaceable-update-suggestions`; confirm every modified scenario has automated evidence.
+- [x] 4.4 Update maintained documentation and examples to show locating a visual header, replacing the complete block through the next header, preserved fields/platforms, optional headers in custom inventories, and the no-automatic-application boundary.
+- [x] 4.5 **INTROSPECT:** Reconcile implementation, raw inventory ownership, main semantic source, delta spec, design, tasks, docs, and CLI diagnostics; remove stale candidate-only or falsely appendable-TOML claims.
+- [x] 4.6 **VALIDATE:** Run the complete project test suite and `openspec validate render-replaceable-update-suggestions`; confirm every modified scenario has automated evidence.

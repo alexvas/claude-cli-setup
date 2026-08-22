@@ -64,7 +64,6 @@ from docker.versioning.providers.base import (
 from docker.versioning.updates import (
     build_update_targets,
     check_updates,
-    render_suggestions,
     render_table,
     render_json,
     render_suggestions_json,
@@ -457,53 +456,6 @@ class TestCheckUpdates(unittest.TestCase):
 
 
 class TestSuggestions(unittest.TestCase):
-    def test_render_suggestions_only_outdated_applicable(self):
-        results = [
-            UpdateResult(
-                path="build.stages.toolchain.ty",
-                provider="pypi",
-                current="0.0.61",
-                candidate="0.0.62",
-                status=UpdateStatus.OUTDATED,
-                kind=UpdateKind.VERSION,
-                applicable=True,
-                reason=None,
-                artifacts={},
-            ),
-            UpdateResult(
-                path="build.stages.toolchain.rust",
-                provider="rust-channel",
-                current="1.88.0",
-                candidate="1.89.0",
-                status=UpdateStatus.OUTDATED,
-                kind=UpdateKind.VERSION,
-                applicable=False,
-                reason="not applicable",
-                artifacts={},
-            ),
-            UpdateResult(
-                path="build.stages.base.node",
-                provider="docker-registry",
-                current="24-trixie-slim",
-                candidate="sha256:bbb...",
-                status=UpdateStatus.OUTDATED,
-                kind=UpdateKind.DIGEST_REFRESH,
-                applicable=True,
-                reason=None,
-                artifacts={},
-                digest="sha256:bbb...",
-            ),
-        ]
-        output = render_suggestions(results)
-        self.assertIn("0.0.62", output)
-        self.assertIn("build.stages.toolchain.ty", output)
-        self.assertIn("sha256:bbb", output)
-        # Non-applicable should not appear
-        self.assertNotIn("1.89.0", output)  # Rust is not applicable
-
-    def test_render_suggestions_empty(self):
-        self.assertEqual(render_suggestions([]), "\n")
-
     def test_render_suggestions_json(self):
         results = [
             UpdateResult(

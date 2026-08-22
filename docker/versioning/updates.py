@@ -921,58 +921,6 @@ def check_updates(
 
 
 # ---------------------------------------------------------------------------
-# Suggestions
-# ---------------------------------------------------------------------------
-
-def render_suggestions(
-    results: Sequence[UpdateResult],
-) -> str:
-    """Render a valid TOML fragment with candidate values for all OUTDATED-APPLICABLE results.
-
-    Only entries with ``status == OUTDATED and applicable == True`` are included.
-    Values are placed under their owning ``[path]`` table so the output is
-    copy-pasteable into ``docker-constructor.toml``.
-    """
-    lines: list[str] = []
-    for r in results:
-        if r.status != UpdateStatus.OUTDATED or not r.applicable:
-            continue
-        if r.candidate is None:
-            continue
-
-        # Owning table header
-        lines.append(f"[{r.path}]")
-
-        # Version / digest / revision
-        if r.kind == UpdateKind.VERSION:
-            lines.append(f"version = \"{r.candidate}\"")
-        elif r.kind == UpdateKind.DIGEST_REFRESH:
-            lines.append(f"digest = \"{r.candidate}\"")
-        elif r.kind == UpdateKind.REVISION:
-            lines.append(f"revision = \"{r.candidate}\"")
-        lines.append("")
-
-        # Source tag only for GitHub releases (other providers have no tag field)
-        if r.kind == UpdateKind.VERSION and r.provider == "github-release":
-            lines.append(f"[{r.path}.source]")
-            lines.append(f"tag = \"{r.candidate}\"")
-            lines.append("")
-
-        # Artifact updates for prebuilt tools
-        if r.artifacts:
-            for platform, art in sorted(r.artifacts.items()):
-                if art.sha256 is not None:
-                    lines.append(f"[{r.path}.artifacts.{platform}]")
-                    lines.append(f"url = \"{art.url}\"")
-                    lines.append(f"sha256 = \"{art.sha256}\"")
-                    lines.append("")
-
-    if not lines:
-        return "\n"
-    return "\n".join(lines).rstrip("\n") + "\n"
-
-
-# ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
 

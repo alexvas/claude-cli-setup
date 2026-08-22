@@ -158,7 +158,7 @@ The container receives neither artifact URLs nor the cache directory. It receive
    ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` is **non-mutating**: verify the upstream release and manually apply the accepted value and related metadata to `build.stages.pi-tools.pi` in `docker-constructor.toml`.
+2. `--suggest` is **non-mutating**: its output is a complete manual replacement block, never an automatic edit or TOML to append. In the canonical `docker-constructor.toml`, locate the matching `# --- pi-tools.pi ---` header and replace that entire block through the next `# --- ... ---` header. The fragment retains unchanged source, update-policy, override, validation, and configured platform-artifact fields; review them together with the candidate values. Headers are visual-only and optional in custom inventories, so use the full TOML table path there instead.
 3. Validate and review the exact repository change:
 
    ```bash
@@ -185,11 +185,11 @@ The container receives neither artifact URLs nor the cache directory. It receive
 | Pi extensions | pi-read, usage, proxy, rtk registration | Host-mounted `/home/dev/.pi` | `runtime.pi-extensions` npm metadata |
 | Debian packages | OS utilities and libraries | Image-owned system paths | APT; outside `docker-constructor.toml` update discovery |
 
-For another managed component, locate its inventory path, run `check-updates --only <path> --suggest`, review and edit manually, validate, inspect the diff, rebuild, and verify. If the path is under `runtime.pi-extensions`, rebuilding updates the effective image inventory but not mounted state; refresh it under Maintenance.
+For another managed component, locate its inventory path, run `check-updates --only <path> --suggest`, and replace the complete suggested block rather than appending leaf values. Review retained fields and every configured platform artifact, then validate, inspect the diff, rebuild, and verify. If the path is under `runtime.pi-extensions`, rebuilding updates the effective image inventory but not mounted state; refresh it under Maintenance.
 
 ### Update-check controls
 
-- **Interactive review:** `--only <provider-or-path>` narrows discovery; `--suggest` adds non-mutating TOML candidates.
+- **Interactive review:** `--only <provider-or-path>` narrows discovery; `--suggest` adds non-mutating, complete manual-replacement TOML blocks.
 - **Automation and policy:** `--json` emits machine-readable output; `--strict` fails on provider errors; `--fail-on-outdated` fails when an update exists.
 - **Advanced discovery/cache:** `--include-prerelease` includes prerelease results; reviewed `[cache].ttl` controls update-discovery HTTP caching, and `--no-cache` bypasses it for one invocation.
 
