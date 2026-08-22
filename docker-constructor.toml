@@ -41,75 +41,75 @@ track = "tag-digest"
 
 # --- toolchain.rust ---
 [build.stages.toolchain.rust]
-version = "1.97.1"
-profile = "minimal"
 components = ["rustfmt", "clippy"]
+profile = "minimal"
+version = "1.98.0"
 
-[build.stages.toolchain.rust.source]
-type = "rust-channel"
-manifest = "https://static.rust-lang.org/dist/channel-rust-1.97.1.toml"
+[build.stages.toolchain.rust.rustup.artifacts.linux-amd64]
+sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
 
 [build.stages.toolchain.rust.rustup.source]
-type = "static-url"
 checksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"
+type = "static-url"
 
 [build.stages.toolchain.rust.rustup.update]
 provider = "static-url"
 stable_only = true
 
-[build.stages.toolchain.rust.rustup.artifacts.linux-amd64]
-url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
-sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
+[build.stages.toolchain.rust.source]
+manifest = "https://static.rust-lang.org/dist/channel-rust-1.98.0.toml"
+type = "rust-channel"
 
 [build.stages.toolchain.rust.update]
-provider = "rust-channel"
 channel = "stable"
+provider = "rust-channel"
 stable_only = true
 
 # --- toolchain.uv ---
 [build.stages.toolchain.uv]
-version = "0.11.31"
-
-[build.stages.toolchain.uv.source]
-type = "github-release"
-repository = "astral-sh/uv"
-tag = "0.11.31"
+version = "0.12.5"
 
 [build.stages.toolchain.uv.artifacts.linux-amd64]
-url = "https://github.com/astral-sh/uv/releases/download/0.11.31/uv-x86_64-unknown-linux-gnu.tar.gz"
-sha256 = "8cc1cd82d434ec565376f98bd938d4b715b5791a80ff2d3aa78821cf85091b4b"
+sha256 = "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.5/uv-x86_64-unknown-linux-gnu.tar.gz"
+
+[build.stages.toolchain.uv.source]
+repository = "astral-sh/uv"
+tag = "0.12.5"
+type = "github-release"
 
 [build.stages.toolchain.uv.update]
 provider = "github-release"
-stable_only = true
 required_platforms = ["linux-amd64"]
+stable_only = true
 
 # --- toolchain.python ---
 [build.stages.toolchain.python]
-version = "3.14.6"
-
-[build.stages.toolchain.python.source]
-type = "uv-python"
-implementation = "cpython"
-
-[build.stages.toolchain.python.update]
-provider = "uv-python"
-implementation = "cpython"
-stable_only = true
+version = "3.14.7"
 
 [build.stages.toolchain.python.override]
-constraint = ">=3.14.6"
 allow_prerelease = false
+constraint = ">=3.14.6"
 scheme = "numeric"
+
+[build.stages.toolchain.python.source]
+implementation = "cpython"
+type = "uv-python"
+
+[build.stages.toolchain.python.update]
+implementation = "cpython"
+provider = "uv-python"
+stable_only = true
 
 # ty is installed via `uv tool install` in setup-python.sh
 # --- toolchain.ty ---
 [build.stages.toolchain.ty]
-version = "0.0.61"
+version = "0.0.73"
 
 [build.stages.toolchain.ty.source]
-type = "pypi"
 package = "ty"
+type = "pypi"
 
 [build.stages.toolchain.ty.update]
 provider = "pypi"
@@ -121,22 +121,22 @@ stable_only = true
 
 # --- rtk-prebuilt.rtk ---
 [build.stages.rtk-prebuilt.rtk]
-version = "v0.43.0"
-
-[build.stages.rtk-prebuilt.rtk.source]
-type = "github-release"
-repository = "rtk-ai/rtk"
-tag = "v0.43.0"
+version = "v0.45.0"
 
 [build.stages.rtk-prebuilt.rtk.artifacts.linux-amd64]
-url = "https://github.com/rtk-ai/rtk/releases/download/v0.43.0/rtk_amd64.deb"
-sha256 = "eb571d784b3269521722ebe2f0dc2409e89da6bd70bf097ddb21e9d4b3b240b9"
+sha256 = "0ba496b2531cd4357edfb2ac2fe2eb19ec99eb9ba46401dffa8459e1cfbd0061"
+url = "https://github.com/rtk-ai/rtk/releases/download/v0.45.0/rtk_amd64.deb"
+
+[build.stages.rtk-prebuilt.rtk.source]
+repository = "rtk-ai/rtk"
+tag = "v0.45.0"
+type = "github-release"
 
 [build.stages.rtk-prebuilt.rtk.update]
 provider = "github-release"
+required_platforms = ["linux-amd64"]
 stable_only = true
 tag_prefix = "v"
-required_platforms = ["linux-amd64"]
 
 # --- fd-prebuilt.fd ---
 [build.stages.fd-prebuilt.fd]
@@ -163,11 +163,11 @@ required_platforms = ["linux-amd64"]
 
 # --- pi-tools.pi ---
 [build.stages.pi-tools.pi]
-version = "0.82.0"
+version = "0.84.2"
 
 [build.stages.pi-tools.pi.source]
-type = "npm"
 package = "@earendil-works/pi-coding-agent"
+type = "npm"
 
 [build.stages.pi-tools.pi.update]
 provider = "npm"
@@ -175,11 +175,11 @@ stable_only = true
 
 # --- openspec-tools.openspec ---
 [build.stages.openspec-tools.openspec]
-version = "1.6.0"
+version = "1.10.0"
 
 [build.stages.openspec-tools.openspec.source]
-type = "npm"
 package = "@fission-ai/openspec"
+type = "npm"
 
 [build.stages.openspec-tools.openspec.update]
 provider = "npm"
@@ -191,11 +191,11 @@ stable_only = true
 
 # --- runtime.oh-my-zsh ---
 [build.stages.runtime.oh-my-zsh]
-revision = "70ad5e3df8f7bed68aa6672029496926e632aedd"
+revision = "d42209f2afa8ec3e6971e5b4695ff27f9d5670d2"
 
 [build.stages.runtime.oh-my-zsh.source]
-type = "git"
 repository = "https://github.com/ohmyzsh/ohmyzsh.git"
+type = "git"
 
 [build.stages.runtime.oh-my-zsh.update]
 provider = "git-ref"
@@ -207,48 +207,56 @@ ref = "master"
 
 # --- pi-extensions.pi-read ---
 [runtime.pi-extensions.pi-read]
-version = "0.2.0"
-
-[runtime.pi-extensions.pi-read.source]
-type = "npm"
-package = "@arcanemachine/pi-read"
+version = "0.2.1"
 
 [runtime.pi-extensions.pi-read.artifacts."0.2.0"]
-url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
 integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="
+url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+
+[runtime.pi-extensions.pi-read.artifacts."0.2.1"]
+integrity = "sha512-Vq1axnAU513JW4oqYkSIO4bQZFTPFwXz6V70n4fPNPplcDqK2bTx23viML88+0CrmjgvmvTVuG1ZruNCShOyiA=="
+url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz"
+
+[runtime.pi-extensions.pi-read.override]
+allow_prerelease = false
+constraint = ">=0.2.0"
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-read.source]
+package = "@arcanemachine/pi-read"
+type = "npm"
 
 [runtime.pi-extensions.pi-read.update]
 provider = "npm"
 stable_only = true
-
-[runtime.pi-extensions.pi-read.override]
-constraint = ">=0.2.0"
-allow_prerelease = false
-scheme = "numeric"
 
 [runtime.pi-extensions.pi-read.validation]
 metadata_file = "package.json"
 
 # --- pi-extensions.pi-codex-usage ---
 [runtime.pi-extensions.pi-codex-usage]
-version = "0.9.1"
-
-[runtime.pi-extensions.pi-codex-usage.source]
-type = "npm"
-package = "@llblab/pi-codex-usage"
+version = "0.9.3"
 
 [runtime.pi-extensions.pi-codex-usage.artifacts."0.9.1"]
-url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz"
 integrity = "sha512-r5iMe57KgKPWSvx5/fKCwT+s/haysaEs40OMdTtisAFR1njppvNAhlgNOBl7+nDm6j88XTee3m0Rp3s/kinIQg=="
+url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz"
+
+[runtime.pi-extensions.pi-codex-usage.artifacts."0.9.3"]
+integrity = "sha512-Oi++J5gtWB4jJ6YhTBOm/uDy8bRePDTOrndJvvbW8HYHqwIfv0vUVdpVAmVH5iUBCZQ3Z0Xi8KCAN8gVuFpo8Q=="
+url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz"
+
+[runtime.pi-extensions.pi-codex-usage.override]
+allow_prerelease = false
+constraint = ">=0.9.0"
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-codex-usage.source]
+package = "@llblab/pi-codex-usage"
+type = "npm"
 
 [runtime.pi-extensions.pi-codex-usage.update]
 provider = "npm"
 stable_only = true
-
-[runtime.pi-extensions.pi-codex-usage.override]
-constraint = ">=0.9.0"
-allow_prerelease = false
-scheme = "numeric"
 
 [runtime.pi-extensions.pi-codex-usage.validation]
 metadata_file = "package.json"
