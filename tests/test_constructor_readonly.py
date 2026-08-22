@@ -1159,6 +1159,55 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
         self.assertIn("No reviewable replacement blocks", out)
         self.assertNotIn("[x]", out)  # no TOML block
 
+    def test_no_candidate_emits_labelled_message_not_empty_fragment(self) -> None:
+        """No candidate → explicit no-replacement-block message, no fragment."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": None, "status": "current",
+                 "kind": "version", "applicable": False, "reason": None},
+            ],
+            "suggest": True,
+            "suggestions": [],
+            "replacement_fragments": "",
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data,
+                          message="all current")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--suggest"], dispatcher=fake,
+        )
+        # Labelled empty-case header + explicit message.
+        self.assertIn("─── replacement blocks", out)
+        self.assertIn("No reviewable replacement blocks available.", out)
+        # No fragment label and no stray TOML table.
+        self.assertNotIn("─── manual replacement blocks", out)
+        self.assertNotIn("[x]", out)
+
+    def test_incomplete_candidate_shows_reason_and_no_fragment(self) -> None:
+        """Incomplete candidate → missing-data reason, no fragment block."""
+        data = {
+            "results": [
+                {"path": "x", "provider": "npm", "current": "1",
+                 "candidate": "2", "status": "incomplete",
+                 "kind": "version", "applicable": False,
+                 "reason": "missing npm integrity"},
+            ],
+            "suggest": True,
+            "suggestions": [],
+            "replacement_fragments": "",
+        }
+        fake = _make_fake(self.m, exit_kind="success", data=data,
+                          message="1 incomplete")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--suggest"], dispatcher=fake,
+        )
+        # The missing-data reason is surfaced in Details.
+        self.assertIn("missing npm integrity", out)
+        # No empty/unlabelled fragment; explicit no-replacement message.
+        self.assertIn("No reviewable replacement blocks available.", out)
+        self.assertNotIn("─── manual replacement blocks", out)
+        self.assertNotIn("[x]", out)
+
     def test_suggest_off_no_suggestion_block(self) -> None:
         data = {
             "results": [
