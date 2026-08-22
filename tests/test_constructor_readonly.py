@@ -1108,6 +1108,7 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
             "suggestions": [
                 {"path": "pkg", "changes": {"version": "2.0"}},
             ],
+            "replacement_fragments": "[pkg]\nversion = \"2.0\"\n",
         }
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
@@ -1130,6 +1131,7 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
             "suggestions": [
                 {"path": "x", "changes": {"version": "2"}},
             ],
+            "replacement_fragments": "[x]\nversion = \"2\"\n",
         }
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
@@ -1188,6 +1190,7 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
             "suggestions": [
                 {"path": "x", "changes": {"version": "2"}},
             ],
+            "replacement_fragments": "[x]\nversion = \"2\"\n",
         }
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
@@ -1620,20 +1623,23 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
 
     def test_suggestions_toml_retains_full_values(self) -> None:
         """TOML suggestions fragment retains unabridged identifiers."""
+        full_revision = "fedcba0987654321fedcba0987654321fedcba09"
         data = {
             "results": [
                 {"path": "x", "provider": "gh",
                  "current": "abc123def4567890abcdef0123456789abcdef01",
-                 "candidate": "fedcba0987654321fedcba0987654321fedcba09",
+                 "candidate": full_revision,
                  "status": "outdated", "kind": "revision",
                  "applicable": True, "reason": None,
                  "published_at": "2025-01-01T00:00:00Z"},
             ],
             "suggest": True,
             "suggestions": [
-                {"path": "x", "changes": {
-                    "revision": "fedcba0987654321fedcba0987654321fedcba09"}},
+                {"path": "x", "changes": {"revision": full_revision}},
             ],
+            "replacement_fragments": (
+                "[x]\nrevision = \"" + full_revision + "\"\n"
+            ),
         }
         fake = _make_fake(self.m, exit_kind="policy", data=data,
                           message="1 outdated")
@@ -1641,7 +1647,7 @@ class TestCheckUpdatesPublishedAt(unittest.TestCase):
             self.m, ["check-updates", "--suggest"], dispatcher=fake,
         )
         # Table abbreviates hex; TOML fragment below retains full value
-        self.assertIn('revision = "fedcba0987654321fedcba0987654321fedcba09"', out)
+        self.assertIn('revision = "' + full_revision + '"', out)
         self.assertIn('fedcb...', out)  # abbreviated in table
 
 

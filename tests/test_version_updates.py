@@ -277,6 +277,91 @@ class TestCheckUpdates(unittest.TestCase):
         self.assertTrue(ty.applicable)
         self.assertEqual(ty.candidate, "0.0.62")
 
+    def test_npm_extension_incomplete_candidate(self):
+        """A Pi-extension candidate missing dist data is INCOMPLETE, not applicable."""
+        from dataclasses import replace
+        from types import MappingProxyType
+        inv = replace(
+            _minimal_inventory(),
+            runtime_pi_extensions=MappingProxyType({
+                "ext": PiExtensionEntry(
+                    version="1.0.0",
+                    source=NpmSource(package="pkg"),
+                    update=NpmUpdate(stable_only=True),
+                    artifacts={"1.0.0": NpmArtifact(
+                        url="https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
+                        integrity="sha512-" + "A" * 86 + "==",
+                    )},
+                    validation=RuntimeValidation(metadata_file="package.json"),
+                    override=OverridePolicy(
+                        constraint=parse_constraint(">=1.0.0"),
+                        allow_prerelease=False, scheme="numeric",
+                    ),
+                ),
+            }),
+        )
+        providers = {
+            "npm": StubProvider(ProviderResult(candidate=UpdateCandidate(
+                value="2.0.0", kind=UpdateKind.VERSION, artifacts={},
+                incomplete_reason="missing npm tarball URL",
+            ))),
+        }
+        results = check_updates(
+            inv, providers=providers, context=self._ctx(), only=("npm",),
+        )
+        ext = [r for r in results if r.path == "runtime.pi-extensions.ext"][0]
+        self.assertEqual(ext.status, UpdateStatus.INCOMPLETE)
+        self.assertFalse(ext.applicable)
+        self.assertEqual(ext.reason, "missing npm tarball URL")
+
+        # Build-stage npm tools ignore dist metadata: their version-only
+        # update remains OUTDATED + applicable.
+        build = [r for r in results if r.path == "build.stages.pi-tools.pi"][0]
+        self.assertEqual(build.status, UpdateStatus.OUTDATED)
+        self.assertTrue(build.applicable)
+
+    def test_npm_extension_incomplete_is_not_suggested(self):
+        """INCOMPLETE extension results never enter replacement blocks."""
+        from dataclasses import replace
+        from types import MappingProxyType
+        inv = replace(
+            _minimal_inventory(),
+            runtime_pi_extensions=MappingProxyType({
+                "ext": PiExtensionEntry(
+                    version="1.0.0",
+                    source=NpmSource(package="pkg"),
+                    update=NpmUpdate(stable_only=True),
+                    artifacts={"1.0.0": NpmArtifact(
+                        url="https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
+                        integrity="sha512-" + "A" * 86 + "==",
+                    )},
+                    validation=RuntimeValidation(metadata_file="package.json"),
+                    override=OverridePolicy(
+                        constraint=parse_constraint(">=1.0.0"),
+                        allow_prerelease=False, scheme="numeric",
+                    ),
+                ),
+            }),
+        )
+        providers = {
+            "npm": StubProvider(ProviderResult(candidate=UpdateCandidate(
+                value="2.0.0", kind=UpdateKind.VERSION, artifacts={},
+                incomplete_reason="missing npm integrity",
+            ))),
+        }
+        results = check_updates(
+            inv, providers=providers, context=self._ctx(), only=("npm",),
+        )
+        from docker.versioning.updates import build_replacement_blocks, serialize_suggestions
+        targets = build_update_targets(inv)
+        ext_result = [r for r in results if r.path == "runtime.pi-extensions.ext"][0]
+        # The INCOMPLETE result is filtered out before any raw block is
+        # extracted or any fragment is emitted.
+        blocks = build_replacement_blocks({}, targets, [ext_result])
+        self.assertEqual(blocks, ())
+        suggestions = serialize_suggestions([ext_result])
+        self.assertEqual(suggestions, [])
+
     def test_skipped_unknown_provider(self):
         inv = _minimal_inventory()
         results = check_updates(inv, providers={}, context=self._ctx())

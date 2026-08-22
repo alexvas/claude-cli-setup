@@ -1496,24 +1496,11 @@ def _render_check_updates_text(data: object) -> str:
     # ── suggestions ──────────────────────────────────────────────
     suggest_flag = bool(data.get("suggest", False))
     if suggest_flag:
-        suggestions = data.get("suggestions")
-        if isinstance(suggestions, list) and suggestions:
-            toml_lines: list[str] = []
-            for entry in suggestions:
-                if not isinstance(entry, dict):
-                    continue
-                epath = entry.get("path")
-                changes = entry.get("changes")
-                if not epath or not isinstance(changes, dict):
-                    continue
-                toml_lines.append(f"[{epath}]")
-                for key, val in sorted(changes.items()):
-                    toml_lines.append(f'{key} = "{val}"')
-                toml_lines.append("")
-            if toml_lines:
-                out.append("")
-                out.append("─── suggestions (review-only — not applied automatically) ───")
-                out.append("\n".join(toml_lines).rstrip("\n"))
+        fragments = data.get("replacement_fragments")
+        if isinstance(fragments, str) and fragments.strip():
+            out.append("")
+            out.append("─── suggestions (review-only — not applied automatically) ───")
+            out.append(fragments.rstrip("\n"))
         else:
             out.append("")
             out.append("─── suggestions ──────────────────────────────────────────────")
@@ -1608,7 +1595,14 @@ def _render(
             "status": result.exit_kind.value,
         }
         if result.data is not None:
-            payload["data"] = result.data
+            data = result.data
+            # Text-only replacement fragments never leak into machine JSON.
+            if command == "check-updates" and isinstance(data, dict):
+                data = {
+                    k: v for k, v in data.items()
+                    if k != "replacement_fragments"
+                }
+            payload["data"] = data
         if result.message is not None:
             payload["message"] = result.message
         out_lines.append(_json.dumps(payload, indent=2, sort_keys=True,

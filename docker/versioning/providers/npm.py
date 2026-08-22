@@ -10,12 +10,14 @@ from urllib.parse import quote
 
 from .base import HttpTransport, ProviderContext, ProviderResult, UpdateProvider
 from ..model import (
+    CandidateArtifact,
     NpmSource,
     NpmUpdate,
     UpdateCandidate,
     UpdateKind,
     UpdateTarget,
 )
+from ..integrity import is_valid_integrity
 from ..semver import SemanticVersion, parse
 
 
@@ -58,6 +60,61 @@ def _latest_any(versions: dict[str, object]) -> Optional[str]:
             best = sv
             best_raw = raw
     return best_raw
+
+
+def _candidate_extension_dist(
+    target: UpdateTarget,
+    package: str,
+    candidate_raw: str,
+    versions: dict[str, object],
+) -> tuple[dict[str, CandidateArtifact], str | None]:
+    """Return ``(artifacts, incomplete_reason)`` for a candidate.
+
+    Only ``runtime.pi-extensions.<name>`` targets receive artifacts: their
+    reviewed inventory stores ``artifacts."<version>" = { url, integrity }``
+    and the loader requires the default ``version`` to have a matching entry.
+    Both values come straight from the registry ``dist`` object.
+
+    When the candidate's ``dist`` is missing, or lacks a non-empty
+    ``tarball`` / ``integrity``, or the integrity fails the inventory SRI
+    check, or the tarball URL fails the shared npm-tarball identity
+    validation (scheme, registry host, package path, and version-suffixed
+    filename), artifacts is empty and a human-readable reason is returned so
+    the coordinator can mark the candidate INCOMPLETE rather than treating a
+    version-only update as a ready replacement.  Build-stage npm tools and
+    non-extension targets return ``({}, None)`` and keep version-only
+    updates.
+    """
+    if not target.path.startswith("runtime.pi-extensions."):
+        return {}, None
+    version_data = versions.get(candidate_raw)
+    if not isinstance(version_data, dict):
+        return {}, "missing npm version metadata"
+    dist = version_data.get("dist")
+    if not isinstance(dist, dict):
+        return {}, "missing npm tarball URL"
+    tarball = dist.get("tarball")
+    if not isinstance(tarball, str) or not tarball.strip():
+        return {}, "missing npm tarball URL"
+    from ..npm_tarball import NpmTarballUrlError, validate
+    try:
+        validate(tarball, package, candidate_raw)
+    except NpmTarballUrlError:
+        return {}, f"invalid npm tarball URL {tarball!r}"
+    integrity = dist.get("integrity")
+    if not isinstance(integrity, str) or not integrity.strip():
+        return {}, "missing npm integrity"
+    if not is_valid_integrity(integrity):
+        return {}, f"invalid npm integrity {integrity!r}"
+    return {
+        candidate_raw: CandidateArtifact(
+            platform=candidate_raw,
+            name=package.rsplit("/", 1)[-1],
+            url=tarball,
+            sha256=None,
+            integrity=integrity,
+        ),
+    }, None
 
 
 class NpmProvider:
@@ -159,11 +216,15 @@ class NpmProvider:
             pass  # fall through to string comparison
 
         # npm_time was already extracted above (before early returns)
+        artifacts, incomplete_reason = _candidate_extension_dist(
+            target, package, candidate_raw, versions,
+        )
         return ProviderResult(
             candidate=UpdateCandidate(
                 value=candidate_raw,
                 kind=UpdateKind.VERSION,
-                artifacts={},
+                artifacts=artifacts,
                 published_at=npm_time,
+                incomplete_reason=incomplete_reason,
             )
         )

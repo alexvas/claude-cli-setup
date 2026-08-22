@@ -265,6 +265,20 @@ def _handle_check_updates(
         suggestion_entries = serialize_suggestions(results)
         if suggestion_entries:
             result_data["suggestions"] = suggestion_entries
+        # Complete, manually replaceable TOML fragments for text mode.  JSON
+        # output keeps the structured leaf-change ``suggestions`` list above;
+        # the facade strips this text-only key from JSON.
+        from docker.versioning.inventory import load_inventory_raw
+        from docker.versioning.updates import (
+            build_update_targets,
+            render_replacement_fragments,
+        )
+        if isinstance(inventory_path, (str, Path)):
+            raw = load_inventory_raw(Path(inventory_path))
+            targets = build_update_targets(inventory)
+            result_data["replacement_fragments"] = render_replacement_fragments(
+                raw, targets, results,
+            )
 
     return CommandResult(
         exit_kind=exit_kind,

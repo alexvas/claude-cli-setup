@@ -20,14 +20,14 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4
 
 ## 2. Canonical Replacement Fragment Rendering
 
-- [ ] 2.1 **RED:** Add exact text-rendering tests for full canonical TOML fragments containing complete target tables, unabridged candidate version/tag/URL/checksum values, retained unchanged fields, and deterministic table/key/platform ordering.
-- [ ] 2.2 **RED:** Add tests that combine all applicable updates for a shared Rust block into one complete fragment and reject duplicate emitted TOML declarations.
-- [ ] 2.3 **RED:** Add round-trip tests that replace each fixture's complete old canonical block with its suggestion fragment and require the ordinary inventory loader to accept the resulting inventory.
-- [ ] 2.4 **RED:** Add multi-platform tests proving an update to one artifact does not remove untouched configured platforms after replacement.
-- [ ] 2.5 **GREEN:** Implement deterministic complete-block TOML serialization from overlaid raw reviewed data; do not reconstruct fragments from defaults-populated typed models.
-- [ ] 2.6 **GREEN:** Replace candidate-only text suggestion rendering with complete grouped replacement fragments while leaving structured JSON suggestions unchanged.
-- [ ] 2.7 **INTROSPECT:** Review TOML quoting, dotted/nested tables, array values, ordering, complete-block boundaries, and the difference between parseable fragments and full validated inventories.
-- [ ] 2.8 **VALIDATE:** Run focused TOML renderer, replacement round-trip, multi-platform, Rust/rustup grouping, text CLI, and JSON-contract suites.
+- [x] 2.1 **RED:** Add exact text-rendering tests for full canonical TOML fragments containing complete target tables, unabridged candidate version/tag/URL/checksum values, retained unchanged fields, and deterministic table/key/platform ordering.
+- [x] 2.2 **RED:** Add tests that combine all applicable updates for a shared Rust block into one complete fragment and reject duplicate emitted TOML declarations.
+- [x] 2.3 **RED:** Add round-trip tests that replace each fixture's complete old canonical block with its suggestion fragment and require the ordinary inventory loader to accept the resulting inventory.
+- [x] 2.4 **RED:** Add multi-platform tests proving an update to one artifact does not remove untouched configured platforms after replacement.
+- [x] 2.5 **GREEN:** Implement deterministic complete-block TOML serialization from overlaid raw reviewed data; do not reconstruct fragments from defaults-populated typed models.
+- [x] 2.6 **GREEN:** Replace candidate-only text suggestion rendering with complete grouped replacement fragments while leaving structured JSON suggestions unchanged.
+- [x] 2.7 **INTROSPECT:** Review TOML quoting, dotted/nested tables, array values, ordering, complete-block boundaries, and the difference between parseable fragments and full validated inventories.
+- [x] 2.8 **VALIDATE:** Run focused TOML renderer, replacement round-trip, multi-platform, Rust/rustup grouping, text CLI, and JSON-contract suites.
 
 ## 3. Visual Replacement Boundaries and Canonical Migration
 

@@ -774,6 +774,10 @@ class CandidateArtifact:
     name: str
     url: str
     sha256: str | None
+    # Subresource-integrity digest (e.g. ``sha512-…``).  Used for npm
+    # Pi-extension tarballs, whose reviewed inventory artifacts carry
+    # ``integrity`` rather than ``sha256``.
+    integrity: str | None = None
 
 
 def _validate_utc_rfc3339(value: str | None) -> str | None:
@@ -849,6 +853,10 @@ class UpdateCandidate:
     digest: str | None = None
     metadata: Mapping[str, str] = ()
     published_at: str | None = None
+    # Set by the npm provider for Pi-extension candidates whose ``dist`` is
+    # missing or invalid; the coordinator classifies such candidates as
+    # INCOMPLETE (not applicable) instead of as ready replacements.
+    incomplete_reason: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "artifacts", MappingProxyType(dict(self.artifacts)))
@@ -905,12 +913,17 @@ class UpdateResult:
             result["digest"] = self.digest
         if self.published_at is not None:
             result["published_at"] = self.published_at
-        # artifacts: plain dict of platform → {url, sha256}
+        # artifacts: plain dict of key → {url, sha256?, integrity?}
         if self.artifacts:
-            result["artifacts"] = {
-                p: {"url": a.url, "sha256": a.sha256}
-                for p, a in sorted(self.artifacts.items())
-            }
+            serialized_artifacts: dict[str, dict[str, object]] = {}
+            for p, a in sorted(self.artifacts.items()):
+                entry: dict[str, object] = {"url": a.url}
+                if a.sha256 is not None:
+                    entry["sha256"] = a.sha256
+                if a.integrity is not None:
+                    entry["integrity"] = a.integrity
+                serialized_artifacts[p] = entry
+            result["artifacts"] = serialized_artifacts
         return result
 
 

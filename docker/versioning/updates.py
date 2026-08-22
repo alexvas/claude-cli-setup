@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -349,6 +350,38 @@ def _target_suffix(owner: str, path: str) -> tuple[str, ...]:
     return target_segments[len(owner_segments):]
 
 
+def _repoint_rust_manifest(
+    block: dict[str, object],
+    suffix: tuple[str, ...],
+    old_version: str,
+    new_version: str,
+) -> None:
+    """Re-point a rust-channel ``source.manifest`` at the candidate version.
+
+    The reviewed rust manifest URL embeds the toolchain version
+    (``channel-rust-<version>.toml``) and the loader rejects a manifest whose
+    URL no longer contains the declared ``version``.  Replace the old version
+    substring in place so the complete replacement block reloads; any
+    custom mirror host/path is preserved.
+    """
+    node: dict[str, object] = block
+    for part in suffix:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            return
+        node = child
+    source = node.get("source")
+    if not isinstance(source, dict):
+        return
+    manifest = source.get("manifest")
+    if not isinstance(manifest, str) or old_version not in manifest:
+        return
+    new_manifest = manifest.replace(old_version, new_version)
+    if new_version not in new_manifest:
+        return
+    _overlay_key_path(block, suffix + ("source", "manifest"), new_manifest)
+
+
 def overlay_candidates(
     raw_block: Mapping[str, object],
     *,
@@ -382,6 +415,10 @@ def overlay_candidates(
             if result.provider == "github-release":
                 _overlay_key_path(
                     block, suffix + ("source", "tag"), result.candidate,
+                )
+            elif result.provider == "rust-channel":
+                _repoint_rust_manifest(
+                    block, suffix, target.current, result.candidate,
                 )
         elif result.kind == UpdateKind.DIGEST_REFRESH:
             if result.artifacts:
@@ -419,6 +456,12 @@ def overlay_candidates(
                         suffix + ("artifacts", platform, "sha256"),
                         art.sha256,
                     )
+                if art.integrity is not None:
+                    _overlay_key_path(
+                        block,
+                        suffix + ("artifacts", platform, "integrity"),
+                        art.integrity,
+                    )
 
     return block
 
@@ -435,15 +478,10 @@ def build_replacement_blocks(
     their targets).  Each block is the complete raw reviewed subtree for
     that owner with every applicable candidate leaf overlaid.
 
-    Known limitations (Phase 1 INTROSPECT findings, deferred to the
-    canonical rendering/round-trip phases):
-
-    * Rust ``source.manifest`` embeds the version and is retained
-      verbatim; a version-only overlay therefore leaves the old version in
-      the manifest URL until rendering reconstructs or documents it.
-    * npm Pi-extension candidates carry only ``version`` (no tarball URL or
-      SRI integrity), so the version-keyed ``artifacts`` table is retained
-      unchanged rather than re-keyed to the candidate version.
+    Version-keyed npm Pi-extension tarball artifacts are re-keyed from the
+    candidate's registry ``dist`` data, and the rust ``source.manifest`` is
+    re-pointed at the candidate version, so every replacement block
+    round-trips through ``load_inventory``.
     """
     applicable: dict[str, UpdateResult] = {}
     for result in results:
@@ -471,6 +509,142 @@ def build_replacement_blocks(
 
 
 # ---------------------------------------------------------------------------
+# Deterministic complete-block TOML rendering
+# ---------------------------------------------------------------------------
+
+_BARE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _format_toml_key(key: str) -> str:
+    """Format a TOML key, quoting it when it is not a bare key."""
+    if _BARE_KEY_RE.match(key):
+        return key
+    return '"' + key.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _format_toml_string(value: str) -> str:
+    """Format a TOML basic string, escaping backslash/quote/control chars."""
+    out: list[str] = []
+    for ch in value:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def _format_toml_value(value: object) -> str:
+    """Format a scalar or scalar-array TOML value."""
+    if isinstance(value, str):
+        return _format_toml_string(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_format_toml_value(v) for v in value) + "]"
+    raise TypeError(
+        f"cannot serialize {type(value).__name__} as TOML: {value!r}"
+    )
+
+
+def _format_table_header(segments: Sequence[str]) -> str:
+    return "[" + ".".join(_format_toml_key(s) for s in segments) + "]"
+
+
+def _emit_toml_table(
+    segments: Sequence[str],
+    table: Mapping[str, object],
+    lines: list[str],
+) -> None:
+    """Append deterministic TOML lines for *table* at *segments*.
+
+    Scalar leaves are emitted before nested tables (TOML closes a table
+    once its first sub-table is opened), and both are sorted by key so the
+    output is byte-stable for identical input data.
+    """
+    scalar_keys = [k for k in sorted(table) if not isinstance(table[k], Mapping)]
+    table_keys = [k for k in sorted(table) if isinstance(table[k], Mapping)]
+
+    if not scalar_keys and not table_keys:
+        lines.append(_format_table_header(segments))
+        return
+
+    if scalar_keys:
+        lines.append(_format_table_header(segments))
+        for key in scalar_keys:
+            lines.append(
+                f"{_format_toml_key(key)} = {_format_toml_value(table[key])}"
+            )
+
+    for key in table_keys:
+        if lines and lines[-1] != "":
+            lines.append("")
+        _emit_toml_table(
+            tuple(segments) + (key,),
+            table[key],  # type: ignore[arg-type]
+            lines,
+        )
+
+
+def serialize_replacement_block(
+    owner: str,
+    block: Mapping[str, object],
+) -> str:
+    """Render one overlaid replacement block as deterministic TOML.
+
+    The fragment uses the owner's full canonical table path, preserves every
+    reviewed leaf (including nested ``source`` / ``update`` / ``artifacts`` /
+    ``override`` / ``validation`` tables), and is built directly from the raw
+    overlaid data — never from defaults-populated typed models.
+
+    Rendering invariants (Phase 2 INTROSPECT):
+
+    * Dotted keys — extension names and version-catalog keys — are quoted;
+      bare ``[A-Za-z0-9_-]+`` keys are not.
+    * Scalar leaves are emitted before nested tables (TOML closes a table
+      once its first sub-table opens), and every level is key-sorted.
+    * Array values render as single-line inline arrays (``["a", "b"]``).
+    * A fragment is a standalone-parseable TOML snippet but is NOT a complete
+      inventory: it omits ``schema`` and sibling blocks, so callers merge it
+      into a full inventory before ``load_inventory`` (see round-trip tests).
+    """
+    lines: list[str] = []
+    _emit_toml_table(path_segments(owner), block, lines)
+    return "\n".join(lines) + "\n"
+
+
+def render_replacement_fragments(
+    raw: Mapping[str, object],
+    targets: Sequence[UpdateTarget],
+    results: Sequence[UpdateResult],
+) -> str:
+    """Render complete replacement TOML fragments for every applicable owner.
+
+    Returns the concatenation of one ``serialize_replacement_block`` output
+    per replaceable block that has at least one applicable candidate, in
+    deterministic inventory order.  Returns ``""`` when nothing is
+    applicable.
+    """
+    blocks = build_replacement_blocks(raw, targets, results)
+    return "\n".join(
+        serialize_replacement_block(owner, block) for owner, block in blocks
+    )
+
+
+# ---------------------------------------------------------------------------
 # Coordination
 # ---------------------------------------------------------------------------
 
@@ -485,6 +659,18 @@ def _classify_candidate(
     Returns (status, kind, applicable, reason).
     """
     kind = UpdateKind.VERSION
+
+    # npm Pi-extension candidates must carry a valid tarball URL and SRI
+    # integrity.  The provider flags missing/invalid ``dist`` data on the
+    # candidate; treat it as INCOMPLETE rather than an applicable
+    # replacement, because a version-only block would fail the loader's
+    # version-keyed artifacts check.
+    if (
+        isinstance(target.update, NpmUpdate)
+        and target.path.startswith("runtime.pi-extensions.")
+        and candidate.incomplete_reason is not None
+    ):
+        return (UpdateStatus.INCOMPLETE, kind, False, candidate.incomplete_reason)
 
     # Detect Docker digest refresh
     if isinstance(target.update, DockerRegistryUpdate):
@@ -829,8 +1015,14 @@ def serialize_suggestions(
         if r.kind == UpdateKind.VERSION and r.provider == "github-release":
             changes["source.tag"] = r.candidate
 
-        # Artifact changes
+        # Artifact changes.  Pi-extension tarball artifacts are text-only:
+        # their version-keyed URL/integrity is applied to the complete
+        # replacement fragment, but the structured JSON leaf-change contract
+        # remains version-only.
+        is_extension = r.path.startswith("runtime.pi-extensions.")
         for platform, art in sorted(r.artifacts.items()):
+            if is_extension:
+                continue
             if art.url:
                 changes[f"artifacts.{platform}.url"] = art.url
             if art.sha256:

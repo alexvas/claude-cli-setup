@@ -29,6 +29,8 @@ def validate(url: str, package: str, version_key: str) -> None:
     where ``<pkg_name>`` is the last path segment of *package* and
     ``<version>`` is *version_key* with any ``+build`` metadata
     stripped (npm tarball filenames never include build metadata).
+    The host must be exactly ``registry.npmjs.org`` (no other host,
+    port, or userinfo) and the scheme must be HTTPS.
 
     Raises :class:`NpmTarballUrlError` for any violation.
     """
@@ -38,6 +40,12 @@ def validate(url: str, package: str, version_key: str) -> None:
     if parsed.scheme != "https":
         raise NpmTarballUrlError(
             f"npm tarball URL must use HTTPS, got {url!r}"
+        )
+
+    # -- host ------------------------------------------------------
+    if parsed.netloc != "registry.npmjs.org":
+        raise NpmTarballUrlError(
+            f"npm tarball URL host must be registry.npmjs.org, got {url!r}"
         )
 
     url_path = parsed.path

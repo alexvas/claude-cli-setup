@@ -17,6 +17,8 @@ import stat as stat_module
 import urllib.request
 from typing import Iterator, Protocol
 
+from docker.versioning.integrity import matches_integrity_format
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Error hierarchy
@@ -629,8 +631,8 @@ def _validate_selected(selected: list[SelectedArtifact]) -> None:
                     f"in {art.integrity!r}"
                 ),
             )
-        # Also validate via the SRI regex from the model layer.
-        if not _get_integrity_re().match(art.integrity):
+        # Also validate via the SRI format regex.
+        if not matches_integrity_format(art.integrity):
             raise ArtifactMaterializationError(
                 reason="integrity",
                 detail=f"integrity does not match SRI format: {art.integrity!r}",
@@ -1356,15 +1358,3 @@ class FileIdentityLockFactory:
         return FileIdentityLock(self._lock_root)
 
 
-# Import the integrity regex from the model layer for validation.
-# (Lazy import to avoid circular dependency at module level.)
-_INTEGRITY_RE: re.Pattern[str] | None = None
-
-
-def _get_integrity_re() -> re.Pattern[str]:
-    global _INTEGRITY_RE
-    if _INTEGRITY_RE is None:
-        from docker.versioning.inventory import _INTEGRITY_RE as _re
-
-        _INTEGRITY_RE = _re
-    return _INTEGRITY_RE

@@ -266,7 +266,7 @@ class TestRawBlockOverlay(unittest.TestCase):
         )
         self.assertEqual(
             rust["source"]["manifest"],
-            "https://static.rust-lang.org/dist/channel-rust-1.0.0.toml",
+            "https://static.rust-lang.org/dist/channel-rust-1.1.0.toml",
         )
 
     def test_python_override_retained_when_version_overlaid(self):

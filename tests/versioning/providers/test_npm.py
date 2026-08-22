@@ -1,6 +1,7 @@
 """npm provider tests with fake HTTP transport."""
 from __future__ import annotations
 
+import base64
 import json
 import unittest
 
@@ -231,3 +232,165 @@ class TestNpmProvider(unittest.TestCase):
         self.assertIsNotNone(result.candidate)
         self.assertEqual("1.0.0", result.candidate.value)
         self.assertEqual("2025-02-01T00:00:00Z", result.candidate.published_at)
+
+    def test_extension_target_receives_tarball_artifact(self) -> None:
+        """Pi-extension targets carry version-keyed tarball url + integrity."""
+        valid_integrity = "sha512-" + base64.b64encode(b"A" * 64).decode()
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {
+                "tarball": "https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.0.tgz",
+                "integrity": valid_integrity,
+            },
+        )
+        result = self.provider.discover(self._ext_target("@scope/pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual("2.0.0", result.candidate.value)
+        self.assertIsNone(result.candidate.incomplete_reason)
+        art = result.candidate.artifacts.get("2.0.0")
+        self.assertIsNotNone(art)
+        self.assertEqual(art.url, "https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.0.tgz")
+        self.assertEqual(art.integrity, valid_integrity)
+        self.assertIsNone(art.sha256)
+
+    def _ext_target(self, package: str = "@scope/pkg") -> UpdateTarget:
+        return UpdateTarget(
+            path="runtime.pi-extensions.pkg-ext",
+            current="1.0.0",
+            source=NpmSource(package=package),
+            update=NpmUpdate(stable_only=True),
+            artifacts={},
+        )
+
+    def _set_extension_candidate(self, package: str, dist) -> None:
+        """Register a registry response with a 1.0.0 current and 2.0.0 candidate.
+
+        ``dist`` may be a dict (merged into the candidate), or ``None`` to
+        omit the ``dist`` table entirely.
+        """
+        from urllib.parse import quote
+        encoded = quote(package, safe="")
+        candidate: dict = {"version": "2.0.0"}
+        if dist is not None:
+            candidate["dist"] = dist
+        self.http.set(
+            "GET", f"https://registry.npmjs.org/{encoded}",
+            status=200,
+            body=json.dumps({
+                "versions": {
+                    "1.0.0": {"version": "1.0.0"},
+                    "2.0.0": candidate,
+                },
+            }).encode(),
+        )
+
+    def test_extension_missing_dist_is_incomplete(self) -> None:
+        self._set_extension_candidate("@scope/pkg", None)
+        result = self.provider.discover(self._ext_target(), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertEqual(result.candidate.incomplete_reason, "missing npm tarball URL")
+
+    def test_extension_missing_tarball_is_incomplete(self) -> None:
+        self._set_extension_candidate("@scope/pkg", {"integrity": "sha512-AAAA"})
+        result = self.provider.discover(self._ext_target(), self._ctx())
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertEqual(result.candidate.incomplete_reason, "missing npm tarball URL")
+
+    def test_extension_missing_integrity_is_incomplete(self) -> None:
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {"tarball": "https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.0.tgz"},
+        )
+        result = self.provider.discover(self._ext_target(), self._ctx())
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertEqual(result.candidate.incomplete_reason, "missing npm integrity")
+
+    def test_extension_invalid_integrity_is_incomplete(self) -> None:
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {
+                "tarball": "https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.0.tgz",
+                "integrity": "sha512-not-valid-base64!!!",
+            },
+        )
+        result = self.provider.discover(self._ext_target(), self._ctx())
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertIn("invalid npm integrity", result.candidate.incomplete_reason)
+
+    def test_extension_integrity_wrong_length_is_incomplete(self) -> None:
+        """Valid SRI syntax but wrong decoded length is still incomplete."""
+        short = "sha512-" + base64.b64encode(b"A" * 3).decode()
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {
+                "tarball": "https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.0.tgz",
+                "integrity": short,
+            },
+        )
+        result = self.provider.discover(self._ext_target(), self._ctx())
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertIn("invalid npm integrity", result.candidate.incomplete_reason)
+
+    def _valid_integrity(self) -> str:
+        return "sha512-" + base64.b64encode(b"A" * 64).decode()
+
+    def test_extension_tarball_url_wrong_package_is_incomplete(self) -> None:
+        """Tarball URL for another package → incomplete, no artifact."""
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {
+                "tarball": "https://registry.npmjs.org/@scope/other/-/other-2.0.0.tgz",
+                "integrity": self._valid_integrity(),
+            },
+        )
+        result = self.provider.discover(self._ext_target("@scope/pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertIn("invalid npm tarball URL", result.candidate.incomplete_reason)
+
+    def test_extension_tarball_url_wrong_version_is_incomplete(self) -> None:
+        """Tarball URL for a different version → incomplete, no artifact."""
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {
+                "tarball": "https://registry.npmjs.org/@scope/pkg/-/pkg-3.0.0.tgz",
+                "integrity": self._valid_integrity(),
+            },
+        )
+        result = self.provider.discover(self._ext_target("@scope/pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertIn("invalid npm tarball URL", result.candidate.incomplete_reason)
+
+    def test_extension_tarball_url_not_registry_is_incomplete(self) -> None:
+        """Tarball URL not on the npm registry host → incomplete, no artifact."""
+        self._set_extension_candidate(
+            "@scope/pkg",
+            {
+                "tarball": "https://example.com/@scope/pkg/-/pkg-2.0.0.tgz",
+                "integrity": self._valid_integrity(),
+            },
+        )
+        result = self.provider.discover(self._ext_target("@scope/pkg"), self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertIn("invalid npm tarball URL", result.candidate.incomplete_reason)
+
+    def test_build_target_gets_no_artifacts(self) -> None:
+        """Build-stage npm tools keep an empty artifact map (version-only)."""
+        self._set_versions("build-pkg", {
+            "1.0.0": {"version": "1.0.0"},
+            "2.0.0": {
+                "version": "2.0.0",
+                "dist": {
+                    "tarball": "https://registry.npmjs.org/build-pkg/-/build-pkg-2.0.0.tgz",
+                    "integrity": "sha512-AAAA",
+                },
+            },
+        })
+        target = self._target(package="build-pkg", version="1.0.0")
+        result = self.provider.discover(target, self._ctx())
+        self.assertIsNotNone(result.candidate)
+        self.assertEqual(result.candidate.artifacts, {})
+        self.assertIsNone(result.candidate.incomplete_reason)

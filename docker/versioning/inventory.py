@@ -363,11 +363,6 @@ def _validate_npm_tarball_url(
 # Runtime extension artifact & validation helpers
 # ---------------------------------------------------------------------------
 
-_INTEGRITY_RE = re.compile(r"^sha(256|384|512)-([A-Za-z0-9+/]+=*)$")
-
-# Expected decoded-byte lengths for each algorithm
-_INTEGRITY_LENGTHS: dict[str, int] = {"256": 32, "384": 48, "512": 64}
-
 
 def _load_extension_artifacts(
     r: _RawReader, ext_path: tuple[str, ...], package: str
@@ -405,29 +400,13 @@ def _load_extension_artifacts(
         url = require_string(r.root, ext_path + ("artifacts", version_key, "url"))
 
         integrity = require_string(r.root, ext_path + ("artifacts", version_key, "integrity"))
-        m = _INTEGRITY_RE.match(integrity)
-        if not m:
-            raise InventoryError(
-                f"{path_dot}.artifacts.{version_key}.integrity: "
-                f"expected sha256-/sha384-/sha512- with base64, got {integrity!r}"
-            )
-
-        algorithm = m.group(1)
-        payload = m.group(2)
+        from .integrity import IntegrityError, validate_integrity
         try:
-            decoded = base64.b64decode(payload, validate=True)
-        except Exception as exc:
+            validate_integrity(integrity)
+        except IntegrityError as exc:
             raise InventoryError(
-                f"{path_dot}.artifacts.{version_key}.integrity: invalid base64 ({exc})"
+                f"{path_dot}.artifacts.{version_key}.integrity: {exc}"
             ) from exc
-
-        expected_len = _INTEGRITY_LENGTHS[algorithm]
-        if len(decoded) != expected_len:
-            raise InventoryError(
-                f"{path_dot}.artifacts.{version_key}.integrity: "
-                f"expected {expected_len} bytes for sha{algorithm}, "
-                f"got {len(decoded)}"
-            )
 
         # Verify the URL is an exact npm registry tarball path:
         #   https://registry.npmjs.org/<package>/-/<pkg_name>-<version>.tgz
@@ -890,10 +869,15 @@ def _validate_required_platforms(
 # Inventory loader
 # ---------------------------------------------------------------------------
 
+def load_inventory_raw(versions_path: Path) -> dict[str, object]:
+    """Load and return the raw TOML inventory mapping without validation."""
+    with versions_path.open("rb") as stream:
+        return tomllib.load(stream)
+
+
 def load_inventory(versions_path: Path) -> Inventory:
     """Load and validate a docker-constructor.toml inventory file."""
-    with versions_path.open("rb") as stream:
-        raw = tomllib.load(stream)
+    raw = load_inventory_raw(versions_path)
     return validate_inventory(raw)
 
 
