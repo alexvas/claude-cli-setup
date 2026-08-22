@@ -526,6 +526,228 @@ class TestColourBehaviour(unittest.TestCase):
         self.assertIsNone(ANSI_RE.search(err))
 
 
+class TestReplacementHeaderColourPolicy(unittest.TestCase):
+    """Phase 2 — replacement headers governed by stdout ``--color`` policy."""
+
+    SUGGEST_DATA = {
+        "results": [
+            {
+                "path": "build.stages.base.node",
+                "provider": "docker-registry",
+                "current": "24-trixie-slim",
+                "candidate": "25-trixie-slim",
+                "status": "outdated",
+                "published_at": "2026-08-22T12:00:00Z",
+                "applicable": True,
+            },
+        ],
+        "suggest": True,
+        "replacement_fragments": (
+            "# --- base.node ---\n"
+            "[build.stages.base.node]\n"
+            'tag = "25-trixie-slim"\n'
+        ),
+    }
+
+    SUGGEST_JSON_DATA = {
+        "results": SUGGEST_DATA["results"],
+        "suggest": True,
+        "suggestions": [
+            {
+                "path": "build.stages.base.node",
+                "changes": {"version": "25-trixie-slim"},
+            },
+        ],
+        "replacement_fragments": SUGGEST_DATA["replacement_fragments"],
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _suggest_fake(self, *, data: object) -> Any:
+        return _make_fake(self.m, exit_kind="success", data=data)
+
+    # ── 2.1 — decoration when policy permits ────────────────────────
+
+    def test_auto_tty_decorates_replacement_header(self) -> None:
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "auto", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=True,
+        )
+        self.assertIn("\x1b[90m# --- base.node ---\x1b[0m", out)
+
+    def test_always_decorates_replacement_header_even_non_tty(self) -> None:
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "always", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=False,
+        )
+        self.assertIn("\x1b[90m# --- base.node ---\x1b[0m", out)
+
+    # ── 2.2 — plain headers when policy disables colour ─────────────
+
+    def test_never_keeps_replacement_header_plain(self) -> None:
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "never", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=True,
+        )
+        self.assertIsNone(ANSI_RE.search(out))
+        self.assertIn("# --- base.node ---", out)
+
+    def test_auto_non_tty_keeps_replacement_header_plain(self) -> None:
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "auto", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=False,
+        )
+        self.assertIsNone(ANSI_RE.search(out))
+        self.assertIn("# --- base.node ---", out)
+
+    # ── 2.3 — JSON stays ANSI-free and keeps structured suggestions ──
+
+    def test_json_suggest_remains_ansi_free_and_keeps_suggestions(self) -> None:
+        fake = self._suggest_fake(data=self.SUGGEST_JSON_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--output", "json", "--color", "always",
+             "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=True,
+        )
+        self.assertIsNone(ANSI_RE.search(out))
+        payload = json.loads(out)
+        data = payload["data"]
+        self.assertNotIn("replacement_fragments", data)
+        self.assertEqual(
+            data["suggestions"],
+            [
+                {
+                    "path": "build.stages.base.node",
+                    "changes": {"version": "25-trixie-slim"},
+                },
+            ],
+        )
+
+    # ── 2.5 — policy matrix, stdout target selection, containment ────
+
+    def test_full_text_colour_policy_matrix(self) -> None:
+        cases = [
+            ("auto", True, True),
+            ("auto", False, False),
+            ("always", True, True),
+            ("always", False, True),
+            ("never", True, False),
+            ("never", False, False),
+        ]
+        for color, stdout_tty, expect_decorated in cases:
+            with self.subTest(color=color, stdout_tty=stdout_tty):
+                fake = self._suggest_fake(data=self.SUGGEST_DATA)
+                _, out, _ = _run(
+                    self.m,
+                    ["--color", color, "check-updates", "--suggest"],
+                    dispatcher=fake,
+                    stdout_isatty=stdout_tty,
+                )
+                if expect_decorated:
+                    self.assertIn(
+                        "\x1b[90m# --- base.node ---\x1b[0m", out,
+                    )
+                else:
+                    self.assertIsNone(ANSI_RE.search(out))
+                    self.assertIn("# --- base.node ---", out)
+
+    def test_decoration_tracks_stdout_tty_not_stderr_tty(self) -> None:
+        # stdout tty, stderr non-tty → decorated
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "auto", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=True,
+            stderr_isatty=False,
+        )
+        self.assertIn("\x1b[90m# --- base.node ---\x1b[0m", out)
+
+        # stdout non-tty, stderr tty → plain
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "auto", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=False,
+            stderr_isatty=True,
+        )
+        self.assertIsNone(ANSI_RE.search(out))
+        self.assertIn("# --- base.node ---", out)
+
+    def test_decorated_report_keeps_label_table_and_body_plain(self) -> None:
+        fake = self._suggest_fake(data=self.SUGGEST_DATA)
+        _, out, _ = _run(
+            self.m,
+            ["--color", "always", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=False,
+        )
+        lines = out.split("\n")
+        label = (
+            "─── manual replacement blocks "
+            "(review-only — not applied automatically) ───"
+        )
+        plain_neighbours = {
+            label,
+            "[build.stages.base.node]",
+            'tag = "25-trixie-slim"',
+        }
+        for line in lines:
+            if line in plain_neighbours:
+                self.assertIsNone(ANSI_RE.search(line), line)
+        self.assertIn("\x1b[90m# --- base.node ---\x1b[0m", lines)
+
+    def test_error_auto_stdout_tty_stderr_non_tty_keeps_header_plain(
+        self,
+    ) -> None:
+        fake = _make_fake(
+            self.m, exit_kind="operational", data=self.SUGGEST_DATA,
+        )
+        _, out, err = _run(
+            self.m,
+            ["--color", "auto", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=True,
+            stderr_isatty=False,
+        )
+        self.assertEqual("", out)
+        self.assertIsNone(ANSI_RE.search(err))
+        self.assertIn("# --- base.node ---", err)
+
+    def test_error_auto_stdout_non_tty_stderr_tty_decorates_header(
+        self,
+    ) -> None:
+        fake = _make_fake(
+            self.m, exit_kind="operational", data=self.SUGGEST_DATA,
+        )
+        _, out, err = _run(
+            self.m,
+            ["--color", "auto", "check-updates", "--suggest"],
+            dispatcher=fake,
+            stdout_isatty=False,
+            stderr_isatty=True,
+        )
+        self.assertEqual("", out)
+        self.assertIn("\x1b[90m# --- base.node ---\x1b[0m", err)
+
+
 class TestVerbosity(unittest.TestCase):
     """--verbose emits debug detail to stderr; semantic output unchanged."""
 

@@ -46,7 +46,7 @@ class TestDefaultSelection(unittest.TestCase):
     def test_exact_default_python(self):
         self.assertEqual(
             self.effective.inventory.stages.toolchain.python.version,
-            "3.14.6",
+            "3.14.7",
         )
 
     def test_not_resolved_to_newest(self):
@@ -84,7 +84,7 @@ class TestDefaultSelection(unittest.TestCase):
     def test_pi_extensions_preserved(self):
         extensions = self.effective.inventory.runtime_pi_extensions
         self.assertIn("pi-read", extensions)
-        self.assertEqual(extensions["pi-read"].version, "0.2.0")
+        self.assertEqual(extensions["pi-read"].version, "0.2.1")
 
 
 # ---------------------------------------------------------------------------
@@ -156,13 +156,13 @@ class TestSourceInventoryImmutability(unittest.TestCase):
 
     def test_effective_differs_from_source(self):
         inv = _default_inventory()
-        eff = apply_overrides(inv, {"build.stages.toolchain.python.version": "3.14.7"})
+        eff = apply_overrides(inv, {"build.stages.toolchain.python.version": "3.14.6"})
         self.assertNotEqual(
             eff.inventory.stages.toolchain.python.version,
             inv.stages.toolchain.python.version,
         )
-        self.assertEqual(eff.inventory.stages.toolchain.python.version, "3.14.7")
-        self.assertEqual(inv.stages.toolchain.python.version, "3.14.6")
+        self.assertEqual(eff.inventory.stages.toolchain.python.version, "3.14.6")
+        self.assertEqual(inv.stages.toolchain.python.version, "3.14.7")
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ class TestEnvironmentMapping(unittest.TestCase):
 
     def test_default_python_env(self):
         env = render_build_environment(self.effective)
-        self.assertEqual(env["PYTHON_VERSION"], "3.14.6")
+        self.assertEqual(env["PYTHON_VERSION"], "3.14.7")
 
     def test_overridden_python_env(self):
         eff = apply_overrides(

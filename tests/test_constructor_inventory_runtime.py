@@ -119,7 +119,7 @@ class TestClosedRuntimeSchema(_TmpMixin, unittest.TestCase):
         """All fields of a fully specified extension are retained after load."""
         inv = load_inventory(self._canonical_path())
         ext = inv.runtime_pi_extensions["pi-read"]
-        self.assertEqual(ext.version, "0.2.0")
+        self.assertEqual(ext.version, "0.2.1")
         self.assertEqual(ext.source.package, "@arcanemachine/pi-read")
         self.assertEqual(ext.source.type, "npm")
         self.assertIsNotNone(ext.artifacts)
@@ -127,7 +127,7 @@ class TestClosedRuntimeSchema(_TmpMixin, unittest.TestCase):
         art = ext.artifacts[ext.version]
         self.assertEqual(
             art.url,
-            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz",
+            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz",
         )
         self.assertTrue(
             art.integrity.startswith("sha512-"),

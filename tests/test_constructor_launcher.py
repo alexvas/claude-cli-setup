@@ -1094,8 +1094,17 @@ class TestRunTransaction(unittest.TestCase):
             ).decode("ascii")
             return f'url = "{url}"\nintegrity = "sha512-{digest}"'
 
+        # The canonical inventory may order ``integrity`` before or after
+        # ``url`` within an artifact table.  Rewrite both orderings into a
+        # single deterministic ``url``-then-``integrity`` form so every
+        # artifact digest matches the injected fetcher bytes.
         content = re.sub(
             r'url = "([^"]+)"\nintegrity = "[^"]+"',
+            replace_integrity,
+            content,
+        )
+        content = re.sub(
+            r'integrity = "[^"]+"\nurl = "([^"]+)"',
             replace_integrity,
             content,
         )
@@ -1675,8 +1684,8 @@ class TestRunTransaction(unittest.TestCase):
         artifact must appear in ``artifact_cache_misses`` and
         none in ``artifact_cache_hits``."""
         expected_ids = self._ids_for_urls([
-            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz",
-            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz",
+            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz",
+            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz",
             "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
         ])
         req = self._request(
@@ -1700,7 +1709,7 @@ class TestRunTransaction(unittest.TestCase):
     def test_dry_run_reports_hit_for_valid_cached_blob(self) -> None:
         """A valid regular private blob whose bytes match the
         declared SRI integrity is reported as a cache hit."""
-        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz"
         artifact_id, _test_bytes = self._make_blob(
             self._artifact_cache_root, url,
         )
@@ -1721,7 +1730,7 @@ class TestRunTransaction(unittest.TestCase):
             "verified blob must not appear in misses",
         )
         expected_miss_ids = self._ids_for_urls([
-            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz",
+            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz",
             "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
         ])
         self.assertEqual(
@@ -1735,7 +1744,7 @@ class TestRunTransaction(unittest.TestCase):
         import base64, hashlib
         from docker.versioning.model import _derive_artifact_id
 
-        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz"
         h = hashlib.sha512(self._artifact_bytes(url))
         integrity = (
             "sha512-"
@@ -2100,7 +2109,7 @@ class TestRunTransaction(unittest.TestCase):
         — never fall back to a plain read that would update atime."""
         from unittest import mock
 
-        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz"
+        url = "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz"
         artifact_id, _test_bytes = self._make_blob(
             self._artifact_cache_root, url,
         )
@@ -2539,7 +2548,7 @@ class TestRunTransaction(unittest.TestCase):
         # Extract pi-read's integrity and assign it to pi-shared.
         pi_read_url = (
             "https://registry.npmjs.org/@arcanemachine/pi-read/"
-            "-/pi-read-0.2.0.tgz"
+            "-/pi-read-0.2.1.tgz"
         )
         shared_integrity_digest = base64.b64encode(
             hashlib.sha512(self._artifact_bytes(pi_read_url)).digest()
@@ -2587,7 +2596,7 @@ class TestRunTransaction(unittest.TestCase):
         pi_shared_entry = ext["pi-shared"]
         self.assertEqual(pi_read_entry.package, "@arcanemachine/pi-read")
         self.assertEqual(pi_shared_entry.package, "@arcanemachine/pi-shared")
-        self.assertEqual(pi_read_entry.version, "0.2.0")
+        self.assertEqual(pi_read_entry.version, "0.2.1")
         self.assertEqual(pi_shared_entry.version, "1.0.0")
         self.assertEqual(pi_read_entry.metadata_file, "package.json")
         self.assertEqual(pi_shared_entry.metadata_file, "shared-package.json")
@@ -3938,8 +3947,15 @@ class TestOrchestrationOrdering(unittest.TestCase):
             ).decode("ascii")
             return f'url = "{url}"\nintegrity = "sha512-{digest}"'
 
+        # Handle both ``url``/``integrity`` key orderings in the
+        # canonical inventory (see TestRunTransaction._make_fixture_toml).
         content = re.sub(
             r'url = "([^"]+)"\nintegrity = "[^"]+"',
+            replace_integrity,
+            content,
+        )
+        content = re.sub(
+            r'integrity = "[^"]+"\nurl = "([^"]+)"',
             replace_integrity,
             content,
         )
@@ -4095,8 +4111,8 @@ class TestOrchestrationOrdering(unittest.TestCase):
         import hashlib
         from docker.versioning.artifact_cache import SelectedArtifact
         _fixture_urls = [
-            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.0.tgz",
-            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz",
+            "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz",
+            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz",
             "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
         ]
         expected = [

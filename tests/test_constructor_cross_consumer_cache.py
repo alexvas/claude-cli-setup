@@ -132,9 +132,17 @@ class TestCrossConsumerCacheRoot(unittest.TestCase):
             ).digest()).decode()
             return f'url = "{url}"\nintegrity = "sha512-{digest}"'
 
-        inventory.write_text(re.sub(
-            r'url = "([^"]+)"\nintegrity = "[^"]+"', replace_integrity, content,
-        ))
+        content = re.sub(
+            r'url = "([^"]+)"\nintegrity = "[^"]+"',
+            replace_integrity,
+            content,
+        )
+        content = re.sub(
+            r'integrity = "[^"]+"\nurl = "([^"]+)"',
+            replace_integrity,
+            content,
+        )
+        inventory.write_text(content)
         return inventory
 
     def _run_consumers(

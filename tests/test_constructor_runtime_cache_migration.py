@@ -107,7 +107,9 @@ class TestLegacyRuntimeArtifactCacheMigration(unittest.TestCase):
                 url = match.group(1)
                 digest = base64.b64encode(hashlib.sha512(("new:" + url).encode()).digest()).decode()
                 return f'url = "{url}"\nintegrity = "sha512-{digest}"'
-            inventory.write_text(re.sub(r'url = "([^"]+)"\nintegrity = "[^"]+"', sri, content))
+            content = re.sub(r'url = "([^"]+)"\nintegrity = "[^"]+"', sri, content)
+            content = re.sub(r'integrity = "[^"]+"\nurl = "([^"]+)"', sri, content)
+            inventory.write_text(content)
 
             fetched: list[str] = []
             def fetch(url: str) -> bytes:

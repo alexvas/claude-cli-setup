@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json as _json
 import os as _os_builtin
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1287,6 +1288,10 @@ _BOLD = "\x1b[1m"
 _RED = "\x1b[31m"
 _YELLOW = "\x1b[33m"
 _GREEN = "\x1b[32m"
+_GRAY = "\x1b[90m"
+
+# Visual replacement-fragment comment header, e.g. ``# --- base.node ---``.
+_REPLACEMENT_HEADER_RE = re.compile(r"# --- \S+ ---")
 
 
 def _use_colour(color: str, *, stream_is_tty: bool) -> bool:
@@ -1302,6 +1307,26 @@ def _coloured(text: str, code: str, color: str, *,
     if not _use_colour(color, stream_is_tty=stream_is_tty):
         return text
     return f"{code}{text}{_RESET}"
+
+
+def _decorate_replacement_headers(text: str, *, enabled: bool) -> str:
+    """Wrap replacement-fragment visual comment headers in SGR 90.
+
+    Only whole lines matching the exact ``# --- <display path> ---``
+    header format are decorated; each decorated header is immediately
+    followed by a reset so no neighbouring text inherits the style.  The
+    manual-replacement section label, TOML table headers, and TOML body
+    are left untouched.  When *enabled* is false, *text* is returned
+    unchanged.
+    """
+    if not enabled:
+        return text
+    return "\n".join(
+        f"{_GRAY}{line}{_RESET}"
+        if _REPLACEMENT_HEADER_RE.fullmatch(line)
+        else line
+        for line in text.split("\n")
+    )
 
 
 def _abbreviate_identifier(value: str) -> str:
@@ -1639,6 +1664,15 @@ def _render(
                 if command == "check-updates"
                 else _render_data_text(result.data)
             )
+            if command == "check-updates":
+                # Replacement-fragment headers are terminal-only visual
+                # boundaries: decorate them according to the target
+                # stream's colour decision (stdout for success/policy,
+                # stderr for errors), never the plain fragment text.
+                rendered = _decorate_replacement_headers(
+                    rendered,
+                    enabled=_use_colour(color, stream_is_tty=tty),
+                )
             if rendered:
                 if result.message:
                     target.append(f"       data: {rendered}")

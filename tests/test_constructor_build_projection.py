@@ -391,7 +391,7 @@ class TestDeterministicProjection(unittest.TestCase):
     def test_different_overrides_differ(self):
         a = resolve_build_projection(self.build, {})
         b = resolve_build_projection(
-            self.build, {"build.stages.toolchain.python.version": "3.14.7"},
+            self.build, {"build.stages.toolchain.python.version": "3.14.6"},
         )
         self.assertNotEqual(a.python_version, b.python_version)
 

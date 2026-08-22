@@ -327,6 +327,16 @@ The version helper SHALL provide `check-updates --suggest` text output containin
 - **AND** the repository canonical inventory SHALL contain the matching visual comment immediately before the corresponding replaceable block
 - **AND** missing, altered, or duplicate visual comments in another inventory SHALL NOT affect inventory parsing, validation, update discovery, target grouping, or suggestion construction
 
+#### Scenario: Colouring a visual replacement boundary in a terminal
+- **WHEN** text-mode `check-updates --suggest` is rendered to stdout and the configured colour policy permits ANSI output
+- **THEN** each visual TOML comment header `# --- <display path> ---` in an emitted replacement fragment SHALL use ANSI SGR 90 (bright black)
+- **AND** the replacement-block section label, TOML table headers, and TOML content SHALL remain uncoloured
+
+#### Scenario: Preserving plain replacement fragments without terminal colour
+- **WHEN** text-mode `check-updates --suggest` is rendered while the configured colour policy disables ANSI output or automatic colour detection finds stdout is not a terminal
+- **THEN** each visual TOML comment header SHALL be emitted without ANSI escape sequences
+- **AND** `--output json` SHALL remain ANSI-free and retain its established structured suggestion data
+
 #### Scenario: Finding no applicable suggestion
 - **WHEN** `--suggest` finds no applicable outdated release
 - **THEN** it SHALL report that no reviewable replacement blocks are available
