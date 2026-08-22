@@ -231,6 +231,7 @@ class TestCanonicalFragmentRendering(unittest.TestCase):
         ]
         text = render_replacement_fragments(raw, targets, results)
         expected = (
+            "# --- toolchain.uv ---\n"
             "[build.stages.toolchain.uv]\n"
             'version = "0.2.0"\n'
             "\n"

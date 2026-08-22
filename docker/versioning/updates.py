@@ -599,6 +599,20 @@ def _emit_toml_table(
         )
 
 
+def display_path(path: str) -> str:
+    """Return the human-facing display path for canonical *path*.
+
+    Strips the leading ``build.stages.`` or ``runtime.`` prefix exactly
+    once, whichever applies.  The full canonical path is retained in the
+    TOML table headers emitted for a replacement block; the shortened form
+    is used only for the visual ``# --- <display path> ---`` header.
+    """
+    for prefix in ("build.stages.", "runtime."):
+        if path.startswith(prefix):
+            return path[len(prefix):]
+    return path
+
+
 def serialize_replacement_block(
     owner: str,
     block: Mapping[str, object],
@@ -620,8 +634,10 @@ def serialize_replacement_block(
     * A fragment is a standalone-parseable TOML snippet but is NOT a complete
       inventory: it omits ``schema`` and sibling blocks, so callers merge it
       into a full inventory before ``load_inventory`` (see round-trip tests).
+    * The first line is the visual boundary ``# --- <display path> ---``
+      (display-only; stripped by ``tomllib`` on reload).
     """
-    lines: list[str] = []
+    lines: list[str] = [f"# --- {display_path(owner)} ---"]
     _emit_toml_table(path_segments(owner), block, lines)
     return "\n".join(lines) + "\n"
 

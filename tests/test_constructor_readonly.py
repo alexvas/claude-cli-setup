@@ -1115,7 +1115,7 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
         _, out, _ = _run(
             self.m, ["check-updates", "--suggest"], dispatcher=fake,
         )
-        self.assertIn("─── suggestions", out)
+        self.assertIn("─── manual replacement blocks", out)
         self.assertIn("review-only", out)
         self.assertIn("[pkg]", out)
         self.assertIn('version = "2.0"', out)
@@ -1156,7 +1156,7 @@ class TestCheckUpdatesSuggestRendering(unittest.TestCase):
         _, out, _ = _run(
             self.m, ["check-updates", "--suggest"], dispatcher=fake,
         )
-        self.assertIn("No applicable outdated candidates", out)
+        self.assertIn("No reviewable replacement blocks", out)
         self.assertNotIn("[x]", out)  # no TOML block
 
     def test_suggest_off_no_suggestion_block(self) -> None:

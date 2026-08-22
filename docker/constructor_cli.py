@@ -1390,7 +1390,7 @@ def _render_check_updates_text(data: object) -> str:
     counts, a per-dependency table with fixed columns
     ``TARGET | PROVIDER | CURR -> NEXT | STATUS | PUBLISHED``, an
     optional ``Details:`` section for non-empty reasons, and an
-    optional review-only TOML suggestions block.
+    optional review-only manual replacement TOML block.
     """
     if not isinstance(data, dict):
         return str(data)
@@ -1499,12 +1499,18 @@ def _render_check_updates_text(data: object) -> str:
         fragments = data.get("replacement_fragments")
         if isinstance(fragments, str) and fragments.strip():
             out.append("")
-            out.append("─── suggestions (review-only — not applied automatically) ───")
+            out.append(
+                "─── manual replacement blocks "
+                "(review-only — not applied automatically) ───"
+            )
             out.append(fragments.rstrip("\n"))
         else:
             out.append("")
-            out.append("─── suggestions ──────────────────────────────────────────────")
-            out.append("No applicable outdated candidates — nothing to suggest.")
+            out.append(
+                "─── replacement blocks "
+                "───────────────────────────────────────"
+            )
+            out.append("No reviewable replacement blocks available.")
 
     return "\n".join(out)
 

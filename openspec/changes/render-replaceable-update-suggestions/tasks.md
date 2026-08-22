@@ -31,13 +31,13 @@ Phase 1 → Phase 2 → Phase 3 → Phase 4
 
 ## 3. Visual Replacement Boundaries and Canonical Migration
 
-- [ ] 3.1 **RED:** Add tests requiring every text replacement fragment to begin with `# --- <display path> ---`, stripping only leading `build.stages.` or `runtime.` once while retaining full canonical TOML table paths.
-- [ ] 3.2 **RED:** Add tests proving missing, altered, or duplicated visual comments in a custom inventory neither alter parsing/validation nor prevent complete-fragment suggestion construction.
-- [ ] 3.3 **RED:** Add semantic scans requiring matching visual headers immediately before every replaceable block in the repository canonical `docker-constructor.toml`.
-- [ ] 3.4 **GREEN:** Add concise visual headers to the canonical inventory and emit the matching headers for every replacement fragment.
-- [ ] 3.5 **GREEN:** Update user-facing suggestion labels to describe manual complete-block replacement rather than candidate-only review values, without implying automatic application.
-- [ ] 3.6 **INTROSPECT:** Verify comments remain visual-only, headers delimit exactly one replacement owner, shortening is display-only, and no absolute source path or machine-local data enters fragments.
-- [ ] 3.7 **VALIDATE:** Run focused canonical-inventory, custom-inventory, renderer, CLI display, and semantic-scan suites.
+- [x] 3.1 **RED:** Add tests requiring every text replacement fragment to begin with `# --- <display path> ---`, stripping only leading `build.stages.` or `runtime.` once while retaining full canonical TOML table paths.
+- [x] 3.2 **RED:** Add tests proving missing, altered, or duplicated visual comments in a custom inventory neither alter parsing/validation nor prevent complete-fragment suggestion construction.
+- [x] 3.3 **RED:** Add semantic scans requiring matching visual headers immediately before every replaceable block in the repository canonical `docker-constructor.toml`.
+- [x] 3.4 **GREEN:** Add concise visual headers to the canonical inventory and emit the matching headers for every replacement fragment.
+- [x] 3.5 **GREEN:** Update user-facing suggestion labels to describe manual complete-block replacement rather than candidate-only review values, without implying automatic application.
+- [x] 3.6 **INTROSPECT:** Verify comments remain visual-only, headers delimit exactly one replacement owner, shortening is display-only, and no absolute source path or machine-local data enters fragments.
+- [x] 3.7 **VALIDATE:** Run focused canonical-inventory, custom-inventory, renderer, CLI display, and semantic-scan suites.
 
 ## 4. Read-Only and Documentation Closure
 

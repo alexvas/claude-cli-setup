@@ -19,6 +19,7 @@ schema = 1
 # Base image
 # ---------------------------------------------------------------------------
 
+# --- base.node ---
 [build.stages.base.node]
 tag = "24.18.0-trixie-slim"
 # Digest of node:24.18.0-trixie-slim resolved from Docker Hub manifest.
@@ -38,6 +39,7 @@ track = "tag-digest"
 # Toolchain (builder-only, not copied into runtime)
 # ---------------------------------------------------------------------------
 
+# --- toolchain.rust ---
 [build.stages.toolchain.rust]
 version = "1.97.1"
 profile = "minimal"
@@ -64,6 +66,7 @@ provider = "rust-channel"
 channel = "stable"
 stable_only = true
 
+# --- toolchain.uv ---
 [build.stages.toolchain.uv]
 version = "0.11.31"
 
@@ -81,6 +84,7 @@ provider = "github-release"
 stable_only = true
 required_platforms = ["linux-amd64"]
 
+# --- toolchain.python ---
 [build.stages.toolchain.python]
 version = "3.14.6"
 
@@ -99,6 +103,7 @@ allow_prerelease = false
 scheme = "numeric"
 
 # ty is installed via `uv tool install` in setup-python.sh
+# --- toolchain.ty ---
 [build.stages.toolchain.ty]
 version = "0.0.61"
 
@@ -114,6 +119,7 @@ stable_only = true
 # Prebuilt Rust tools — independent stages from base
 # ---------------------------------------------------------------------------
 
+# --- rtk-prebuilt.rtk ---
 [build.stages.rtk-prebuilt.rtk]
 version = "v0.43.0"
 
@@ -132,6 +138,7 @@ stable_only = true
 tag_prefix = "v"
 required_platforms = ["linux-amd64"]
 
+# --- fd-prebuilt.fd ---
 [build.stages.fd-prebuilt.fd]
 version = "v10.4.2"
 
@@ -154,6 +161,7 @@ required_platforms = ["linux-amd64"]
 # Node tools — independent cache scopes
 # ---------------------------------------------------------------------------
 
+# --- pi-tools.pi ---
 [build.stages.pi-tools.pi]
 version = "0.82.0"
 
@@ -165,6 +173,7 @@ package = "@earendil-works/pi-coding-agent"
 provider = "npm"
 stable_only = true
 
+# --- openspec-tools.openspec ---
 [build.stages.openspec-tools.openspec]
 version = "1.6.0"
 
@@ -180,6 +189,7 @@ stable_only = true
 # Runtime home artifacts
 # ---------------------------------------------------------------------------
 
+# --- runtime.oh-my-zsh ---
 [build.stages.runtime.oh-my-zsh]
 revision = "70ad5e3df8f7bed68aa6672029496926e632aedd"
 
@@ -195,6 +205,7 @@ ref = "master"
 # Pi extensions — installed at runtime by the entrypoint via docker.runtime_installer
 # ---------------------------------------------------------------------------
 
+# --- pi-extensions.pi-read ---
 [runtime.pi-extensions.pi-read]
 version = "0.2.0"
 
@@ -218,6 +229,7 @@ scheme = "numeric"
 [runtime.pi-extensions.pi-read.validation]
 metadata_file = "package.json"
 
+# --- pi-extensions.pi-codex-usage ---
 [runtime.pi-extensions.pi-codex-usage]
 version = "0.9.1"
 
@@ -241,6 +253,7 @@ scheme = "numeric"
 [runtime.pi-extensions.pi-codex-usage.validation]
 metadata_file = "package.json"
 
+# --- pi-extensions.pi-proxy ---
 [runtime.pi-extensions.pi-proxy]
 version = "1.0.0"
 
