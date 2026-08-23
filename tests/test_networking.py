@@ -39,6 +39,8 @@ from docker.networking import (
     probe_gateway,
 )
 
+_NETWORKING_SOURCE = Path(__file__).resolve().parents[1] / "docker" / "networking.py"
+
 
 # ---------------------------------------------------------------------------
 # In-memory fakes
@@ -676,7 +678,7 @@ class TestImportBoundary(unittest.TestCase):
 
     def test_module_does_not_import_argparse(self):
         import ast
-        with open("docker/networking.py") as f:
+        with open(_NETWORKING_SOURCE) as f:
             tree = ast.parse(f.read())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -690,7 +692,7 @@ class TestImportBoundary(unittest.TestCase):
 
     def test_module_does_not_import_facade_or_orchestration(self):
         import ast
-        with open("docker/networking.py") as f:
+        with open(_NETWORKING_SOURCE) as f:
             tree = ast.parse(f.read())
         forbidden_modules = {"docker.versions", "docker.build_wrapper",
                              "docker.launch_pi", "docker.cli"}
@@ -701,7 +703,7 @@ class TestImportBoundary(unittest.TestCase):
 
     def test_module_does_not_declare_argparse_parser(self):
         import ast
-        with open("docker/networking.py") as f:
+        with open(_NETWORKING_SOURCE) as f:
             tree = ast.parse(f.read())
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
