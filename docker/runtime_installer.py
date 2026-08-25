@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import os
 import stat
+import sys
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -1263,7 +1264,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         entries = read_projection(_FIXED_PROJECTION)
     except ProjectionError as exc:
-        import sys
         print(f"ERROR: {exc}", file=sys.stderr)
         return _EXIT_PROJECTION
 
@@ -1281,7 +1281,6 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
         )
     except InstallError as exc:
-        import sys
         print(f"ERROR: {exc}", file=sys.stderr)
         return _EXIT_INSTALL
 
@@ -1301,7 +1300,6 @@ def main(argv: list[str] | None = None) -> int:
         return _EXIT_OK if result.ok else _EXIT_INSTALL
 
     if not result.ok:
-        import sys
         for r in result.results:
             if r.status == InstallStatus.FAILED:
                 print(f"FAILED: {r.detail}", file=sys.stderr)

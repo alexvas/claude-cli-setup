@@ -23,8 +23,19 @@ class ProcessResult:
     stderr: str
 
 
+class ProcessOutcome(Protocol):
+    @property
+    def return_code(self) -> int: ...
+
+    @property
+    def stdout(self) -> str: ...
+
+    @property
+    def stderr(self) -> str: ...
+
+
 class ProcessRunner(Protocol):
-    def run(self, argv: Sequence[str]) -> ProcessResult:
+    def run(self, argv: Sequence[str]) -> ProcessOutcome:
         """Execute *argv* and return the outcome.
 
         May raise ``TimeoutError`` (converted to return code 124) or

@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 from docker.versioning.dispatch_types import CommandResult, ExitKind
+from docker.versioning.model import Inventory
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -55,7 +56,7 @@ def _parse_overrides(raw: Sequence[str]) -> dict[str, str]:
 
 
 def _handle_validate(
-    inventory: object, command_args: Mapping[str, object],
+    inventory: Inventory, command_args: Mapping[str, Any],
 ) -> CommandResult:
     """Validate — inventory is already loaded and valid, so this is a
     no-op that confirms success."""
@@ -67,7 +68,7 @@ def _handle_validate(
 
 
 def _handle_show(
-    inventory: object, command_args: Mapping[str, object],
+    inventory: Inventory, command_args: Mapping[str, Any],
 ) -> CommandResult:
     """Display reviewed inventory (source or effective projection).
 
@@ -132,6 +133,8 @@ def _handle_show(
     # ── source mode: plain-data dump of reviewed inventory ──────────
     if not effective:
         plain = to_plain_data(inventory)
+        if not isinstance(plain, dict):
+            raise TypeError("inventory must serialize to a mapping")
         if scope == "build":
             filtered = {k: v for k, v in plain.items()
                         if k in ("schema", "build", "cache")}
@@ -184,7 +187,7 @@ def _handle_show(
 
 
 def _handle_check_updates(
-    inventory: object, command_args: Mapping[str, object],
+    inventory: Inventory, command_args: Mapping[str, Any],
 ) -> CommandResult:
     """Check configured providers for updates.
 
@@ -286,7 +289,9 @@ def _handle_check_updates(
     )
 
 
-_HANDLERS: dict[str, Callable[[object, Mapping[str, object]], CommandResult]] = {
+_HANDLERS: dict[
+    str, Callable[[Inventory, Mapping[str, Any]], CommandResult]
+] = {
     "validate": _handle_validate,
     "show": _handle_show,
     "check-updates": _handle_check_updates,
@@ -302,7 +307,7 @@ def dispatch(
     inventory_path: Path,
     command: str,
     *,
-    command_args: Mapping[str, object],
+    command_args: Mapping[str, Any],
 ) -> CommandResult:
     """Load inventory once, validate, and route to the appropriate handler.
 

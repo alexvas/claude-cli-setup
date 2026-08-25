@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_root"
+
+if ! command -v ty >/dev/null 2>&1; then
+    echo "error: ty is required; run this check in the project image" >&2
+    exit 127
+fi
+
+exec ty check --output-format concise

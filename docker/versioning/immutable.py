@@ -8,6 +8,7 @@ recursive immutability.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
 
 
@@ -27,9 +28,9 @@ def deep_freeze(value: object) -> object:
         return tuple(deep_freeze(v) for v in value)
     if isinstance(value, set):
         return frozenset(deep_freeze(v) for v in value)
-    if isinstance(value, (dict, MappingProxyType)) or hasattr(value, "items"):
+    if isinstance(value, Mapping):
         # Always rebuild — proxies may contain mutable children
         return MappingProxyType(
-            {k: deep_freeze(v) for k, v in dict(value).items()}
+            {k: deep_freeze(v) for k, v in value.items()}
         )
     return value

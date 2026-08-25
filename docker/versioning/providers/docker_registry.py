@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Mapping
 
 from .base import ProviderContext, ProviderResult
 from ..model import (

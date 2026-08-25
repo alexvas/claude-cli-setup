@@ -50,7 +50,7 @@ class HttpTransport(Protocol):
         method: str,
         url: str,
         *,
-        headers: Mapping[str, str] = (),
+        headers: Mapping[str, str] = MappingProxyType({}),
         nocache: bool = False,
     ) -> HttpResponse:
         ...

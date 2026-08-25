@@ -107,8 +107,22 @@ class ProcessResult:
     stderr: str
 
 
+class ProcessOutcome(Protocol):
+    @property
+    def argv(self) -> tuple[str, ...]: ...
+
+    @property
+    def return_code(self) -> int: ...
+
+    @property
+    def stdout(self) -> str: ...
+
+    @property
+    def stderr(self) -> str: ...
+
+
 class ProcessRunner(Protocol):
-    def run(self, argv: Sequence[str]) -> ProcessResult:
+    def run(self, argv: Sequence[str]) -> ProcessOutcome:
         """Execute *argv* and return the outcome."""
         ...
 
@@ -236,12 +250,12 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
             errors=(f"cannot read runtime projection: {exc}",),
         )
 
-    def _exec(cmd: tuple[str, ...]) -> ProcessResult:
+    def _exec(cmd: tuple[str, ...]) -> ProcessOutcome:
         """Run ``docker exec <container> ...``."""
         return runner.run(("docker", "exec", container, *cmd))
 
     def _add(key: str, ok: bool, detail: str,
-             result: ProcessResult | None = None) -> None:
+             result: ProcessOutcome | None = None) -> None:
         checks.append(RuntimeCheck(
             key=key, ok=ok, detail=detail,
             command=result.argv if result is not None else None,

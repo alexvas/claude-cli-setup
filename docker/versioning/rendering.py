@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, TextIO
 
 from .effective import (
     EffectiveBuildProjection,
@@ -18,6 +18,9 @@ from .effective import (
     to_plain_data,
 )
 from .errors import EffectiveConfigError
+
+if TYPE_CHECKING:
+    from .artifact_cache import SelectedArtifact, VerifiedCacheBlob
 
 # ---------------------------------------------------------------------------
 # Immutable rendering input models (Stage 6)
@@ -1132,16 +1135,33 @@ def _toml_key(k: str) -> str:
     return f'"{escaped}"'
 
 
-def _write_toml(fh: object, data: object, *, _prefix: str = "") -> None:
+def _toml_table(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise TypeError("TOML table must be a mapping")
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise TypeError("TOML table keys must be strings")
+        result[key] = item
+    return result
+
+
+def _toml_array(value: object) -> list[object]:
+    if not isinstance(value, list):
+        raise TypeError("TOML array must be a list")
+    return list(value)
+
+
+def _write_toml(fh: TextIO, data: object, *, _prefix: str = "") -> None:
     """Write plain-data *data* as deterministically-ordered TOML.
 
     Uses dotted-key table headers (``[build.stages.toolchain.rust]``) for
     sections and inline ``key = value`` for leaves and small tables.
     """
     if isinstance(data, dict):
-        _write_dict(fh, data, _prefix)
+        _write_dict(fh, _toml_table(data), _prefix)
     elif isinstance(data, list):
-        _write_array(fh, data, _prefix)
+        _write_array(fh, _toml_array(data), _prefix)
     elif isinstance(data, str):
         fh.write(f"{_toml_str(data)}\n")
     elif isinstance(data, bool):
@@ -1154,7 +1174,7 @@ def _write_toml(fh: object, data: object, *, _prefix: str = "") -> None:
         fh.write(f"{_toml_str(str(data))}\n")
 
 
-def _write_dict(fh: object, data: dict, prefix: str) -> None:
+def _write_dict(fh: TextIO, data: dict[str, object], prefix: str) -> None:
     keys = sorted(data.keys(), key=str)
     # Scalars first, then arrays, then nested dicts.
     # TOML requires that bare ``key = value`` lines appear before
@@ -1163,18 +1183,19 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
     # because a plain ``key = [...]`` after a ``[subsection]`` header
     # would be captured into that subsection.
     scalars: list[tuple[str, object]] = []
-    nested: list[tuple[str, object]] = []
-    arrays: list[tuple[str, object]] = []
+    nested: list[tuple[str, dict[str, object]]] = []
+    arrays: list[tuple[str, list[object]]] = []
 
     for k in keys:
         v = data[k]
         if isinstance(v, dict):
-            if _is_leaf_dict(v):
-                scalars.append((k, v))  # inline table counts as scalar
+            table = _toml_table(v)
+            if _is_leaf_dict(table):
+                scalars.append((k, table))  # inline table counts as scalar
             else:
-                nested.append((k, v))
+                nested.append((k, table))
         elif isinstance(v, list):
-            arrays.append((k, v))
+            arrays.append((k, _toml_array(v)))
         else:
             scalars.append((k, v))
 
@@ -1188,6 +1209,8 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
                 sv = v[sk]
                 if sv is None:
                     continue
+                if not isinstance(sk, str):
+                    raise TypeError("TOML table keys must be strings")
                 parts.append(f"{_toml_key(sk)} = {_toml_value(sv)}")
             if parts:
                 fh.write(f"{qk} = {{ ")
@@ -1214,7 +1237,7 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
         if all(isinstance(i, dict) for i in v):
             for item in v:
                 fh.write(f"\n[[{full}]]\n")
-                _write_inline_dict(fh, item)
+                _write_inline_dict(fh, _toml_table(item))
         else:
             fh.write(f"{qk} = [")
             fh.write(", ".join(_toml_value(i) for i in v))
@@ -1228,7 +1251,7 @@ def _write_dict(fh: object, data: dict, prefix: str) -> None:
         _write_dict(fh, v, full)
 
 
-def _is_leaf_dict(d: dict) -> bool:
+def _is_leaf_dict(d: dict[str, object]) -> bool:
     """Return True if *d* contains only scalar/string values (no nested dicts/lists)."""
     for v in d.values():
         if isinstance(v, (dict, list)):
@@ -1236,21 +1259,21 @@ def _is_leaf_dict(d: dict) -> bool:
     return True
 
 
-def _write_inline_dict(fh: object, data: dict) -> None:
+def _write_inline_dict(fh: TextIO, data: dict[str, object]) -> None:
     """Write an inline key=value dict for array-of-tables entries."""
     for k in sorted(data.keys(), key=str):
         v = data[k]
         fh.write(f"{k} = {_toml_value(v)}\n")
 
 
-def _write_array(fh: object, data: list, prefix: str) -> None:
+def _write_array(fh: TextIO, data: list[object], prefix: str) -> None:
     if not prefix:
         fh.write("[]\n")
         return
     if all(isinstance(i, dict) for i in data):
         for item in data:
             fh.write(f"\n[[{prefix}]]\n")
-            _write_inline_dict(fh, item)
+            _write_inline_dict(fh, _toml_table(item))
     else:
         fh.write(f"{prefix} = [")
         fh.write(", ".join(_toml_value(i) for i in data))
@@ -1361,6 +1384,8 @@ def validate_effective_build(data: dict[str, object]):
         raise ValueError("node section missing 'image'")
 
     rust = data["rust"]
+    if not isinstance(rust, dict):
+        raise ValueError("rust section must be a dict")
     for key in ("version", "profile", "components", "rustup"):
         if key not in rust:
             raise ValueError(f"rust section missing {key!r}")

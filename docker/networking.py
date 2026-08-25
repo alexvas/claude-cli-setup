@@ -338,7 +338,7 @@ class HostProbeServer:
                 self.end_headers()
                 self.wfile.write(token.encode())
 
-            def log_message(self, _format: str, *args: object) -> None:
+            def log_message(self, format: str, *args: object) -> None:
                 pass  # suppress access-log noise
 
         self._httpd = http.server.ThreadingHTTPServer(("0.0.0.0", 0), _Handler)

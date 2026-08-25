@@ -9,7 +9,7 @@ import json
 import tomllib
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from .constraints import Constraint, ConstraintClause, NumericVersion, parse_numeric_version
 from .errors import (
@@ -82,7 +82,9 @@ def _apply_python_override(
     return dataclasses.replace(inventory, stages=new_stages)
 
 
-SUPPORTED_OVERRIDES: Mapping[str, object] = {
+SUPPORTED_OVERRIDES: Mapping[
+    str, Callable[[Inventory, str, str], Inventory]
+] = {
     "build.stages.toolchain.python.version": _apply_python_override,
 }
 
@@ -299,7 +301,7 @@ def _is_inventory(value: object) -> bool:
     return dataclasses.is_dataclass(value) and type(value).__name__ == "Inventory"
 
 
-def to_plain_data(value: object) -> object:
+def to_plain_data(value: Any) -> object:
     """Convert a frozen dataclass graph to JSON-serializable plain data.
 
     Uses TOML-style names (e.g. ``rtk-prebuilt`` instead of ``rtk_prebuilt``).
@@ -326,12 +328,18 @@ def to_plain_data(value: object) -> object:
             v = getattr(value, field.name)
             if field.name == "runtime_pi_extensions":
                 runtime = result.setdefault("runtime", {})
+                if not isinstance(runtime, dict):
+                    raise TypeError("runtime projection must be a mapping")
                 runtime["pi-extensions"] = to_plain_data(v)
             elif field.name == "host_access":
                 runtime = result.setdefault("runtime", {})
+                if not isinstance(runtime, dict):
+                    raise TypeError("runtime projection must be a mapping")
                 runtime["host-access"] = to_plain_data(v)
             elif field.name == "stages":
                 build = result.setdefault("build", {})
+                if not isinstance(build, dict):
+                    raise TypeError("build projection must be a mapping")
                 build["stages"] = to_plain_data(v)
             else:
                 result[_toml_name(field.name)] = to_plain_data(v)
@@ -349,7 +357,10 @@ def to_plain_data(value: object) -> object:
                 result[_toml_name(field.name)] = {"artifacts": to_plain_data(v)}
             elif field.name in ("rustup_source", "rustup_update"):
                 target_key = "source" if field.name == "rustup_source" else "update"
-                result.setdefault("rustup", {})[target_key] = to_plain_data(v)
+                rustup = result.setdefault("rustup", {})
+                if not isinstance(rustup, dict):
+                    raise TypeError("rustup projection must be a mapping")
+                rustup[target_key] = to_plain_data(v)
             else:
                 result[_toml_name(field.name)] = to_plain_data(v)
         return result
@@ -360,7 +371,10 @@ def serialize_effective_inventory(
     effective: EffectiveConfiguration,
 ) -> dict[str, object]:
     """Return canonical plain-data representation of the effective inventory."""
-    return to_plain_data(effective.inventory)  # type: ignore[return-value]
+    result = to_plain_data(effective.inventory)
+    if not isinstance(result, dict):
+        raise TypeError("effective inventory must serialize to a mapping")
+    return result
 
 
 def get_path(

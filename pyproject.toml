@@ -1,0 +1,10 @@
+[project]
+name = "docker-constructor"
+version = "0.0.0"
+requires-python = ">=3.14"
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.ty.src]
+include = ["docker"]

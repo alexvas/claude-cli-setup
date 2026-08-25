@@ -259,12 +259,16 @@ def _inspect_entry(path: Path) -> None:
 def _create_and_secure(path: Path) -> None:
     """Create (if missing) and secure a single directory to ``0700``."""
     parent_fd = _open_parent_fd(path, create_missing=True)
+    if parent_fd is None:
+        raise CacheStorageError(f"cannot create parent directory for {path}")
     try:
         fd = _open_entry_no_follow(parent_fd, path)
         if fd is None:
             name = os.path.basename(os.path.abspath(path))
             os.mkdir(name, 0o700, dir_fd=parent_fd)
             fd = _open_entry_no_follow(parent_fd, path)
+        if fd is None:
+            raise CacheStorageError(f"cannot open cache directory {path}")
         try:
             os.fchmod(fd, 0o700)
         except (OSError, PermissionError) as exc:

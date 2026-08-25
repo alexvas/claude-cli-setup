@@ -24,17 +24,23 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Protocol, Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, Mapping, Sequence
 
 import docker.versioning.artifact_cache as artifact_cache
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.model import _derive_artifact_id
 from docker.versioning.rendering import (
+    RunHostAccess,
     RunRenderInputs,
     plan_artifact_mounts,
     plan_dry_run_artifact_mounts,
 )
 from types import MappingProxyType
+
+if TYPE_CHECKING:
+    from docker.versioning.effective import RuntimeProjectionHandle
+    from docker.versioning.model import EffectiveRuntimeProjection
 
 
 class ExecutionMode(enum.Enum):
@@ -133,10 +139,10 @@ class ProjectionFactory(Protocol):
 
     def __call__(
         self,
-        projection: object,  # EffectiveRuntimeProjection (lazy import)
+        projection: EffectiveRuntimeProjection,
         *,
         parent_dir: str,
-    ) -> object:  # RuntimeProjectionHandle
+    ) -> RuntimeProjectionHandle:
         ...
 
 
@@ -328,7 +334,7 @@ class ProcessRunner:
     :class:`ProcessResult` instead of invoking a real subprocess.
     """
 
-    def run(self, argv: list[str], *,
+    def run(self, argv: Sequence[str], *,
             mode: ExecutionMode = ExecutionMode.CAPTURED) -> ProcessResult:
         """Execute *argv* and return a structured result.
 
@@ -337,11 +343,11 @@ class ProcessRunner:
         import subprocess
         if mode is ExecutionMode.CAPTURED:
             proc = subprocess.run(
-                argv, text=True, capture_output=True, check=False,
+                list(argv), text=True, capture_output=True, check=False,
             )
         else:
             proc = subprocess.run(
-                argv, text=True, capture_output=False,
+                list(argv), text=True, capture_output=False,
                 stdin=None, stdout=None, stderr=None, check=False,
             )
         return ProcessResult(
@@ -477,7 +483,7 @@ class RunResult:
 def _resolve_host_access(
     policy: object | None,
     inventory_path: Path,
-) -> "RunHostAccess | None":
+) -> RunHostAccess | None:
     """Resolve host-access rendering inputs from reviewed policy
     and the local companion.
 
@@ -492,7 +498,6 @@ def _resolve_host_access(
     diagnostic.
     """
     from docker.versioning.inventory import load_local_config_for_inventory
-    from docker.versioning.rendering import RunHostAccess
 
     if policy is None:
         return RunHostAccess.disabled()
@@ -555,7 +560,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         resolve_corporate_trust_bundle_path,
         resolve_local_corporate_settings,
     )
-    from docker.versioning.rendering import RunHostAccess, render_run_vector
+    from docker.versioning.rendering import render_run_vector
 
     # ── Step 1: load inventory ──────────────────────────────
     try:
@@ -834,14 +839,16 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         # Do NOT pre-create a file — create_runtime_projection
         # uses atomic hard-link promotion with no-clobber
         # semantics.
-        def _real_factory(projection: object, *, parent_dir: str) -> object:
+        def _real_factory(
+            projection: EffectiveRuntimeProjection, *, parent_dir: str
+        ) -> RuntimeProjectionHandle:
             # Keep generated projections checkout-local even when persistent
             # cache roots are redirected.  Supply a unique non-existent path
             # so create_runtime_projection retains atomic no-clobber publish.
             import uuid
             from docker.versioning.effective import Filesystem
             return create_runtime_projection(
-                projection,  # type: ignore[arg-type]
+                projection,
                 host_path=os.path.join(parent_dir, f"runtime-{uuid.uuid4().hex}.toml"),
                 _fs=Filesystem(repo_runtime_dir=parent_dir),
             )

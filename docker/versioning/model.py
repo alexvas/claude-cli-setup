@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import base64
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Protocol
 
 from .constraints import Constraint, NumericVersion  # re-export for convenience
 
@@ -851,7 +851,7 @@ class UpdateCandidate:
     kind: UpdateKind
     artifacts: Mapping[str, CandidateArtifact]
     digest: str | None = None
-    metadata: Mapping[str, str] = ()
+    metadata: Mapping[str, str] = field(default_factory=dict)
     published_at: str | None = None
     # Set by the npm provider for Pi-extension candidates whose ``dist`` is
     # missing or invalid; the coordinator classifies such candidates as
@@ -927,13 +927,18 @@ class UpdateResult:
         return result
 
 
+class UpdateMetadata(Protocol):
+    @property
+    def provider(self) -> str: ...
+
+
 @dataclass(frozen=True)
 class UpdateTarget:
     """A single entry ready for update discovery."""
     path: str
     current: str
     source: object  # SourceMetadata subclass
-    update: object  # UpdateMetadata subclass
+    update: UpdateMetadata
     artifacts: Mapping[str, ArtifactEntry]
     override: Optional[OverridePolicy] = None
 

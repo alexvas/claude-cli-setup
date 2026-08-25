@@ -24,7 +24,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Callable, Mapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, TypedDict
 
 from docker.networking import (
     DockerMode,
@@ -92,10 +92,12 @@ class SubprocessBuildExecutor:
             FileNotFoundError: when the ``docker`` binary is missing.
             OSError: on permission or other low-level failures.
         """
-        kwargs: dict[str, object] = {"shell": False, "text": True}
         if self.output_policy is BuildOutputPolicy.CAPTURED:
-            kwargs["capture_output"] = True
-        completed = subprocess.run(list(argv), **kwargs)
+            completed = subprocess.run(
+                list(argv), shell=False, text=True, capture_output=True,
+            )
+        else:
+            completed = subprocess.run(list(argv), shell=False, text=True)
         return ProcessResult(
             argv=argv,
             return_code=completed.returncode,
@@ -298,6 +300,12 @@ class DoctorResult:
 
     persistence_result: PersistenceResult | None = None
     """Outcome of persisting the selected gateway for future runs."""
+
+
+class _DiagnoseGatewayKwargs(TypedDict, total=False):
+    probe_image: str
+    probe_timeout: int
+    _runner: ProcessRunner
 
 
 @dataclass(frozen=True)
@@ -832,7 +840,7 @@ def orchestrate_doctor(request: DoctorRequest) -> DoctorResult:
 
     # 1. Initial diagnosis
     diagnose = request._diagnose_gateway or diagnose_gateway
-    diagnose_kwargs: dict[str, object] = {}
+    diagnose_kwargs = _DiagnoseGatewayKwargs()
     if request.probe_image is not None:
         diagnose_kwargs["probe_image"] = request.probe_image
     if request.probe_timeout is not None:
@@ -1040,7 +1048,7 @@ def diagnose_doctor(
     request = DoctorRequest(
         apply_override=False,
         repair_consent=False,
-        probe_image=probe_image,
+        probe_image=probe_image or "alpine:3.20",
         probe_timeout=probe_timeout,
         _diagnose_gateway=_diagnose_gateway,
         _plan_rootless_override=_plan_rootless_override,
@@ -1065,7 +1073,7 @@ def repair_rootless(
     request = DoctorRequest(
         apply_override=True,
         repair_consent=consent,
-        probe_image=probe_image,
+        probe_image=probe_image or "alpine:3.20",
         probe_timeout=probe_timeout,
         _diagnose_gateway=_diagnose_gateway,
         _plan_rootless_override=_plan_rootless_override,

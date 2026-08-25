@@ -203,10 +203,11 @@ Run the dependency-free static contracts and the containerized linter independen
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
+scripts/check-types
 scripts/check-dockerfile
 ```
 
-The unittest suite uses only the Python standard library and does not invoke Docker. The Hadolint gate is a separate command that requires Docker and runs the immutably pinned official image; Hadolint is not installed through Python.
+The unittest suite uses only the Python standard library and does not invoke Docker. `scripts/check-types` checks maintained production modules under `docker/` with Python 3.14 semantics from `pyproject.toml`; run it in the project image, where `ty` and the sole intended Python installation are available. The Hadolint gate is a separate command that requires Docker and runs the immutably pinned official image; Hadolint is not installed through Python.
 
 ### Verify the image
 

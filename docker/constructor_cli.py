@@ -40,6 +40,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
 from docker.versioning.dispatch_types import CommandResult, ExitKind
 from docker.versioning.immutable import deep_freeze
+from docker.versioning.model import HostAccessPolicy
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -113,7 +114,7 @@ class CommandRequest:
     output: str          # "text" | "json"
     verbose: bool
     color: str           # "auto" | "always" | "never"
-    command_args: Mapping[str, object] = field(default_factory=dict)
+    command_args: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Always deep-freeze — even a pre-frozen proxy may wrap mutable children
@@ -173,8 +174,20 @@ def _resolve_runtime_projection(
     return tomls[0] if tomls else None
 
 
+class _CommandProcessResult(Protocol):
+    @property
+    def return_code(self) -> int: ...
+
+    @property
+    def stdout(self) -> str: ...
+
+
+class _CommandRunner(Protocol):
+    def run(self, argv: Sequence[str]) -> _CommandProcessResult: ...
+
+
 def _discover_runtime_projection_from_container(
-    container: str, runner: object,
+    container: str, runner: _CommandRunner,
 ) -> Path | None:
     """Return the host source of the container's runtime projection mount.
 
@@ -183,9 +196,9 @@ def _discover_runtime_projection_from_container(
     their legacy generated-artifact fallback when inspection is unavailable.
     """
     try:
-        result = runner.run((
+        result = runner.run([
             "docker", "inspect", "--format", "{{json .Mounts}}", container,
-        ))
+        ])
     except OSError:
         return None
     if result.return_code != 0:
@@ -207,7 +220,7 @@ def _discover_runtime_projection_from_container(
 
 
 def _discover_project_paths_from_container(
-    container: str, runner: object,
+    container: str, runner: _CommandRunner,
 ) -> tuple[Path, ...] | None:
     """Read ``PROJECT_PATH_1..N`` env vars from *container*.
 
@@ -216,10 +229,10 @@ def _discover_project_paths_from_container(
     indices are not 1..N consecutive.
     """
     try:
-        result = runner.run((
+        result = runner.run([
             "docker", "exec", container, "sh", "-c",
             "env | sort | grep '^PROJECT_PATH_'",
-        ))
+        ])
     except OSError:
         return None
     if result.return_code != 0 or not result.stdout.strip():
@@ -251,7 +264,7 @@ def _discover_project_paths_from_container(
 
 def _resolve_verify_host_access(
     inv_path: str,
-) -> tuple[object, str | None, str | None]:
+) -> tuple[HostAccessPolicy | None, str | None, str | None]:
     """Resolve host-access expectations for runtime verification.
 
     Returns ``(host_access, address, error)``.
@@ -603,19 +616,23 @@ def _real_dispatcher(
             )
 
         # Build typed DTO
-        doctor_kwargs: dict[str, object] = {
-            "apply_override": apply_override,
-            "repair_consent": _to_bool(c_args.get("yes", False)),
-            "inventory_path": inv_path,
-        }
-        probe_image = c_args.get("probe_image")
-        if probe_image is not None:
-            doctor_kwargs["probe_image"] = probe_image
-        probe_timeout = c_args.get("probe_timeout")
-        if probe_timeout is not None:
-            doctor_kwargs["probe_timeout"] = probe_timeout
-
-        doctor_request = DoctorRequest(**doctor_kwargs)
+        raw_probe_image = c_args.get("probe_image")
+        probe_image = (
+            raw_probe_image if isinstance(raw_probe_image, str)
+            else "alpine:3.20"
+        )
+        raw_probe_timeout = c_args.get("probe_timeout")
+        probe_timeout = (
+            raw_probe_timeout if isinstance(raw_probe_timeout, int)
+            and not isinstance(raw_probe_timeout, bool) else None
+        )
+        doctor_request = DoctorRequest(
+            apply_override=apply_override,
+            repair_consent=_to_bool(c_args.get("yes", False)),
+            inventory_path=inv_path,
+            probe_image=probe_image,
+            probe_timeout=probe_timeout,
+        )
         result = orchestrate_doctor(doctor_request)
 
         # DoctorResult → CommandResult
@@ -903,7 +920,7 @@ def _real_dispatcher(
         # and referenced by evidence collection.
         _proj_paths: tuple[Path, ...] = ()
 
-        results: dict[str, object] = {}
+        results: Any = {}
         all_ok = True
 
         if scope in ("build", "all"):
@@ -930,7 +947,7 @@ def _real_dispatcher(
 
         if scope in ("runtime", "all"):
             _verify_ha, _verify_ha_addr, _verify_ha_err = \
-                _resolve_verify_host_access(inv_path)
+                _resolve_verify_host_access(str(inv_path))
             if _verify_ha_err is not None:
                 return CommandResult(
                     exit_kind=ExitKind.CONFIG,
@@ -941,7 +958,7 @@ def _real_dispatcher(
                 _verify_proxy_url,
                 _verify_proxy_no_proxy,
                 _verify_net_err,
-            ) = _resolve_verify_corporate_network(inv_path, _REPO_ROOT)
+            ) = _resolve_verify_corporate_network(str(inv_path), _REPO_ROOT)
             if _verify_net_err is not None:
                 return CommandResult(
                     exit_kind=ExitKind.CONFIG,
@@ -956,8 +973,8 @@ def _real_dispatcher(
                     _runner = ProcessRunner()
                 try:
                     ps_result = _runner.run(
-                        ("docker", "ps", "-q",
-                         "--filter", f"ancestor={image}")
+                        ["docker", "ps", "-q",
+                         "--filter", f"ancestor={image}"]
                     )
                 except OSError as exc:
                     results["runtime"] = {
@@ -998,6 +1015,7 @@ def _real_dispatcher(
                             container = None
                         else:
                             container = ids[0]
+            runtime_proj_path: Path | None = None
             if container:
                 # ── resolve runner (shared by discovery + verify) ─
                 _runner = _process_runner
@@ -1055,7 +1073,7 @@ def _real_dispatcher(
                     all_ok = False
                     container = None
 
-            if container:
+            if container and runtime_proj_path is not None:
                 _container_pi_home: Path = Path("/home/dev/.pi")
 
                 # Derive host-access expectations from inventory + local companion
@@ -1108,9 +1126,10 @@ def _real_dispatcher(
 
             # Output directory — create a timestamped directory.
             _ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            raw_output_dir = c_args.get("output_dir")
             evidence_dir = (
-                _Path(c_args.get("output_dir"))
-                if c_args.get("output_dir")
+                _Path(raw_output_dir)
+                if isinstance(raw_output_dir, (str, _os_builtin.PathLike))
                 else _repo_root / ".docker-generated" / "evidence" / _ts
             )
 
@@ -1253,19 +1272,20 @@ def _stdin_prompt(prompt_text: str) -> bool:
 def _stdin_is_interactive() -> bool:
     """Check if stdin is attached to a terminal."""
     try:
-        return sys.__stdin__.isatty()
+        stdin = sys.__stdin__
+        return stdin is not None and stdin.isatty()
     except Exception:
         return False
 
 
 def _deep_freeze_command_args(
-    cmd_args: dict[str, object],
-) -> Mapping[str, object]:
+    cmd_args: Mapping[str, Any],
+) -> Mapping[str, Any]:
     """Freeze nested lists/dicts in command_args so the downstream
     dispatch receives only immutable containers (matching the
     ``CommandRequest`` contract).
     """
-    frozen: dict[str, object] = {}
+    frozen: dict[str, Any] = {}
     for key, value in cmd_args.items():
         if isinstance(value, dict):
             frozen[key] = MappingProxyType({
@@ -1775,7 +1795,15 @@ def _dispatch_command(
     # ---- doctor-owned CLI validation --------------------------------
     if args.command == "doctor":
         timeout = cmd_args.get("probe_timeout")
-        if timeout is not None and (timeout < 1 or timeout > 300):
+        if (
+            timeout is not None
+            and (
+                not isinstance(timeout, int)
+                or isinstance(timeout, bool)
+                or timeout < 1
+                or timeout > 300
+            )
+        ):
             return CommandResult(
                 exit_kind=ExitKind.CLI,
                 message=(

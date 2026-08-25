@@ -203,10 +203,11 @@ no_proxy = "localhost,.corp.example"
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
+scripts/check-types
 scripts/check-dockerfile
 ```
 
-unittest 套件只使用 Python 标准库且不会调用 Docker。Hadolint 是需要 Docker 的独立检查，运行不可变固定的官方镜像，不通过 Python 安装。
+unittest 套件只使用 Python 标准库且不会调用 Docker。`scripts/check-types` 使用 `pyproject.toml` 中的 Python 3.14 语义检查 `docker/` 下的生产模块；请在项目镜像中运行，以使用其中的 `ty` 和唯一目标 Python 安装。Hadolint 是需要 Docker 的独立检查，运行不可变固定的官方镜像，不通过 Python 安装。
 
 ### 验证镜像
 

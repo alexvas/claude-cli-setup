@@ -18,12 +18,10 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import Mapping
 
-if TYPE_CHECKING:
-    from .providers.base import HttpResponse
-
-from .providers.base import HttpTransport
+from .providers.base import HttpResponse, HttpTransport
 
 
 # ---------------------------------------------------------------------------
@@ -55,8 +53,8 @@ def _casefold_get(headers: object, name: str) -> str:
     if headers is None:
         return ""
     key = name.casefold()
-    if hasattr(headers, "items"):
-        for k, v in headers.items():  # type: ignore[union-attr]
+    if isinstance(headers, Mapping):
+        for k, v in headers.items():
             if str(k).casefold() == key:
                 return str(v) if v else ""
         return ""
@@ -117,7 +115,7 @@ class DiskCache:
 
     # -- public API ---------------------------------------------------------
 
-    def get(self, method: str, url: str, *, scope: str = "public", representation: str = "wildcard") -> object | None:
+    def get(self, method: str, url: str, *, scope: str = "public", representation: str = "wildcard") -> HttpResponse | None:
         """Return a cached ``HttpResponse``-compatible object or ``None``."""
         path = self._path_for(method, url, scope, representation)
         try:
@@ -197,13 +195,9 @@ class DiskCache:
         return self._dir / digest
 
 
-def _cached_response(status: int, headers: dict[str, str], body: bytes) -> object:
-    """Reconstruct an ``HttpResponse``-compatible object."""
-    return type("_CachedResponse", (), {
-        "status": status,
-        "headers": headers,
-        "body": body,
-    })()
+def _cached_response(status: int, headers: dict[str, str], body: bytes) -> HttpResponse:
+    """Reconstruct a cached response value."""
+    return HttpResponse(status=status, headers=headers, body=body)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +207,6 @@ def _cached_response(status: int, headers: dict[str, str], body: bytes) -> objec
 
 # Sentinel for "no disk cache argument was passed" — distinct from
 # ``None`` (which means "caller explicitly wants no disk cache").
-_DISK_CACHE_UNSET: object = object()
 
 
 class CachingHttpTransport(HttpTransport):
@@ -244,14 +237,12 @@ class CachingHttpTransport(HttpTransport):
         self,
         delegate: HttpTransport,
         ttl: int | None = None,
-        disk_cache: DiskCache | None = _DISK_CACHE_UNSET,  # type: ignore[assignment]
+        disk_cache: DiskCache | None = None,
     ) -> None:
         self._delegate = delegate
         self._ttl = ttl
         # Key: (method, url, scope, representation)
-        self._mem: dict[tuple[str, str, str, str], tuple[float, object]] = {}
-        if disk_cache is _DISK_CACHE_UNSET:
-            disk_cache = None
+        self._mem: dict[tuple[str, str, str, str], tuple[float, HttpResponse]] = {}
         self._disk = disk_cache
 
     # ------------------------------------------------------------------
@@ -263,19 +254,16 @@ class CachingHttpTransport(HttpTransport):
         method: str,
         url: str,
         *,
-        headers: object = (),
+        headers: Mapping[str, str] = MappingProxyType({}),
         nocache: bool = False,
-    ) -> object:
+    ) -> HttpResponse:
         # For credential-bearing requests (e.g. Docker bearer-token
         # endpoints), skip caching entirely to avoid persisting secrets
         # in the disk cache.
         if nocache:
             headers_dict: dict[str, str] = {}
             if headers is not None:
-                if hasattr(headers, "items"):
-                    headers_dict = dict(headers)  # type: ignore[arg-type]
-                elif isinstance(headers, (list, tuple)):
-                    headers_dict = dict(headers)
+                headers_dict = dict(headers)
             return self._delegate.request(method, url, headers=headers_dict)
 
         scope = _derive_scope(headers)
@@ -300,10 +288,7 @@ class CachingHttpTransport(HttpTransport):
         # 3. Delegate
         headers_dict: dict[str, str] = {}
         if headers is not None:
-            if hasattr(headers, "items"):
-                headers_dict = dict(headers)  # type: ignore[arg-type]
-            elif isinstance(headers, (list, tuple)):
-                headers_dict = dict(headers)
+            headers_dict = dict(headers)
 
         resp = self._delegate.request(method, url, headers=headers_dict)
         self._mem[key] = (now, resp)

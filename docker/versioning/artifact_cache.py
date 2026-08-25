@@ -1303,7 +1303,7 @@ class LocalTemporaryDirectory:
         raise FileExistsError("could not allocate unique temporary directory")
 
 
-class FileIdentityLock:
+class FileIdentityLock(IdentityLock):
     """Advisory per-integrity lock held by an open private lock file."""
 
     def __init__(self, lock_root: str):

@@ -6,6 +6,7 @@ dataclasses, re, pathlib, and types.
 from __future__ import annotations
 
 import base64
+import builtins
 import ipaddress
 import re
 import tomllib
@@ -183,26 +184,26 @@ def require_nonempty_string(
 class _PathReader:
     """Wraps a raw TOML dict for dot-path-aware validation."""
 
-    def __init__(self, root: Mapping[str, object]):
+    def __init__(self, root: Mapping[builtins.str, object]):
         self._root = root
 
-    def tbl(self, path: tuple[str, ...]) -> Mapping[str, object]:
+    def tbl(self, path: tuple[builtins.str, ...]) -> Mapping[builtins.str, object]:
         return require_table(self._root, path)
 
-    def str(self, path: tuple[str, ...]) -> str:
+    def str(self, path: tuple[builtins.str, ...]) -> builtins.str:
         return require_string(self._root, path)
 
-    def nonempty_str(self, path: tuple[str, ...]) -> str:
+    def nonempty_str(self, path: tuple[builtins.str, ...]) -> builtins.str:
         return require_nonempty_string(self._root, path)
 
-    def bool(self, path: tuple[str, ...]) -> bool:
+    def bool(self, path: tuple[builtins.str, ...]) -> builtins.bool:
         return require_bool(self._root, path)
 
-    def int(self, path: tuple[str, ...]) -> int:
+    def int(self, path: tuple[builtins.str, ...]) -> builtins.int:
         return require_int(self._root, path)
 
     @property
-    def root(self) -> Mapping[str, object]:
+    def root(self) -> Mapping[builtins.str, object]:
         return self._root
 
 
@@ -365,7 +366,7 @@ def _validate_npm_tarball_url(
 
 
 def _load_extension_artifacts(
-    r: _RawReader, ext_path: tuple[str, ...], package: str
+    r: _PathReader, ext_path: tuple[str, ...], package: str
 ) -> Mapping[str, NpmArtifact]:
     """Load and validate [runtime.pi-extensions.<name>.artifacts] sub-table."""
     path_dot = ".".join(ext_path)
@@ -424,7 +425,7 @@ def _load_extension_artifacts(
 
 
 def _load_extension_validation(
-    r: _RawReader, ext_path: tuple[str, ...]
+    r: _PathReader, ext_path: tuple[str, ...]
 ) -> RuntimeValidation:
     """Load [runtime.pi-extensions.<name>.validation]."""
     path_dot = ".".join(ext_path)
@@ -1529,7 +1530,9 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
         ext_update = _load_update(r, ("runtime", "pi-extensions", name))
         _check_unknown_keys(r.tbl(("runtime", "pi-extensions", name, "update",)), ("runtime", "pi-extensions", name, "update",))
         _check_compat(ext_source.type, ext_update.provider, f"runtime.pi-extensions.{name}")
-        _check_entry_source_update(ext_source, ext_update, None)
+        _check_entry_source_update(
+            ext_source, ext_update, f"runtime.pi-extensions.{name}"
+        )
         if type(ext_update) is not NpmUpdate:
             raise InventoryError(
                 f"runtime.pi-extensions.{name}.update.provider: "

@@ -211,10 +211,11 @@ URL прокси требует явные host и port и поддержива�
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
+scripts/check-types
 scripts/check-dockerfile
 ```
 
-Набор unittest использует только стандартную библиотеку Python и не запускает Docker. Hadolint — отдельная проверка, которой нужен Docker; она использует immutable pinned официальный образ, а не Python-пакет.
+Набор unittest использует только стандартную библиотеку Python и не запускает Docker. `scripts/check-types` проверяет production-модули в `docker/` с семантикой Python 3.14 из `pyproject.toml`; запускайте его в проектном образе, где доступны `ty` и единственная целевая установка Python. Hadolint — отдельная проверка, которой нужен Docker; она использует immutable pinned официальный образ, а не Python-пакет.
 
 ### Проверка образа
 

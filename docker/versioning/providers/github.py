@@ -396,7 +396,10 @@ class GitHubReleaseProvider:
 
         current = target.current
         from ..model import _validate_utc_rfc3339
-        published_at = _validate_utc_rfc3339(best_rel.get("published_at"))
+        raw_published_at = best_rel.get("published_at")
+        published_at = _validate_utc_rfc3339(
+            raw_published_at if isinstance(raw_published_at, str) else None
+        )
 
         if best_tag == current:
             return ProviderResult(
@@ -426,10 +429,11 @@ class GitHubReleaseProvider:
         # asset (if present in the release).  Fall back to release body text.
         release_body = best_rel.get("body", "")
         body_text = release_body if isinstance(release_body, str) else ""
+        raw_assets = best_rel.get("assets")
         assets_list: list[dict[str, object]] = [
-            a for a in best_rel.get("assets", []) or []
+            a for a in raw_assets
             if isinstance(a, dict)
-        ]
+        ] if isinstance(raw_assets, list) else []
         checksum_map = _resolve_checksums(assets_list, context)
 
         def _get_checksum(asset_name: str, asset: dict[str, object]) -> Optional[str]:

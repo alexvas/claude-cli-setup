@@ -592,9 +592,12 @@ def _emit_toml_table(
     for key in table_keys:
         if lines and lines[-1] != "":
             lines.append("")
+        nested = table[key]
+        if not isinstance(nested, Mapping):
+            raise TypeError("nested TOML value must be a mapping")
         _emit_toml_table(
             tuple(segments) + (key,),
-            table[key],  # type: ignore[arg-type]
+            nested,
             lines,
         )
 
