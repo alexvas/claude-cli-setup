@@ -1,0 +1,18 @@
+failure-threshold: warning
+ignored:
+  # DL3006: NODE_BASE_IMAGE is supplied by the constructor as a fully qualified
+  # tag@sha256 digest after inventory validation. Keep that renderer contract
+  # covered by unittest rather than adding a misleading Dockerfile default.
+  - DL3006
+  # DL3008: Debian package versions intentionally follow the repository snapshot
+  # selected by the digest-pinned base image. Update that base digest to refresh
+  # security fixes instead of freezing individual apt versions indefinitely.
+  - DL3008
+  # DL4006: The two default-shell pipelines only extract a downloaded binary's
+  # checksum. A failed producer yields an empty/mismatched value and the explicit
+  # comparison exits nonzero; later complex pipelines already use bash pipefail.
+  - DL4006
+  # SC1091: Sourced helpers are copied to container-only paths before RUN.
+  # Hadolint does not resolve Docker COPY destinations back to checkout files;
+  # keep the COPY-source existence contract covered by dependency-free unittest.
+  - SC1091

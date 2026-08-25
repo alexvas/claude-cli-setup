@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+HADOLINT_IMAGE='hadolint/hadolint@sha256:27173fe25e062448490a32de410c08491c626a0bef360aa2ce5d5bdd9384b50d'
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo 'error: Docker is required to run Hadolint; install/start Docker and retry.' >&2
+    exit 127
+fi
+if ! docker info >/dev/null 2>&1; then
+    echo 'error: Docker is unavailable; start the daemon or check socket permissions.' >&2
+    exit 1
+fi
+
+exec docker run --rm \
+    --mount "type=bind,source=${ROOT},target=/workspace,readonly" \
+    --workdir /workspace \
+    "$HADOLINT_IMAGE" \
+    hadolint --config /workspace/.hadolint.yaml /workspace/Dockerfile

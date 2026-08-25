@@ -197,6 +197,17 @@ Ordinary builds, validation, launch, and extension setup never perform update di
 
 ## Maintenance
 
+### Validate Dockerfile changes
+
+Run the dependency-free static contracts and the containerized linter independently:
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
+scripts/check-dockerfile
+```
+
+The unittest suite uses only the Python standard library and does not invoke Docker. The Hadolint gate is a separate command that requires Docker and runs the immutably pinned official image; Hadolint is not installed through Python.
+
 ### Verify the image
 
 ```bash

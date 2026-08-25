@@ -146,6 +146,8 @@ ARG RUST_PROFILE
 ARG RUST_COMPONENTS
 ARG RUSTUP_URL
 ARG RUSTUP_SHA256
+# The single-quoted program intentionally defers expansion to the inner bash.
+# hadolint ignore=SC2016
 RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/registry,uid=${DEV_UID},gid=${DEV_GID} \
     --mount=type=cache,id=cargo-git-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/git,uid=${DEV_UID},gid=${DEV_GID} \
     --mount=type=cache,id=rustup-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \

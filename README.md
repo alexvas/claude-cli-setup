@@ -205,6 +205,17 @@ URL прокси требует явные host и port и поддержива�
 
 ## Обслуживание
 
+### Проверка изменений Dockerfile
+
+Независимо запустите dependency-free статические контракты и контейнерный линтер:
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
+scripts/check-dockerfile
+```
+
+Набор unittest использует только стандартную библиотеку Python и не запускает Docker. Hadolint — отдельная проверка, которой нужен Docker; она использует immutable pinned официальный образ, а не Python-пакет.
+
 ### Проверка образа
 
 ```bash
