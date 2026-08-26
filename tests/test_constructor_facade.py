@@ -18,6 +18,7 @@ import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Callable, Sequence
+from unittest.mock import patch
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -297,6 +298,150 @@ class TestDefaultDispatcherReturnsUnavailable(unittest.TestCase):
             or "build.stages" in out.lower()
         )
         self.assertEqual("", err)
+
+
+def _make_stub_providers(discover=None):
+    """Return a frozen registry of no-network provider stubs.
+
+    ``discover``, when given, replaces every stub's ``discover``
+    implementation; otherwise each stub returns the target's current
+    value as a candidate (status CURRENT, no network access).
+    """
+    from types import MappingProxyType
+    from docker.versioning.model import UpdateCandidate, UpdateKind
+    from docker.versioning.providers.base import ProviderResult
+
+    class _Stub:
+        def __init__(self, name, discover):
+            self.name = name
+            self._discover = discover
+
+        def discover(self, target, context):
+            if self._discover is not None:
+                return self._discover(target, context)
+            return ProviderResult(
+                candidate=UpdateCandidate(
+                    value=getattr(target, "current", ""),
+                    kind=UpdateKind.VERSION,
+                    artifacts={},
+                ),
+            )
+
+    names = (
+        "docker-registry", "rust-channel", "static-url",
+        "github-release", "uv-python", "pypi", "npm", "git-ref",
+    )
+    return MappingProxyType({name: _Stub(name, discover) for name in names})
+
+
+class TestInteractiveProgress(unittest.TestCase):
+    """Phase 4 — facade-owned transient stderr progress renderer.
+
+    Exercises the real dispatcher with no-network stub providers so the
+    facade's TTY/text gating and cleanup are observed end to end.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _run_real(self, argv, *, stderr_isatty=False, discover=None):
+        import docker.versioning.updates
+        with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                          _make_stub_providers(discover=discover)):
+            return _run(self.m, argv, stderr_isatty=stderr_isatty)
+
+    def test_progress_content_compact_targets_and_event_updates(self):
+        """4.1 — exact content, compact targets, one replaceable line."""
+        rc, out, err = self._run_real(
+            ["check-updates"], stderr_isatty=True,
+        )
+        self.assertEqual(0, rc)
+        self.assertIn(
+            "Checking updates [1/14] base.node (docker-registry)…", err,
+        )
+        self.assertIn(
+            "Checking updates [14/14] runtime.pi-extensions.pi-read (npm)…",
+            err,
+        )
+        # Compact target path: the build.stages. prefix never leaks into
+        # the progress display.
+        self.assertNotIn("build.stages.", err)
+        # One replaceable stderr line: 14 event rewrites, never a newline.
+        self.assertEqual(err.count("Checking updates"), 14)
+        self.assertNotIn("\n", err)
+        # Each event begins with CR + erase-to-end-of-line.
+        self.assertEqual(err.count("\r\x1b[K"), 15)
+
+    def test_non_tty_stderr_emits_no_progress(self):
+        """4.2 — non-TTY stderr emits zero progress bytes."""
+        rc, out, err = self._run_real(
+            ["check-updates"], stderr_isatty=False,
+        )
+        self.assertEqual(0, rc)
+        self.assertEqual("", err)
+        self.assertNotIn("Checking updates", err)
+
+    def test_json_output_emits_no_progress_even_with_tty(self):
+        """4.2 — JSON output stays clean even when stderr is a TTY."""
+        rc, out, err = self._run_real(
+            ["--output", "json", "check-updates"], stderr_isatty=True,
+        )
+        self.assertEqual(0, rc)
+        self.assertEqual("", err)
+        json.loads(out)  # valid standalone JSON on stdout
+
+    def test_cleanup_clears_line_before_final_success_output(self):
+        """4.3 — transient line cleared before the final success report."""
+        rc, out, err = self._run_real(
+            ["check-updates"], stderr_isatty=True,
+        )
+        self.assertEqual(0, rc)
+        self.assertIn("TARGET", out)
+        self.assertTrue(err.endswith("\r\x1b[K"))
+        self.assertLess(err.rfind("Checking updates"), err.rfind("\r\x1b[K"))
+
+    def test_cleanup_before_handled_diagnostics(self):
+        """4.3 — clear happens before handled diagnostic output."""
+        import docker.versioning.updates
+        with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                          _make_stub_providers()), \
+             patch.object(docker.versioning.updates, "serialize_results",
+                          side_effect=RuntimeError("boom")):
+            rc, out, err = _run(
+                self.m, ["--color", "never", "check-updates"],
+                stderr_isatty=True,
+            )
+        self.assertEqual(4, rc)
+        self.assertIn("[OPERATIONAL] boom", err)
+        self.assertIn(
+            "Checking updates [1/14] base.node (docker-registry)…", err,
+        )
+        self.assertLess(err.rfind("\r\x1b[K"), err.index("[OPERATIONAL] boom"))
+
+    def test_interruption_clears_line_and_propagates(self):
+        """4.3 — interruption clears the line then propagates."""
+        import docker.versioning.updates
+
+        def _interrupt(target, context):
+            raise KeyboardInterrupt()
+
+        out = io.StringIO()
+        err = io.StringIO()
+        with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
+                          _make_stub_providers(discover=_interrupt)), \
+             redirect_stdout(out), redirect_stderr(err):
+            with self.assertRaises(KeyboardInterrupt):
+                self.m.main(
+                    ["check-updates"],
+                    stdout_isatty=lambda: False,
+                    stderr_isatty=lambda: True,
+                )
+        captured = err.getvalue()
+        self.assertIn(
+            "Checking updates [1/14] base.node (docker-registry)…", captured,
+        )
+        self.assertTrue(captured.endswith("\r\x1b[K"))
 
 
 # ════════════════════════════════════════════════════════════════════════

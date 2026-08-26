@@ -58,13 +58,13 @@ A phase MAY depend only on the earlier phases named in its `Depends on` line. Ph
 
 **Deliverables:** transient `Checking updates [N/T] TARGET (PROVIDER)…` stderr renderer; correct TTY/text gating; cleanup on success, handled error, and interruption; no JSON or redirected-output contamination.
 
-- [ ] 4.1 **RED:** Add failing facade tests requiring the exact progress content, compact target path, one replaceable stderr line, and event-by-event updates when text output and stderr TTY are active.
-- [ ] 4.2 **RED:** Add failing facade tests requiring zero progress bytes for non-TTY stderr and for JSON output even when stderr is a TTY.
-- [ ] 4.3 **RED:** Add failing cleanup tests requiring the transient line to be cleared before final success output, handled diagnostics, and interruption propagation.
-- [ ] 4.4 **GREEN:** Connect coordinator events to a facade-owned transient stderr renderer only under text-output and stderr-TTY conditions.
-- [ ] 4.5 **GREEN:** Add idempotent cleanup that clears the transient line on normal completion and in the handled exception/interruption path before other output.
-- [ ] 4.6 **INTROSPECT:** Review stream ownership, injected TTY probes, cleanup coverage, and test determinism; remove terminal writes from the service, coordinator, providers, and transports if any were introduced.
-- [ ] 4.7 **VALIDATE:** Run facade progress, cleanup, TTY, JSON, interruption, and output-channel regression tests and record a passing result.
+- [x] 4.1 **RED:** Add failing facade tests requiring the exact progress content, compact target path, one replaceable stderr line, and event-by-event updates when text output and stderr TTY are active.
+- [x] 4.2 **RED:** Add failing facade tests requiring zero progress bytes for non-TTY stderr and for JSON output even when stderr is a TTY.
+- [x] 4.3 **RED:** Add failing cleanup tests requiring the transient line to be cleared before final success output, handled diagnostics, and interruption propagation.
+- [x] 4.4 **GREEN:** Connect coordinator events to a facade-owned transient stderr renderer only under text-output and stderr-TTY conditions.
+- [x] 4.5 **GREEN:** Add idempotent cleanup that clears the transient line on normal completion and in the handled exception/interruption path before other output.
+- [x] 4.6 **INTROSPECT:** Review stream ownership, injected TTY probes, cleanup coverage, and test determinism; remove terminal writes from the service, coordinator, providers, and transports if any were introduced.
+- [x] 4.7 **VALIDATE:** Run facade progress, cleanup, TTY, JSON, interruption, and output-channel regression tests and record a passing result.
 
 ## 5. Integrated Contract and Documentation
 

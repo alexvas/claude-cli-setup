@@ -187,12 +187,19 @@ def _handle_show(
 
 
 def _handle_check_updates(
-    inventory: Inventory, command_args: Mapping[str, Any],
+    inventory: Inventory,
+    command_args: Mapping[str, Any],
+    *,
+    progress: Any = None,
 ) -> CommandResult:
     """Check configured providers for updates.
 
     Returns structured results only — no presentation/rendering.
     The facade's output layer owns all text/JSON formatting.
+
+    ``progress`` is an optional observational callback installed by the
+    facade; it is forwarded verbatim to the sequential coordinator and
+    never becomes part of structured result data.
     """
     from docker.versioning.updates import (
         _DEFAULT_PROVIDERS,
@@ -240,6 +247,7 @@ def _handle_check_updates(
         context=context,
         only=only,
         scope=scope,
+        progress=progress,
     )
 
     suggest: bool = bool(command_args.get("suggest", False))
@@ -290,7 +298,7 @@ def _handle_check_updates(
 
 
 _HANDLERS: dict[
-    str, Callable[[Inventory, Mapping[str, Any]], CommandResult]
+    str, Callable[..., CommandResult]
 ] = {
     "validate": _handle_validate,
     "show": _handle_show,
@@ -308,12 +316,17 @@ def dispatch(
     command: str,
     *,
     command_args: Mapping[str, Any],
+    progress: Any = None,
 ) -> CommandResult:
     """Load inventory once, validate, and route to the appropriate handler.
 
     This is the sole public API of the read-only service module.
     The facade calls it from ``_real_dispatcher`` after resolving the
     inventory path from CLI arguments.
+
+    ``progress`` is forwarded only to the ``check-updates`` handler; it
+    is the facade-owned interactive discovery renderer and is otherwise
+    ignored.
     """
     from docker.versioning.errors import (
         VersionConfigError,
@@ -346,6 +359,8 @@ def dispatch(
     try:
         handler_args = dict(command_args)
         handler_args["_inventory_path"] = inventory_path
+        if command == "check-updates":
+            return handler(inventory, handler_args, progress=progress)
         return handler(inventory, handler_args)
     except (VersionConfigError, InventoryError, EffectiveConfigError,
             UpdateError) as exc:

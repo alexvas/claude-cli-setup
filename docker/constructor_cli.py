@@ -455,6 +455,7 @@ def _real_dispatcher(
     _run_executor: Any = None,
     _create_projection: Any = None,
     _project_selector: Any = None,
+    _progress_renderer: Any = None,
 ) -> CommandResult:
     """Thin facade wrapper that delegates to the internal services.
 
@@ -478,6 +479,11 @@ def _real_dispatcher(
     When ``_project_selector`` is ``None`` (default), the facade
     creates a real curses-based :class:`~docker.launcher.ProjectSelector`.
     Tests may inject a fake to prove TUI wiring.
+
+    ``_progress_renderer`` is the facade-owned interactive discovery
+    renderer installed by :func:`main` for text-output check-updates
+    with a TTY stderr; it is forwarded to the read-only service and
+    otherwise left as ``None``.
     """
     prompt = _stdin_prompt if _prompt_user is None else _prompt_user
     # ── build confirmation ───────────────────────────────────────────
@@ -1246,7 +1252,10 @@ def _real_dispatcher(
         )
 
     from docker.versioning.readonly_service import dispatch
-    return dispatch(inv_path, command, command_args=request.command_args)
+    return dispatch(
+        inv_path, command, command_args=request.command_args,
+        progress=_progress_renderer,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1426,6 +1435,44 @@ def _compact_target(path: str) -> str:
     if path.startswith(prefix):
         return path[len(prefix):]
     return path
+
+
+class _ProgressRenderer:
+    """Facade-owned transient stderr renderer for interactive discovery.
+
+    Writes one replaceable stderr line per progress event::
+
+        Checking updates [N/T] TARGET (PROVIDER)…
+
+    ``TARGET`` is the compact target path (leading ``build.stages.``
+    prefix removed).  Each write returns to column zero and erases the
+    previous line so only the latest event remains visible; no newline
+    is ever emitted.  :meth:`clear` erases the line idempotently before
+    any subsequent output.
+    """
+
+    _ERASE_LINE = "\r\x1b[K"
+
+    def __init__(self, stream: Any = None) -> None:
+        self._stream = stream if stream is not None else sys.stderr
+        self._active = False
+
+    def __call__(self, event: Any) -> None:
+        line = (
+            f"Checking updates [{event.index}/{event.total}] "
+            f"{_compact_target(event.path)} ({event.provider})…"
+        )
+        self._stream.write(f"{self._ERASE_LINE}{line}")
+        self._stream.flush()
+        self._active = True
+
+    def clear(self) -> None:
+        """Erase the transient line (idempotent)."""
+        if not self._active:
+            return
+        self._stream.write(self._ERASE_LINE)
+        self._stream.flush()
+        self._active = False
 
 
 def _normalize_update_row(r: dict[str, object]) -> dict[str, str]:
@@ -2299,7 +2346,8 @@ def main(
         Terminal-detection override for stdout (for colour logic).
         Defaults to ``sys.stdout.isatty``.
     stderr_isatty:
-        Terminal-detection override for stderr (for colour logic).
+        Terminal-detection override for stderr (for colour logic and
+        interactive check-updates progress gating).
         Defaults to ``sys.stderr.isatty``.
     _prompt_user:
         Confirmation prompt override.  Defaults to ``_stdin_prompt``
@@ -2315,6 +2363,29 @@ def main(
         Override for the projection-factory callable.
     """
     parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        if exc.code is not None and exc.code != 0:
+            return _EXIT_CODES[ExitKind.CLI]
+        return _EXIT_CODES[ExitKind.SUCCESS]
+
+    _stdout_tty = (stdout_isatty() if stdout_isatty is not None
+                   else getattr(sys.stdout, "isatty", lambda: False)())
+    _stderr_tty = (stderr_isatty() if stderr_isatty is not None
+                   else getattr(sys.stderr, "isatty", lambda: False)())
+
+    # Facade-owned interactive progress renderer: installed only for
+    # text-output check-updates whose stderr is a TTY.  JSON output and
+    # non-TTY stderr install no renderer and therefore emit no progress.
+    progress_renderer: _ProgressRenderer | None = None
+    if (
+        args.command == "check-updates"
+        and args.output == "text"
+        and _stderr_tty
+    ):
+        progress_renderer = _ProgressRenderer()
+
     if dispatcher is None:
         prompt = _stdin_prompt if _prompt_user is None else _prompt_user
         disp: Callable[[str, CommandRequest], CommandResult] = (
@@ -2326,51 +2397,47 @@ def main(
                 _run_executor=_run_executor,
                 _create_projection=_create_projection,
                 _project_selector=_project_selector,
+                _progress_renderer=progress_renderer,
             )
         )
     else:
         disp = dispatcher
 
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit as exc:
-        if exc.code is not None and exc.code != 0:
-            return _EXIT_CODES[ExitKind.CLI]
-        return _EXIT_CODES[ExitKind.SUCCESS]
-
     result: CommandResult
     try:
-        result = args.func(args, dispatcher=disp)
-    except FileNotFoundError as exc:
-        result = CommandResult(
-            exit_kind=ExitKind.CONFIG,
-            message=f"inventory not found: {exc}",
-        )
-    except OSError as exc:
-        result = CommandResult(
-            exit_kind=ExitKind.CONFIG,
-            message=f"cannot read inventory: {exc}",
-        )
-    except ValueError as exc:
-        result = CommandResult(
-            exit_kind=ExitKind.CONFIG,
-            message=f"invalid configuration: {exc}",
-        )
-    except RuntimeError as exc:
-        result = CommandResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=str(exc),
-        )
-    except NotImplementedError as exc:
-        result = CommandResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=str(exc),
-        )
-
-    _stdout_tty = (stdout_isatty() if stdout_isatty is not None
-                   else getattr(sys.stdout, "isatty", lambda: False)())
-    _stderr_tty = (stderr_isatty() if stderr_isatty is not None
-                   else getattr(sys.stderr, "isatty", lambda: False)())
+        try:
+            result = args.func(args, dispatcher=disp)
+        except FileNotFoundError as exc:
+            result = CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"inventory not found: {exc}",
+            )
+        except OSError as exc:
+            result = CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"cannot read inventory: {exc}",
+            )
+        except ValueError as exc:
+            result = CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"invalid configuration: {exc}",
+            )
+        except RuntimeError as exc:
+            result = CommandResult(
+                exit_kind=ExitKind.OPERATIONAL,
+                message=str(exc),
+            )
+        except NotImplementedError as exc:
+            result = CommandResult(
+                exit_kind=ExitKind.OPERATIONAL,
+                message=str(exc),
+            )
+    finally:
+        # Clear the transient progress line before any final output is
+        # rendered or printed — on normal completion, after handled
+        # exceptions, and before unhandled interruptions propagate.
+        if progress_renderer is not None:
+            progress_renderer.clear()
 
     stdout_text, stderr_text = _render(
         args.command,
