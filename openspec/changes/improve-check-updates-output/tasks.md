@@ -30,13 +30,13 @@ A phase MAY depend only on the earlier phases named in its `Depends on` line. Ph
 
 **Deliverables:** parsed `check-updates --details` option; full diagnostic text table; unchanged JSON payload, discovery behavior, summaries, suggestions, and exit policies.
 
-- [ ] 2.1 **RED:** Add a failing parser test that specifies `--details` as a command-local `check-updates` boolean option with discoverable help text.
-- [ ] 2.2 **RED:** Add failing rendering tests that require the established `PATH`, `PROVIDER`, `CURRENT`, `CANDIDATE`, `STATUS`, `KIND`, `APPLICABLE`, `PUBLISHED`, and `DETAIL` columns, full paths, and `YYYY-MM-DD HH:MM:SS GMT` publication values under `--details`.
-- [ ] 2.3 **RED:** Add failing compatibility tests proving that `--details --suggest` preserves suggestions and that `--details` produces the same JSON structure, values, ordering, and policy exit codes as the equivalent command without `--details`.
-- [ ] 2.4 **GREEN:** Add and propagate the `--details` presentation flag without adding it to serialized result data or provider inputs.
-- [ ] 2.5 **GREEN:** Select the full diagnostic renderer for detailed text output while retaining the compact renderer as the text default.
-- [ ] 2.6 **INTROSPECT:** Review argument ownership and rendering selection so `--details` cannot alter discovery, classification, suggestions, JSON serialization, or exit-kind calculation; simplify any duplicated compact/detailed normalization.
-- [ ] 2.7 **VALIDATE:** Run parser, detailed-renderer, suggestion, JSON-contract, and policy-exit tests and record a passing result.
+- [x] 2.1 **RED:** Add a failing parser test that specifies `--details` as a command-local `check-updates` boolean option with discoverable help text.
+- [x] 2.2 **RED:** Add failing rendering tests that require the established `PATH`, `PROVIDER`, `CURRENT`, `CANDIDATE`, `STATUS`, `KIND`, `APPLICABLE`, `PUBLISHED`, and `DETAIL` columns, full paths, and `YYYY-MM-DD HH:MM:SS GMT` publication values under `--details`.
+- [x] 2.3 **RED:** Add failing compatibility tests proving that `--details --suggest` preserves suggestions and that `--details` produces the same JSON structure, values, ordering, and policy exit codes as the equivalent command without `--details`.
+- [x] 2.4 **GREEN:** Add and propagate the `--details` presentation flag without adding it to serialized result data or provider inputs.
+- [x] 2.5 **GREEN:** Select the full diagnostic renderer for detailed text output while retaining the compact renderer as the text default.
+- [x] 2.6 **INTROSPECT:** Review argument ownership and rendering selection so `--details` cannot alter discovery, classification, suggestions, JSON serialization, or exit-kind calculation; simplify any duplicated compact/detailed normalization.
+- [x] 2.7 **VALIDATE:** Run parser, detailed-renderer, suggestion, JSON-contract, and policy-exit tests and record a passing result.
 
 ## 3. Presentation-Neutral Progress Events
 

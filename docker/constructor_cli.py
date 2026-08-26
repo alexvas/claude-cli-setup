@@ -1428,6 +1428,123 @@ def _compact_target(path: str) -> str:
     return path
 
 
+def _normalize_update_row(r: dict[str, object]) -> dict[str, str]:
+    """Normalize one serialized update result for text display.
+
+    Returns display-ready strings for both the compact and detailed
+    renderers.  Shortening and abbreviation are presentation concerns
+    and never touch serialized result data.
+    """
+    def _cell(key: str) -> str:
+        v = r.get(key)
+        if v is None:
+            return "-"
+        return str(v)
+
+    current_raw = _cell("current")
+    candidate_raw = _cell("candidate")
+    # Abbreviate hex identifiers in text display only;
+    # compare raw original values for the equality check.
+    current = _abbreviate_identifier(current_raw)
+    candidate = _abbreviate_identifier(candidate_raw)
+    # Candidate equal to current (raw) → "-"
+    if candidate_raw != "-" and candidate_raw == current_raw:
+        candidate = "-"
+
+    path = _cell("path")
+    return {
+        "path": path,
+        "target": _compact_target(path),
+        "provider": _cell("provider"),
+        "current": current,
+        "candidate": candidate,
+        "current_next": f"{current} -> {candidate}",
+        "status": _cell("status"),
+        "kind": _cell("kind"),
+        "applicable": "yes" if r.get("applicable") else "no",
+        "published": _format_published_at(r.get("published_at")),
+        "published_date": _format_published_date(r.get("published_at")),
+        "detail": _cell("reason"),
+    }
+
+
+def _render_update_summary(results: list[object]) -> str:
+    """Build the deterministic status-summary line for update reports."""
+    counts: dict[str, int] = {}
+    applicable_outdated = 0
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        status = r.get("status", "unknown")
+        counts[status] = counts.get(status, 0) + 1
+        if status == "outdated" and r.get("applicable"):
+            applicable_outdated += 1
+
+    status_order = (
+        "current", "outdated", "skipped", "unavailable", "incomplete",
+    )
+    parts: list[str] = []
+    for s in status_order:
+        if s in counts:
+            if s == "outdated":
+                parts.append(
+                    f"{counts[s]} outdated ({applicable_outdated} applicable)"
+                )
+            else:
+                parts.append(f"{counts[s]} {s}")
+    if parts:
+        return "Updates: " + ", ".join(parts)
+    return "No update targets found."
+
+
+def _render_update_table(
+    col_keys: tuple[str, ...],
+    col_labels: tuple[str, ...],
+    rows: list[dict[str, str]],
+) -> str:
+    """Render an aligned ASCII table with fixed columns and 2-space gaps."""
+    def _col_width(idx: int, label: str) -> int:
+        w = len(label)
+        for row in rows:
+            val = row[col_keys[idx]]
+            if len(val) > w:
+                w = len(val)
+        return w
+
+    widths = tuple(_col_width(i, label) for i, label in enumerate(col_labels))
+    header = "  ".join(
+        label.ljust(widths[i]) for i, label in enumerate(col_labels)
+    )
+    sep = "-" * len(header)
+    lines = [sep, header, sep]
+    for row in rows:
+        lines.append("  ".join(
+            row[key].ljust(widths[i]) for i, key in enumerate(col_keys)
+        ))
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _render_suggestions_section(data: dict[str, object]) -> list[str]:
+    """Build the optional review-only replacement block section."""
+    if not bool(data.get("suggest", False)):
+        return []
+    fragments = data.get("replacement_fragments")
+    if isinstance(fragments, str) and fragments.strip():
+        return [
+            "",
+            "─── manual replacement blocks "
+            "(review-only — not applied automatically) ───",
+            fragments.rstrip("\n"),
+        ]
+    return [
+        "",
+        "─── replacement blocks "
+        "───────────────────────────────────────",
+        "No reviewable replacement blocks available.",
+    ]
+
+
 def _render_check_updates_text(data: object) -> str:
     """Render check-updates data as a compact human-readable report.
 
@@ -1444,92 +1561,27 @@ def _render_check_updates_text(data: object) -> str:
     if not isinstance(results, list):
         return str(data)
 
-    # ── normalise cells (None → "-", abbreviate, combine, shorten) ──
     rows: list[dict[str, str]] = []
     details: list[tuple[str, str]] = []
     for r in results:
         if not isinstance(r, dict):
             continue
-
-        def _cell(key: str) -> str:
-            v = r.get(key)
-            if v is None:
-                return "-"
-            return str(v)
-
-        current_raw = _cell("current")
-        candidate_raw = _cell("candidate")
-        # Abbreviate hex identifiers in text display only;
-        # compare raw original values for equality check.
-        current = _abbreviate_identifier(current_raw)
-        candidate = _abbreviate_identifier(candidate_raw)
-        # Candidate equal to current (raw) → "-"
-        if candidate_raw != "-" and candidate_raw == current_raw:
-            candidate = "-"
-
-        target = _compact_target(_cell("path"))
+        row = _normalize_update_row(r)
+        rows.append(row)
         reason = r.get("reason")
         if isinstance(reason, str) and reason:
-            details.append((target, reason))
+            details.append((row["target"], reason))
 
-        rows.append({
-            "target": target,
-            "provider": _cell("provider"),
-            "current_next": f"{current} -> {candidate}",
-            "status": _cell("status"),
-            "published": _format_published_date(r.get("published_at")),
-        })
+    col_keys = ("target", "provider", "current_next", "status",
+                "published_date")
+    col_labels = ("TARGET", "PROVIDER", "CURR -> NEXT", "STATUS",
+                  "PUBLISHED")
 
-    # ── summary (applicable-outdated count made visible) ─────────
-    counts: dict[str, int] = {}
-    applicable_outdated = 0
-    for r in results:
-        if not isinstance(r, dict):
-            continue
-        status = r.get("status", "unknown")
-        counts[status] = counts.get(status, 0) + 1
-        if status == "outdated" and r.get("applicable"):
-            applicable_outdated += 1
-
-    status_order = ("current", "outdated", "skipped", "unavailable", "incomplete")
-    parts: list[str] = []
-    for s in status_order:
-        if s in counts:
-            if s == "outdated":
-                parts.append(
-                    f"{counts[s]} outdated ({applicable_outdated} applicable)"
-                )
-            else:
-                parts.append(f"{counts[s]} {s}")
-    summary = "Updates: " + ", ".join(parts) if parts else "No update targets found."
-
-    # ── table (fixed columns, dynamic widths, 2-space gaps) ──────
-    col_keys = ("target", "provider", "current_next", "status", "published")
-    col_labels = ("TARGET", "PROVIDER", "CURR -> NEXT", "STATUS", "PUBLISHED")
-
-    def _col_width(idx: int, label: str) -> int:
-        w = len(label)
-        for row in rows:
-            val = row[col_keys[idx]]
-            if len(val) > w:
-                w = len(val)
-        return w
-
-    widths = tuple(_col_width(i, label) for i, label in enumerate(col_labels))
-    header = "  ".join(
-        label.ljust(widths[i]) for i, label in enumerate(col_labels)
-    )
-    sep = "-" * len(header)
-    table_lines = [sep, header, sep]
-
-    for row in rows:
-        line = "  ".join(
-            row[key].ljust(widths[i]) for i, key in enumerate(col_keys)
-        )
-        table_lines.append(line)
-    table_lines.append(sep)
-
-    out = [summary, "", "\n".join(table_lines)]
+    out = [
+        _render_update_summary(results),
+        "",
+        _render_update_table(col_keys, col_labels, rows),
+    ]
 
     # ── details (non-empty reasons, keyed by compact target) ─────
     if details:
@@ -1538,25 +1590,40 @@ def _render_check_updates_text(data: object) -> str:
         for target, reason in details:
             out.append(f"  {target}: {reason}")
 
-    # ── suggestions ──────────────────────────────────────────────
-    suggest_flag = bool(data.get("suggest", False))
-    if suggest_flag:
-        fragments = data.get("replacement_fragments")
-        if isinstance(fragments, str) and fragments.strip():
-            out.append("")
-            out.append(
-                "─── manual replacement blocks "
-                "(review-only — not applied automatically) ───"
-            )
-            out.append(fragments.rstrip("\n"))
-        else:
-            out.append("")
-            out.append(
-                "─── replacement blocks "
-                "───────────────────────────────────────"
-            )
-            out.append("No reviewable replacement blocks available.")
+    out.extend(_render_suggestions_section(data))
+    return "\n".join(out)
 
+
+def _render_check_updates_details_text(data: object) -> str:
+    """Render check-updates data as the full diagnostic report.
+
+    Produces the established nine-column table
+    ``PATH | PROVIDER | CURRENT | CANDIDATE | STATUS | KIND |
+    APPLICABLE | PUBLISHED | DETAIL`` with full target paths and
+    ``YYYY-MM-DD HH:MM:SS GMT`` publication values, followed by the
+    shared review-only replacement block section when requested.
+    """
+    if not isinstance(data, dict):
+        return str(data)
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return str(data)
+
+    rows = [
+        _normalize_update_row(r) for r in results if isinstance(r, dict)
+    ]
+    col_keys = ("path", "provider", "current", "candidate", "status",
+                "kind", "applicable", "published", "detail")
+    col_labels = ("PATH", "PROVIDER", "CURRENT", "CANDIDATE", "STATUS",
+                  "KIND", "APPLICABLE", "PUBLISHED", "DETAIL")
+
+    out = [
+        _render_update_summary(results),
+        "",
+        _render_update_table(col_keys, col_labels, rows),
+    ]
+    out.extend(_render_suggestions_section(data))
     return "\n".join(out)
 
 
@@ -1620,6 +1687,7 @@ def _render(
     fmt: str,
     color: str,
     verbose: bool,
+    details: bool = False,
     stdout_is_tty: bool,
     stderr_is_tty: bool,
 ) -> tuple[str, str]:
@@ -1679,11 +1747,14 @@ def _render(
         if result.message:
             target.append(f"{prefix} {result.message}")
         if result.data is not None:
-            rendered = (
-                _render_check_updates_text(result.data)
-                if command == "check-updates"
-                else _render_data_text(result.data)
-            )
+            if command == "check-updates":
+                rendered = (
+                    _render_check_updates_details_text(result.data)
+                    if details
+                    else _render_check_updates_text(result.data)
+                )
+            else:
+                rendered = _render_data_text(result.data)
             if command == "check-updates":
                 # Replacement-fragment headers are terminal-only visual
                 # boundaries: decorate them according to the target
@@ -1778,7 +1849,7 @@ def _dispatch_command(
     cmd_args: dict[str, object] = {}
     for attr in vars(args):
         if attr in ("command", "func", "inventory", "output", "verbose",
-                     "color"):
+                     "color", "details"):
             continue
         value = getattr(args, attr)
         # Normalise overrides: raw PATH=VALUE list → parsed dict
@@ -2178,6 +2249,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include non-mutating TOML suggestions in output",
     )
     p_upd.add_argument(
+        "--details",
+        action="store_true",
+        default=False,
+        help="Render the full diagnostic report for check-updates",
+    )
+    p_upd.add_argument(
         "--no-cache",
         action="store_true",
         default=False,
@@ -2301,6 +2378,7 @@ def main(
         fmt=args.output,
         color=args.color,
         verbose=args.verbose,
+        details=getattr(args, "details", False),
         stdout_is_tty=_stdout_tty,
         stderr_is_tty=_stderr_tty,
     )

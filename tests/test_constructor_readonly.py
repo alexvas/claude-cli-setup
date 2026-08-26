@@ -713,6 +713,29 @@ class TestCheckUpdatesControls(unittest.TestCase):
         # not their individual artifact sub-entries.
         pass  # exercised after GREEN wiring
 
+    def test_details_flag_is_command_local_boolean(self) -> None:
+        """``--details`` is a command-local ``check-updates`` boolean."""
+        ns = self.m._build_parser().parse_args(["check-updates", "--details"])
+        self.assertIs(ns.details, True)
+        ns_default = self.m._build_parser().parse_args(["check-updates"])
+        self.assertIs(ns_default.details, False)
+
+    def test_details_help_is_discoverable(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            try:
+                self.m._build_parser().parse_args(["check-updates", "--help"])
+            except SystemExit as exc:
+                self.assertEqual(0, exc.code)
+        self.assertIn("--details", out.getvalue())
+
+    def test_details_flag_not_passed_to_dispatcher(self) -> None:
+        """Presentation-only flag must not leak into provider inputs."""
+        fake = _make_recording_fake(self.m)
+        _run(self.m, ["check-updates", "--details"], dispatcher=fake)
+        args = fake.calls[0][1].command_args
+        self.assertNotIn("details", args)
+
 
 class TestCheckUpdatesSuggestions(unittest.TestCase):
     """``--suggest`` produces non-mutating output."""
@@ -1088,6 +1111,104 @@ class TestCheckUpdatesTextRendering(unittest.TestCase):
         payload = json.loads(out)
         # suggest flag absent → suggestions not emitted
         self.assertNotIn("suggestions", payload.get("data", {}))
+
+
+class TestCheckUpdatesDetailsRendering(unittest.TestCase):
+    """``check-updates --details`` renders the full diagnostic table."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.m = _load_mod()
+
+    def _detail_data(self) -> dict[str, object]:
+        return {
+            "results": [
+                {"path": "build.stages.toolchain.ty", "provider": "pypi",
+                 "current": "0.0.61", "candidate": "0.0.62",
+                 "status": "outdated", "kind": "version",
+                 "applicable": True, "reason": None,
+                 "published_at": "2026-08-14T07:05:02Z"},
+            ],
+        }
+
+    def test_details_headers_present(self) -> None:
+        fake = _make_fake(self.m, exit_kind="success", data=self._detail_data())
+        _, out, _ = _run(self.m, ["check-updates", "--details"],
+                         dispatcher=fake)
+        for header in ("PATH", "PROVIDER", "CURRENT", "CANDIDATE",
+                       "STATUS", "KIND", "APPLICABLE", "PUBLISHED",
+                       "DETAIL"):
+            self.assertIn(header, out)
+        self.assertNotIn("CURR -> NEXT", out)
+        self.assertNotIn("TARGET", out)
+
+    def test_details_retains_full_paths(self) -> None:
+        fake = _make_fake(self.m, exit_kind="success", data=self._detail_data())
+        _, out, _ = _run(self.m, ["check-updates", "--details"],
+                         dispatcher=fake)
+        self.assertIn("build.stages.toolchain.ty", out)
+
+    def test_details_publication_timestamp_format(self) -> None:
+        fake = _make_fake(self.m, exit_kind="success", data=self._detail_data())
+        _, out, _ = _run(self.m, ["check-updates", "--details"],
+                         dispatcher=fake)
+        self.assertIn("2026-08-14 07:05:02 GMT", out)
+
+    def test_details_preserves_suggestions(self) -> None:
+        data = {
+            "results": self._detail_data()["results"],
+            "suggest": True,
+            "suggestions": [
+                {"path": "build.stages.toolchain.ty",
+                 "changes": {"version": "0.0.62"}},
+            ],
+            "replacement_fragments": (
+                "[build.stages.toolchain.ty]\nversion = \"0.0.62\"\n"
+            ),
+        }
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out, _ = _run(
+            self.m, ["check-updates", "--details", "--suggest"],
+            dispatcher=fake,
+        )
+        self.assertIn("APPLICABLE", out)
+        self.assertIn("─── manual replacement blocks", out)
+        self.assertIn("review-only", out)
+        self.assertIn("[build.stages.toolchain.ty]", out)
+        self.assertIn('version = "0.0.62"', out)
+
+    def test_details_json_matches_without_details(self) -> None:
+        data = self._detail_data()
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        _, out_details, _ = _run(
+            self.m, ["--output", "json", "check-updates", "--details"],
+            dispatcher=fake,
+        )
+        _, out_plain, _ = _run(
+            self.m, ["--output", "json", "check-updates"],
+            dispatcher=fake,
+        )
+        payload_details = json.loads(out_details)
+        payload_plain = json.loads(out_plain)
+        self.assertEqual(payload_details, payload_plain)
+        self.assertNotIn("details", payload_details.get("data", {}))
+
+    def test_details_preserves_policy_exit_code(self) -> None:
+        data = self._detail_data()
+        fake = _make_fake(self.m, exit_kind="policy", data=data,
+                          message="1 outdated")
+        rc_details, _, _ = _run(
+            self.m, ["check-updates", "--details", "--fail-on-outdated"],
+            dispatcher=fake,
+        )
+        rc_plain, _, _ = _run(
+            self.m, ["check-updates", "--fail-on-outdated"],
+            dispatcher=fake,
+        )
+        self.assertEqual(rc_details, rc_plain)
+        self.assertEqual(1, rc_details)
 
 
 class TestCheckUpdatesSuggestRendering(unittest.TestCase):
