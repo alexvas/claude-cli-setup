@@ -189,6 +189,10 @@ For another managed component, locate its inventory path, run `check-updates --o
 
 ### Update-check controls
 
+The default text report is for review: `TARGET`, `PROVIDER`, `CURR -> NEXT`, `STATUS`, and `PUBLISHED`. It removes only a leading `build.stages.` from targets, shows publication dates as `YYYY-MM-DD`, and places provider explanations in a `Details:` section. During interactive text discovery, stderr temporarily shows `Checking updates [N/T] TARGET (PROVIDER)…`; redirected output has no progress bytes.
+
+Use `--details` for the full diagnostic table with complete paths, separate current/candidate values, applicability, reasons, and publication times as `YYYY-MM-DD HH:MM:SS GMT`. Use `--json` for automation: it is the machine-readable interface and is unchanged by `--details`.
+
 - **Interactive review:** `--only <provider-or-path>` narrows discovery; `--suggest` adds non-mutating, complete manual-replacement TOML blocks.
 - **Automation and policy:** `--json` emits machine-readable output; `--strict` fails on provider errors; `--fail-on-outdated` fails when an update exists.
 - **Advanced discovery/cache:** `--include-prerelease` includes prerelease results; reviewed `[cache].ttl` controls update-discovery HTTP caching, and `--no-cache` bypasses it for one invocation.

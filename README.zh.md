@@ -189,6 +189,10 @@ no_proxy = "localhost,.corp.example"
 
 ### 更新检查控制项
 
+默认文本报告用于人工审核，列为 `TARGET`、`PROVIDER`、`CURR -> NEXT`、`STATUS` 和 `PUBLISHED`。它只移除目标开头的 `build.stages.`，将发布时间显示为 `YYYY-MM-DD`，并把 provider 说明放入 `Details:` 段落。交互式文本发现期间，stderr 会暂时显示 `Checking updates [N/T] TARGET (PROVIDER)…`；重定向输出不会包含 progress 字节。
+
+使用 `--details` 获取完整诊断表，其中包含完整路径、分开的 current/candidate、适用性、说明和 `YYYY-MM-DD HH:MM:SS GMT` 格式的发布时间。自动化请使用 `--json`：这是机器可读接口，`--details` 不会改变其内容。
+
 - **交互审核：** `--only <provider-or-path>` 缩小范围；`--suggest` 添加 non-mutating 的完整手动替换 TOML 块。
 - **自动化和策略：** `--json` 输出机器可读格式；`--strict` 在 provider 错误时失败；`--fail-on-outdated` 在存在更新时失败。
 - **高级发现/缓存：** `--include-prerelease` 包含 prerelease；reviewed `[cache].ttl` 控制 HTTP 缓存 TTL，`--no-cache` 可单次绕过缓存。
