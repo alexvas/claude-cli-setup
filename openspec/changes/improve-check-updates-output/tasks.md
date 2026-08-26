@@ -72,8 +72,8 @@ A phase MAY depend only on the earlier phases named in its `Depends on` line. Ph
 
 **Deliverables:** end-to-end CLI coverage for compact, detailed, suggestion, failure, TTY, non-TTY, and JSON modes; updated user documentation/help examples; all repository quality gates passing.
 
-- [ ] 5.1 **RED:** Add failing end-to-end acceptance cases for default compact output with a provider failure, `--details --suggest`, interactive sequential progress followed by a clean report, and progress-free redirected JSON.
-- [ ] 5.2 **GREEN:** Resolve only integration defects exposed by task 5.1 without changing the approved report fields, sequential execution model, JSON contract, or progress gating.
+- [x] 5.1 **RED:** Add failing end-to-end acceptance cases for default compact output with a provider failure, `--details --suggest`, interactive sequential progress followed by a clean report, and progress-free redirected JSON.
+- [x] 5.2 **GREEN:** Resolve only integration defects exposed by task 5.1 without changing the approved report fields, sequential execution model, JSON contract, or progress gating.
 - [ ] 5.3 **GREEN:** Update command documentation and examples to define compact columns, `CURR -> NEXT`, exact path shortening, date-only publication, `Details:`, `--details`, transient progress, and JSON as the machine-readable interface.
 - [ ] 5.4 **INTROSPECT:** Trace every requirement and scenario in `specs/update-check-reporting/spec.md` to at least one automated test and every implementation file to a task in this contract; add a missing task before addressing any uncovered scope.
 - [ ] 5.5 **VALIDATE:** Run strict OpenSpec validation and record a passing result for `improve-check-updates-output`.
