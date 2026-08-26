@@ -67,6 +67,7 @@ from docker.versioning.updates import (
     render_table,
     render_json,
     render_suggestions_json,
+    Scope,
 )
 from tests.versioning.support.fake_http import FakeHttpTransport, FailingHttpTransport
 from tests.versioning.support.fake_git import FakeGitTransport, FailingGitTransport
@@ -453,6 +454,147 @@ class TestCheckUpdates(unittest.TestCase):
         inv = _minimal_inventory()
         with self.assertRaises(TypeError):
             check_updates(inv, context=self._ctx(), scope=None)
+
+
+class TestCheckUpdatesProgress(unittest.TestCase):
+    """The coordinator emits one presentation-neutral start event per
+    selected target before resolving it."""
+
+    def setUp(self) -> None:
+        self.http = FailingHttpTransport()
+        self.git = FailingGitTransport()
+
+    def _ctx(self, include_prerelease=False):
+        return ProviderContext(
+            http=self.http, git=self.git,
+            include_prerelease=include_prerelease, tokens={},
+        )
+
+    def _providers(self):
+        return {k: StubProvider() for k in [
+            "docker-registry", "rust-channel", "github-release",
+            "uv-python", "pypi", "npm", "git-ref", "static-url",
+        ]}
+
+    def test_event_fields_and_one_based_index(self) -> None:
+        inv = _minimal_inventory()
+        events: list[object] = []
+        results = check_updates(
+            inv, providers=self._providers(), context=self._ctx(),
+            progress=events.append,
+        )
+        self.assertEqual(len(events), 11)
+        self.assertEqual(len(results), 11)
+        first = events[0]
+        self.assertEqual(first.index, 1)  # type: ignore[attr-defined]
+        self.assertEqual(first.total, 11)  # type: ignore[attr-defined]
+        self.assertEqual(first.path, "build.stages.base.node")  # type: ignore[attr-defined]
+        self.assertEqual(first.provider, "docker-registry")  # type: ignore[attr-defined]
+        last = events[-1]
+        self.assertEqual(last.index, 11)  # type: ignore[attr-defined]
+        self.assertEqual(last.total, 11)  # type: ignore[attr-defined]
+        self.assertEqual(last.path, "build.stages.runtime.oh-my-zsh")  # type: ignore[attr-defined]
+        self.assertEqual(last.provider, "git-ref")  # type: ignore[attr-defined]
+
+    def test_scope_filter_determines_event_total_and_order(self) -> None:
+        inv = _minimal_inventory()
+        events: list[object] = []
+        check_updates(
+            inv, providers=self._providers(), context=self._ctx(),
+            scope=Scope.BUILD, progress=events.append,
+        )
+        self.assertTrue(events)
+        self.assertTrue(all(e.path.startswith("build.") for e in events))
+        self.assertEqual(events[0].total, len(events))  # type: ignore[attr-defined]
+        self.assertEqual(
+            [e.index for e in events],
+            list(range(1, len(events) + 1)),
+        )
+
+    def test_only_filter_determines_event_total_and_order(self) -> None:
+        inv = _minimal_inventory()
+        events: list[object] = []
+        check_updates(
+            inv, providers=self._providers(), context=self._ctx(),
+            only=("npm",), progress=events.append,
+        )
+        self.assertEqual(
+            [e.path for e in events],
+            ["build.stages.pi-tools.pi", "build.stages.openspec-tools.openspec"],
+        )
+        self.assertTrue(all(e.provider == "npm" for e in events))
+        self.assertEqual(events[0].total, 2)  # type: ignore[attr-defined]
+        self.assertEqual(events[0].index, 1)  # type: ignore[attr-defined]
+        self.assertEqual(events[1].index, 2)  # type: ignore[attr-defined]
+
+    def test_provider_failure_yields_one_event_and_one_result(self) -> None:
+        inv = _minimal_inventory()
+        events: list[object] = []
+        providers = self._providers()
+        providers["pypi"] = StubProvider(exc=RuntimeError("network error"))
+        results = check_updates(
+            inv, providers=providers, context=self._ctx(),
+            progress=events.append,
+        )
+        ty_events = [e for e in events if e.path == "build.stages.toolchain.ty"]
+        ty_results = [r for r in results if r.path == "build.stages.toolchain.ty"]
+        self.assertEqual(len(ty_events), 1)
+        self.assertEqual(len(ty_results), 1)
+        self.assertEqual(ty_results[0].status, UpdateStatus.UNAVAILABLE)
+
+    def test_missing_callback_preserves_behavior(self) -> None:
+        inv = _minimal_inventory()
+        providers = self._providers()
+        with_cb = check_updates(
+            inv, providers=providers, context=self._ctx(),
+            progress=lambda e: None,
+        )
+        without_cb = check_updates(
+            inv, providers=providers, context=self._ctx(),
+        )
+        self.assertEqual(
+            [(r.path, r.status, r.candidate) for r in with_cb],
+            [(r.path, r.status, r.candidate) for r in without_cb],
+        )
+
+    def test_sequential_ordering_and_event_before_resolution(self) -> None:
+        inv = _minimal_inventory()
+        log: list[str] = []
+
+        class RecordingProvider:
+            name = "npm"
+
+            def discover(self, target, context):
+                log.append(f"start:{target.path}")
+                log.append(f"end:{target.path}")
+                return ProviderResult(
+                    candidate=UpdateCandidate(
+                        value=target.current, kind=UpdateKind.VERSION,
+                        artifacts={},
+                    ),
+                )
+
+        results = check_updates(
+            inv,
+            providers={"npm": RecordingProvider()},
+            context=self._ctx(),
+            only=("npm",),
+            progress=lambda e: log.append(
+                f"event:{e.path}:{e.index}/{e.total}"
+            ),
+        )
+        self.assertEqual(log, [
+            "event:build.stages.pi-tools.pi:1/2",
+            "start:build.stages.pi-tools.pi",
+            "end:build.stages.pi-tools.pi",
+            "event:build.stages.openspec-tools.openspec:2/2",
+            "start:build.stages.openspec-tools.openspec",
+            "end:build.stages.openspec-tools.openspec",
+        ])
+        self.assertEqual(
+            [r.path for r in results],
+            ["build.stages.pi-tools.pi", "build.stages.openspec-tools.openspec"],
+        )
 
 
 class TestSuggestions(unittest.TestCase):

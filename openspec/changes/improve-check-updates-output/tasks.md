@@ -44,13 +44,13 @@ A phase MAY depend only on the earlier phases named in its `Depends on` line. Ph
 
 **Deliverables:** optional typed progress event/callback contract; one start event per selected target; unchanged sequential discovery and result semantics when callbacks are present or absent.
 
-- [ ] 3.1 **RED:** Add failing coordinator tests requiring one-based index, total after scope and `--only` filtering, full path, and provider in an event emitted immediately before each selected target is resolved.
-- [ ] 3.2 **RED:** Add failing coordinator tests proving scope and `--only` filters determine the event total/order, provider failures still yield one event and one result, and missing callbacks preserve existing behavior.
-- [ ] 3.3 **RED:** Add a failing ordering test proving the next provider call does not begin before the previous call returns and final results remain in selected-target order.
-- [ ] 3.4 **GREEN:** Define the minimal immutable progress event and optional synchronous callback interface required by tasks 3.1–3.3.
-- [ ] 3.5 **GREEN:** Emit start events from the sequential coordinator after filtering and before target resolution without catching callback failures as provider failures.
-- [ ] 3.6 **INTROSPECT:** Review the event boundary to ensure it contains no terminal control, rendering, transport state, timing loop, concurrency, or serialized-output fields; remove any such coupling.
-- [ ] 3.7 **VALIDATE:** Run coordinator progress, filtering, failure, ordering, and existing update-discovery tests and record a passing result.
+- [x] 3.1 **RED:** Add failing coordinator tests requiring one-based index, total after scope and `--only` filtering, full path, and provider in an event emitted immediately before each selected target is resolved.
+- [x] 3.2 **RED:** Add failing coordinator tests proving scope and `--only` filters determine the event total/order, provider failures still yield one event and one result, and missing callbacks preserve existing behavior.
+- [x] 3.3 **RED:** Add a failing ordering test proving the next provider call does not begin before the previous call returns and final results remain in selected-target order.
+- [x] 3.4 **GREEN:** Define the minimal immutable progress event and optional synchronous callback interface required by tasks 3.1–3.3.
+- [x] 3.5 **GREEN:** Emit start events from the sequential coordinator after filtering and before target resolution without catching callback failures as provider failures.
+- [x] 3.6 **INTROSPECT:** Review the event boundary to ensure it contains no terminal control, rendering, transport state, timing loop, concurrency, or serialized-output fields; remove any such coupling.
+- [x] 3.7 **VALIDATE:** Run coordinator progress, filtering, failure, ordering, and existing update-discovery tests and record a passing result.
 
 ## 4. Interactive Progress Presentation
 

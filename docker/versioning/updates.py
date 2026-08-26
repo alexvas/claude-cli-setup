@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -757,6 +758,25 @@ def _classify_candidate(
     return (UpdateStatus.OUTDATED, kind, True, None)
 
 
+@dataclass(frozen=True)
+class UpdateProgressEvent:
+    """Immutable snapshot of one selected target about to be resolved.
+
+    Carries presentation-neutral discovery facts only: the one-based
+    index, the total selected target count after scope and ``--only``
+    filtering, the full target path, and the provider name.  It never
+    carries terminal control, rendering, transport, timing, concurrency,
+    or serialized-output state.
+    """
+    index: int
+    total: int
+    path: str
+    provider: str
+
+
+ProgressCallback = Callable[[UpdateProgressEvent], None]
+
+
 def check_updates(
     inventory: Inventory,
     *,
@@ -764,6 +784,7 @@ def check_updates(
     context: ProviderContext,
     only: tuple[str, ...] = (),
     scope: Scope = Scope.ALL,
+    progress: ProgressCallback | None = None,
 ) -> tuple[UpdateResult, ...]:
     """Discover updates for every target in *inventory*.
 
@@ -776,6 +797,11 @@ def check_updates(
             ``Scope.ALL``.  Targets whose path does not start with the
             scope prefix are excluded before any ``--only`` filter is
             applied.
+        progress: Optional synchronous callback invoked with an
+            :class:`UpdateProgressEvent` immediately before each
+            selected target is resolved.  Observational only: it does
+            not affect results, ordering, or classification, and its
+            failures are not treated as provider failures.
     """
     if providers is None:
         providers = _DEFAULT_PROVIDERS
@@ -822,8 +848,22 @@ def check_updates(
     node_digest = inventory.stages.base.node.digest
 
     results: list[UpdateResult] = []
-    for target in targets:
+    total = len(targets)
+    for idx, target in enumerate(targets, start=1):
         provider_name = target.update.provider
+
+        # Emit the start event before any provider lookup or network
+        # work so observers see progress as it is about to happen.
+        # Callback failures are intentionally not caught here: they are
+        # observer errors, never provider failures.
+        if progress is not None:
+            progress(UpdateProgressEvent(
+                index=idx,
+                total=total,
+                path=target.path,
+                provider=provider_name,
+            ))
+
         provider = providers.get(provider_name)
 
         if provider is None:
