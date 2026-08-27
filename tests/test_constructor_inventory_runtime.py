@@ -12,6 +12,7 @@ from typing import ClassVar
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from docker.versioning.constraints import parse_numeric_version  # noqa: E402
 from docker.versioning.inventory import InventoryError, ConstraintSyntaxError  # noqa: E402
 from docker.versioning.model import InvalidArtifactKey               # noqa: E402
 from docker.versions import load_inventory               # noqa: E402
@@ -149,11 +150,32 @@ class TestClosedRuntimeSchema(_TmpMixin, unittest.TestCase):
         self.assertIn(ext.version, ext.artifacts)
         self.assertIsNotNone(ext.validation)
 
-    def test_three_extensions_all_present(self):
-        """All three real extensions survive a complete load cycle."""
+    def test_five_runtime_packages_all_present(self):
+        """All five real runtime packages survive a complete load cycle."""
         inv = load_inventory(self._canonical_path())
         names = sorted(inv.runtime_pi_extensions.keys())
-        self.assertEqual(names, ["pi-codex-usage", "pi-proxy", "pi-read"])
+        self.assertEqual(
+            names,
+            ["highlight-js", "pi-proxy", "pi-read", "pi-tui-kit", "pi-usage"],
+        )
+
+    def test_pi_tui_kit_override_stays_within_pi_usage_dependency_range(self):
+        """Independent overrides cannot violate pi-usage's ^0.49.1 contract."""
+        inv = load_inventory(self._canonical_path())
+        policy = inv.runtime_pi_extensions["pi-tui-kit"].override.constraint
+        self.assertTrue(policy.matches(parse_numeric_version("0.49.1")))
+        self.assertTrue(policy.matches(parse_numeric_version("0.49.3")))
+        self.assertFalse(policy.matches(parse_numeric_version("0.50.0")))
+
+        highlight_policy = (
+            inv.runtime_pi_extensions["highlight-js"].override.constraint
+        )
+        self.assertTrue(
+            highlight_policy.matches(parse_numeric_version("10.7.3"))
+        )
+        self.assertFalse(
+            highlight_policy.matches(parse_numeric_version("10.7.4"))
+        )
 
     # ── missing sections ────────────────────────────────────────────────
 

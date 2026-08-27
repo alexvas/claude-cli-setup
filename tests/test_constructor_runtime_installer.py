@@ -3054,6 +3054,69 @@ class TestRealPackageInstallerTarballExtraction(unittest.TestCase):
         with self.assertRaises(InstallError):
             self._installer.install("bad", b"not a tarball")
 
+    def test_pi_usage_resolves_tui_kit_and_highlight_js(self) -> None:
+        """The real pi-tui-kit entry path resolves its reviewed dependency."""
+        import subprocess
+
+        highlight = self._make_tgz({
+            "package.json": (
+                b'{"name":"highlight.js","version":"10.7.3",'
+                b'"main":"./index.js"}'
+            ),
+            "index.js": b'module.exports = {marker: "highlight-js-resolved"};',
+        })
+        kit = self._make_tgz({
+            "package.json": (
+                b'{"name":"@narumitw/pi-tui-kit","version":"0.49.1",'
+                b'"type":"module","exports":"./dist/index.js",'
+                b'"dependencies":{"highlight.js":"10.7.3"}}'
+            ),
+            "dist/index.js": (
+                b'export { syntaxMarker as marker } from '
+                b'"./components/syntax-highlighting.js";'
+            ),
+            "dist/components/syntax-highlighting.js": (
+                b'import hljs from "highlight.js"; '
+                b'export const syntaxMarker = hljs.marker;'
+            ),
+        })
+        usage = self._make_tgz({
+            "package.json": (
+                b'{"name":"@narumitw/pi-usage","version":"0.52.3",'
+                b'"type":"module","exports":"./index.js",'
+                b'"dependencies":{"@narumitw/pi-tui-kit":"^0.49.1"}}'
+            ),
+            "index.js": (
+                b'export async function usage() {'
+                b' const kit = await import("@narumitw/pi-tui-kit");'
+                b' return kit.marker; }'
+            ),
+        })
+
+        self._installer.install("highlight.js", highlight)
+        self._installer.install("@narumitw/pi-tui-kit", kit)
+        self._installer.install("@narumitw/pi-usage", usage)
+        usage_entry = os.path.join(
+            self._tmp, "agent", "npm", "node_modules",
+            "@narumitw", "pi-usage", "index.js",
+        )
+        script = (
+            "import(process.argv[1]).then(async m => {"
+            " const value = await m.usage();"
+            " if (value !== 'highlight-js-resolved') process.exit(2);"
+            "})"
+        )
+        completed = subprocess.run(
+            ["node", "-e", script, usage_entry],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode, 0,
+            completed.stderr or completed.stdout,
+        )
+
 
 class TestArchitectureHostURLBoundary(unittest.TestCase):
     """RED — runtime URLs must be host-only; the container projection and

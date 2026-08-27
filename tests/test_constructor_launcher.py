@@ -1684,8 +1684,10 @@ class TestRunTransaction(unittest.TestCase):
         artifact must appear in ``artifact_cache_misses`` and
         none in ``artifact_cache_hits``."""
         expected_ids = self._ids_for_urls([
+            "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz",
             "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz",
-            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz",
+            "https://registry.npmjs.org/@narumitw/pi-tui-kit/-/pi-tui-kit-0.49.1.tgz",
+            "https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.52.3.tgz",
             "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
         ])
         req = self._request(
@@ -1730,7 +1732,9 @@ class TestRunTransaction(unittest.TestCase):
             "verified blob must not appear in misses",
         )
         expected_miss_ids = self._ids_for_urls([
-            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz",
+            "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz",
+            "https://registry.npmjs.org/@narumitw/pi-tui-kit/-/pi-tui-kit-0.49.1.tgz",
+            "https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.52.3.tgz",
             "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
         ])
         self.assertEqual(
@@ -2615,8 +2619,8 @@ class TestRunTransaction(unittest.TestCase):
             if a.startswith("type=bind,")
             and "/runtime-artifacts/" in a
         ]
-        # pi-codex-usage + pi-proxy + one shared blob = 3 total
-        self.assertEqual(len(artifact_mount_targets), 3, artifact_mount_targets)
+        # highlight.js + pi-tui-kit + pi-usage + pi-proxy + one shared blob = 5 total
+        self.assertEqual(len(artifact_mount_targets), 5, artifact_mount_targets)
         # The shared blob's mount is referenced once (not duplicated).
         shared_digest = shared_integrity_digest.replace("+", "-").replace("/", "_")
         shared_mounts = [
@@ -3286,7 +3290,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         bad_integrity: str,
     ) -> str:
         """Copy the real inventory and replace the *existing*
-        ``pi-read`` 0.2.0 integrity line with *bad_integrity*.
+        ``pi-read`` 0.2.1 integrity line with *bad_integrity*.
 
         The replacement must be a valid-base64, correct-prefix
         value so the TOML parses successfully and the model regex
@@ -3305,10 +3309,10 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         shutil.copy2(real, fixture)
         with open(fixture) as fh:
             text = fh.read()
-        # The existing pi-read 0.2.0 integrity line:
+        # The existing pi-read 0.2.1 integrity line:
         original = (
-            'integrity = "sha512-VO9pV15PFTBOfcNq9hgKJ3K6k4Bb0ndDlX6N5'
-            'ReNTOa/r66/Ppfc9N/hexsK5veMHGl1YbjCo3wOnL5jJu17/Q=="'
+            'integrity = "sha512-Vq1axnAU513JW4oqYkSIO4bQZFTPFwXz6V70n4'
+            'fPNPplcDqK2bTx23viML88+0CrmjgvmvTVuG1ZruNCShOyiA=="'
         )
         replaced = text.replace(original, f'integrity = "{bad_integrity}"')
         if replaced == text:
@@ -4106,13 +4110,15 @@ class TestOrchestrationOrdering(unittest.TestCase):
             "events must occur in the required order",
         )
         # The materializer must receive exactly the resolved set
-        # — all three fixture artifacts, not just the first.
+        # — all five fixture artifacts, not just the first.
         import base64
         import hashlib
         from docker.versioning.artifact_cache import SelectedArtifact
         _fixture_urls = [
+            "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz",
             "https://registry.npmjs.org/@arcanemachine/pi-read/-/pi-read-0.2.1.tgz",
-            "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.3.tgz",
+            "https://registry.npmjs.org/@narumitw/pi-tui-kit/-/pi-tui-kit-0.49.1.tgz",
+            "https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.52.3.tgz",
             "https://registry.npmjs.org/pi-proxy/-/pi-proxy-1.0.0.tgz",
         ]
         expected = [

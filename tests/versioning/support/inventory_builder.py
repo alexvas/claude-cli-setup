@@ -157,6 +157,23 @@ sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
 [build.stages.runtime.oh-my-zsh.update]
 {g("build.stages.runtime.oh-my-zsh.update", 'provider = "git-ref"\nref = "master"')}
 
+[runtime.pi-extensions.highlight-js]
+{g("runtime.pi-extensions.highlight-js", 'version = "10.7.3"')}
+
+[runtime.pi-extensions.highlight-js.source]
+{g("runtime.pi-extensions.highlight-js.source", 'type = "npm"\npackage = "highlight.js"')}
+
+{g("runtime.pi-extensions.highlight-js.artifacts", '[runtime.pi-extensions.highlight-js.artifacts."10.7.3"]\nurl = "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz"\nintegrity = "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A=="')}
+
+[runtime.pi-extensions.highlight-js.update]
+{g("runtime.pi-extensions.highlight-js.update", 'provider = "npm"\nstable_only = true')}
+
+[runtime.pi-extensions.highlight-js.override]
+{g("runtime.pi-extensions.highlight-js.override", 'constraint = "==10.7.3"\nallow_prerelease = false\nscheme = "numeric"')}
+
+[runtime.pi-extensions.highlight-js.validation]
+{g("runtime.pi-extensions.highlight-js.validation", 'metadata_file = "package.json"')}
+
 [runtime.pi-extensions.pi-read]
 {g("runtime.pi-extensions.pi-read", 'version = "0.2.0"')}
 
@@ -174,27 +191,50 @@ sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
 [runtime.pi-extensions.pi-read.validation]
 {g("runtime.pi-extensions.pi-read.validation", 'metadata_file = "package.json"')}
 
-[runtime.pi-extensions.pi-codex-usage]
-version = "0.9.1"
+[runtime.pi-extensions.pi-tui-kit]
+version = "0.49.1"
 
-[runtime.pi-extensions.pi-codex-usage.source]
+[runtime.pi-extensions.pi-tui-kit.source]
 type = "npm"
-package = "@llblab/pi-codex-usage"
+package = "@narumitw/pi-tui-kit"
 
-[runtime.pi-extensions.pi-codex-usage.artifacts."0.9.1"]
-url = "https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-0.9.1.tgz"
-integrity = "sha512-r5iMe57KgKPWSvx5/fKCwT+s/haysaEs40OMdTtisAFR1njppvNAhlgNOBl7+nDm6j88XTee3m0Rp3s/kinIQg=="
+[runtime.pi-extensions.pi-tui-kit.artifacts."0.49.1"]
+url = "https://registry.npmjs.org/@narumitw/pi-tui-kit/-/pi-tui-kit-0.49.1.tgz"
+integrity = "sha512-RAUz3WsThABg79Ip/3FRmV4RUj0gNMyCirFjHitLUWC5oiZvOWGv1OAquFVWuIoJJEA2MtFf7LZ0OXf3G5UM3g=="
 
-[runtime.pi-extensions.pi-codex-usage.update]
+[runtime.pi-extensions.pi-tui-kit.update]
 provider = "npm"
 stable_only = true
 
-[runtime.pi-extensions.pi-codex-usage.override]
-constraint = ">=0.9.0"
+[runtime.pi-extensions.pi-tui-kit.override]
+constraint = ">=0.49.1,<0.50.0"
 allow_prerelease = false
 scheme = "numeric"
 
-[runtime.pi-extensions.pi-codex-usage.validation]
+[runtime.pi-extensions.pi-tui-kit.validation]
+metadata_file = "package.json"
+
+[runtime.pi-extensions.pi-usage]
+version = "0.52.3"
+
+[runtime.pi-extensions.pi-usage.source]
+type = "npm"
+package = "@narumitw/pi-usage"
+
+[runtime.pi-extensions.pi-usage.artifacts."0.52.3"]
+url = "https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.52.3.tgz"
+integrity = "sha512-G8Qrh46j9/omdb0U0oq0iM0emcidr1xG4ARMrrvfNEwAQ7HU9WUljwVxycrIYdQ8Xe7wqTe0UZIaFFv80C87vQ=="
+
+[runtime.pi-extensions.pi-usage.update]
+provider = "npm"
+stable_only = true
+
+[runtime.pi-extensions.pi-usage.override]
+constraint = ">=0.52.0"
+allow_prerelease = false
+scheme = "numeric"
+
+[runtime.pi-extensions.pi-usage.validation]
 metadata_file = "package.json"
 
 [runtime.pi-extensions.pi-proxy]

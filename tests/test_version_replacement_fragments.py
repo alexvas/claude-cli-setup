@@ -134,6 +134,16 @@ def _all_family_results() -> list[UpdateResult]:
             kind=UpdateKind.REVISION,
         ),
         _outdated(
+            "runtime.pi-extensions.highlight-js", "npm", "10.7.2", "10.7.3",
+            artifacts={
+                "10.7.3": CandidateArtifact(
+                    platform="10.7.3", name="highlight.js",
+                    url="https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz",
+                    sha256=None, integrity=_sri(b"h" * 64),
+                ),
+            },
+        ),
+        _outdated(
             "runtime.pi-extensions.pi-read", "npm", "0.2.0", "0.3.0",
             artifacts={
                 "0.3.0": CandidateArtifact(
@@ -144,11 +154,21 @@ def _all_family_results() -> list[UpdateResult]:
             },
         ),
         _outdated(
-            "runtime.pi-extensions.pi-codex-usage", "npm", "0.9.1", "1.0.0",
+            "runtime.pi-extensions.pi-tui-kit", "npm", "0.49.1", "0.49.3",
             artifacts={
-                "1.0.0": CandidateArtifact(
-                    platform="1.0.0", name="pi-codex-usage",
-                    url="https://registry.npmjs.org/@llblab/pi-codex-usage/-/pi-codex-usage-1.0.0.tgz",
+                "0.49.3": CandidateArtifact(
+                    platform="0.49.3", name="pi-tui-kit",
+                    url="https://registry.npmjs.org/@narumitw/pi-tui-kit/-/pi-tui-kit-0.49.3.tgz",
+                    sha256=None, integrity=_sri(b"t" * 64),
+                ),
+            },
+        ),
+        _outdated(
+            "runtime.pi-extensions.pi-usage", "npm", "0.52.3", "0.53.0",
+            artifacts={
+                "0.53.0": CandidateArtifact(
+                    platform="0.53.0", name="pi-usage",
+                    url="https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.53.0.tgz",
                     sha256=None, integrity=_sri(b"o" * 64),
                 ),
             },
@@ -363,10 +383,12 @@ class TestReplacementRoundTrip(unittest.TestCase):
         self.assertIn("build.stages.pi-tools.pi", owners)
         self.assertIn("build.stages.openspec-tools.openspec", owners)
         self.assertIn("build.stages.runtime.oh-my-zsh", owners)
+        self.assertIn("runtime.pi-extensions.highlight-js", owners)
         self.assertIn("runtime.pi-extensions.pi-read", owners)
-        self.assertIn("runtime.pi-extensions.pi-codex-usage", owners)
+        self.assertIn("runtime.pi-extensions.pi-tui-kit", owners)
+        self.assertIn("runtime.pi-extensions.pi-usage", owners)
         self.assertIn("runtime.pi-extensions.pi-proxy", owners)
-        self.assertEqual(len(owners), 13)
+        self.assertEqual(len(owners), 15)
 
         for owner, block in blocks:
             with self.subTest(owner=owner):
