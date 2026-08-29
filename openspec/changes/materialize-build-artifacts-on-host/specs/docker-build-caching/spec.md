@@ -1,17 +1,17 @@
 ## ADDED Requirements
 
-### Requirement: Cache locked Pi dependency downloads with BuildKit
-The Pi installation stage SHALL use a Pi-specific BuildKit npm cache mount while running `npm ci`. Cache contents SHALL remain outside final image layers, SHALL NOT determine dependency versions independently of the official lockfile, and SHALL be disposable without affecting correctness.
+### Requirement: Cache locked Pi dependency downloads with the shared assembler
+Pi assembly SHALL use the opaque download cache and standalone pinned container supplied by `locked-npm-environment-assembly`. Cache contents SHALL remain outside final image layers, SHALL NOT determine dependency versions independently of the official lockfile, and SHALL be disposable without affecting correctness. BuildKit SHALL perform no Pi npm download or installation.
 
 #### Scenario: Rebuilding Pi with a warm npm cache
-- **WHEN** the Pi installation stage executes with cached tarballs matching the official lockfile
+- **WHEN** standalone Pi assembly executes with cached tarballs matching the official lockfile
 - **THEN** npm SHALL reuse those downloads where valid
 - **AND** SHALL install exactly the locked dependency graph
 
 #### Scenario: Building Pi with an empty npm cache
-- **WHEN** the Pi-specific BuildKit cache is absent or pruned
-- **THEN** npm SHALL fetch and integrity-check every required locked dependency
-- **AND** the build SHALL not require a constructor-managed npm cache format
+- **WHEN** the shared assembler npm cache is absent or pruned
+- **THEN** npm SHALL fetch and integrity-check every required locked dependency before Docker build
+- **AND** the build SHALL not require Constructor to interpret npm cache internals
 
 ### Requirement: Preserve independent artifact-stage invalidation with named inputs
 Each logical prebuilt artifact SHALL retain an independent Docker stage and stable named-context filename. Changing one selected artifact or digest SHALL invalidate its consuming stage and dependent assembly while leaving unrelated artifact stages cacheable.

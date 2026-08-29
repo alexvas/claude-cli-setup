@@ -13,7 +13,7 @@ Persistent build artifact blobs, committed build manifests, locks, and uncommitt
 - **THEN** the build SHALL fail before network access, cache mutation, or Docker execution
 
 ### Requirement: Keep host cache state private across the BuildKit boundary
-Constructor-created control directories, locks, committed manifests, uncommitted markers, temporary downloads, verified blobs, and transaction snapshots SHALL remain accessible to the invoking host owner without granting host-path traversal to the container `dev` UID. Verified blobs and finalized snapshot payloads SHALL be regular non-symlink files with all owner, group, and other write bits removed after atomic publication or finalization; verified blob and finalized snapshot files SHALL use mode `0444`, while finalized snapshot directories SHALL contain no write bits and SHALL retain only the traversal/read permissions required by the invoking host owner for named-context import. The invoking host user's Docker client SHALL import the selected snapshot as a named context; only after that import SHALL Dockerfile stages expose selected files read-only inside the BuildKit filesystem to a `dev` user whose numeric UID differs from the host owner. Publication and manifest replacement SHALL be atomic, and cache inspection SHALL revalidate digest, containment, type, and permissions before reuse. The constructor SHALL NOT chmod, chown, or otherwise relax the checkout root, any ancestor directory, the user's home directory, or unrelated cache paths.
+Constructor-created control directories, locks, committed manifests, uncommitted markers, temporary downloads, verified blobs, and transaction snapshots SHALL remain accessible to the invoking host owner without granting host-path traversal to the container `dev` UID. Verified blobs and finalized selected prebuilt-artifact snapshot payloads SHALL be regular non-symlink files with all owner, group, and other write bits removed after atomic publication or finalization. Derived-environment snapshot entries MAY include symlinks only when their assembler canonical evidence identifies them and no-follow validation proves their resolved targets remain contained within that same derived environment; consumer-created derived-environment files MAY be admitted only when their consumer evidence records their exact contents, non-writable mode, target, and containment; all other derived-environment payload files SHALL have all owner, group, and other write bits removed. Verified blobs and finalized selected prebuilt-artifact snapshot files SHALL use mode `0444`, while finalized derived-environment snapshot files SHALL preserve the executable bits validated by their assembler canonical or consumer evidence, and finalized snapshot directories SHALL contain no write bits and SHALL retain only the traversal/read permissions required by the invoking host owner for named-context import. The invoking host user's Docker client SHALL import the selected snapshot as a named context; only after that import SHALL Dockerfile stages expose selected files read-only inside the BuildKit filesystem to a `dev` user whose numeric UID differs from the host owner. Publication and manifest replacement SHALL be atomic, and cache inspection SHALL revalidate digest, containment, type, and permissions before reuse. The constructor SHALL NOT chmod, chown, or otherwise relax the checkout root, any ancestor directory, the user's home directory, or unrelated cache paths.
 
 #### Scenario: Reusing a checkout blob safely
 - **WHEN** a selected blob exists in the checkout cache
@@ -21,9 +21,16 @@ Constructor-created control directories, locks, committed manifests, uncommitted
 
 #### Scenario: Finalizing immutable payload permissions
 - **WHEN** a verified blob is published or a transaction snapshot is finalized
-- **THEN** every payload file SHALL have mode `0444`
+- **THEN** every verified blob and selected prebuilt-artifact snapshot file SHALL have mode `0444`
+- **AND** every derived-environment snapshot regular file SHALL retain the executable bits validated by its assembler canonical or consumer evidence and have all write bits removed
+- **AND** a derived-environment snapshot symlink SHALL be admitted only after no-follow validation against its canonical-evidence target and containment within that environment
 - **AND** every finalized snapshot directory SHALL have all write bits removed
 - **AND** an ordinary write attempt by the host owner SHALL fail unless the owner explicitly changes permissions outside constructor operation
+
+#### Scenario: Rejecting an unsafe derived-environment symlink
+- **WHEN** a derived-environment snapshot entry is dangling, escapes its environment, has an unrecorded or evidence-mismatched target, or cannot be no-follow validated
+- **THEN** the constructor SHALL reject the snapshot before BuildKit import
+- **AND** the symlink target and its payload SHALL NOT enter the final image
 
 #### Scenario: Importing beneath a private checkout ancestor
 - **WHEN** the checkout or one of its ancestors has mode `0700` and is owned by the invoking host user

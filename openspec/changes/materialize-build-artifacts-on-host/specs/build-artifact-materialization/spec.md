@@ -21,14 +21,22 @@ Before Docker execution, the constructor SHALL materialize every selected `linux
 - **THEN** the build SHALL fail before Docker execution
 - **AND** neither the invalid bytes nor a committed cache reference SHALL remain
 
-### Requirement: Deliver only selected artifacts through a named build context
-Each non-dry-run build SHALL create an owner-private immutable per-transaction snapshot containing only the selected verified artifacts and a deterministic manifest, then finalize every snapshot file as `0444` and remove every write bit from snapshot directories before named-context import. The invoking host user's Docker client SHALL read that snapshot and pass it as a dedicated BuildKit named context without relaxing checkout or ancestor permissions. Dockerfile stages SHALL obtain imported artifact copies from the named context rather than host cache paths or network URLs, SHALL make those in-build copies readable by the stage user, and SHALL verify each reviewed digest again before installation.
+### Requirement: Deliver selected artifacts and verified derived environments through a named build context
+Each non-dry-run build SHALL create an owner-private immutable per-transaction snapshot containing only the selected SHA-256-verified artifacts, a deterministic artifact manifest, and derived assembled environments with their assembler canonical evidence and any required consumer evidence after host-side validation against their assembly results. The snapshot SHALL finalize selected prebuilt-artifact files as `0444`, finalize each derived-environment file with every write bit removed while preserving its assembler- or consumer-evidence-validated executable bits, and remove every write bit from snapshot directories before named-context import. The invoking host user's Docker client SHALL read that snapshot and pass it as a dedicated BuildKit named context without relaxing checkout or ancestor permissions. Dockerfile stages SHALL obtain imported copies from the named context rather than host cache paths or network URLs and SHALL make those in-build copies readable by the stage user. Stages SHALL reverify each selected prebuilt artifact against its reviewed digest before installation, and SHALL verify each derived environment against the expected assembler environment identity and deterministic consumer-evidence digest supplied by a post-materialization transaction/build-plan attestation, then against its assembler canonical evidence and required consumer evidence, before copying it into its final layout.
 
 #### Scenario: Rendering a selected build snapshot
-- **WHEN** all selected artifacts have been materialized
+- **WHEN** all selected artifacts and derived environments have completed their required host validation
 - **THEN** the build vector SHALL identify the finalized transaction snapshot as the dedicated named context
-- **AND** the snapshot SHALL expose stable logical filenames only for selected artifacts
-- **AND** its files and directories SHALL have no write bit for owner, group, or other
+- **AND** the snapshot SHALL expose stable logical filenames only for selected prebuilt artifacts
+- **AND** the snapshot SHALL expose each derived environment and its evidence only beneath its isolated derived-environment path
+- **AND** selected prebuilt-artifact files SHALL have mode `0444`
+- **AND** derived-environment files SHALL retain their canonical-evidence-validated executable bits while having no write bit for owner, group, or other
+- **AND** snapshot directories SHALL have no write bit for owner, group, or other
+
+#### Scenario: Verifying an imported derived environment
+- **WHEN** a host-validated derived environment with its assembler canonical evidence and required consumer evidence is imported through the named context
+- **THEN** the consuming Dockerfile stage SHALL first require `DerivedEnvironment` and match the environment’s assembler identity and consumer-evidence digest to its expected values supplied by the post-materialization transaction/build-plan attestation, then verify both evidence sets before final-layout copy
+- **AND** an invalid, incomplete, evidence-mismatched, or substituted environment/evidence pair SHALL fail the stage without entering the final image
 
 #### Scenario: Consuming an imported snapshot with a remapped user
 - **WHEN** the invoking host user has imported the snapshot into BuildKit and a build stage runs as `dev` under a different numeric UID
@@ -42,7 +50,7 @@ Each non-dry-run build SHALL create an owner-private immutable per-transaction s
 
 #### Scenario: Rendering a dry-run prospective context
 - **WHEN** a dry-run renders the planned Docker build
-- **THEN** its structured context SHALL be `{ "name": "constructor-artifacts", "state": "prospective", "path": null }`
+- **THEN** its structured context SHALL be `{ "name": "constructor-artifacts", "state": "prospective", "path": null, "attestation": { "state": "prospective" } }`
 - **AND** text output SHALL display `--build-context constructor-artifacts=<prospective:not-materialized>` beneath an explicit `Planned build (not executable)` label
 - **AND** the value SHALL be presentation metadata rather than a filesystem path or executable argument
 - **AND** dry-run SHALL perform no lock acquisition, directory creation, artifact inspection, download, snapshot publication, cache mutation, or Docker capability probe
@@ -50,7 +58,7 @@ Each non-dry-run build SHALL create an owner-private immutable per-transaction s
 #### Scenario: Rejecting an unresolved context in execution
 - **WHEN** executable argument rendering receives a build plan with any prospective context
 - **THEN** it SHALL reject the plan before producing executable argv or invoking Docker
-- **AND** SHALL require every named context to be materialized with a real platform-native path
+- **AND** SHALL require every named context to be materialized with a real platform-native path and one valid closed attestation: `NoDerivedEnvironment` or `DerivedEnvironment(assemblerEnvironmentIdentity, consumerLauncherEvidenceDigest)`
 
 #### Scenario: Rendering prospective context across host platforms
 - **WHEN** the same dry-run is rendered under POSIX and Windows host path semantics
@@ -61,7 +69,7 @@ Each non-dry-run build SHALL create an owner-private immutable per-transaction s
 - **WHEN** Docker does not support BuildKit named contexts
 - **THEN** the constructor SHALL fail with actionable prerequisite guidance before artifact download or Docker build execution
 
-#### Scenario: Detecting a boundary integrity failure
+#### Scenario: Detecting a prebuilt-artifact boundary integrity failure
 - **WHEN** bytes received by a Dockerfile stage do not match the supplied reviewed digest
 - **THEN** that stage SHALL fail
 - **AND** the artifact SHALL NOT enter the final image
