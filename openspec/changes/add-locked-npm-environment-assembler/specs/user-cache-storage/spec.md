@@ -1,11 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: Store opaque npm downloads and assembled environments privately
-The resolved constructor cache SHALL provide an owner-private assembler namespace keyed by assembler identity. It SHALL keep npm's download cache opaque and disposable, never treat it as authority, and store published assembled environments by deterministic environment identity with private locks, staging, manifests, and evidence. Pi and extension consumers MAY reuse downloads while retaining independent environment identities and lifecycle policies.
+The resolved constructor cache SHALL provide an owner-private assembler namespace keyed by assembler identity. It SHALL keep npm's download cache opaque and disposable and never treat it as authority. It SHALL store immutable published environments only by `AssembledOutputIdentity`, derived from assembler input identity, canonical output-tree digest, and canonical assembler-evidence digest, with private locks, staging, manifests, and evidence. Storage keyed only by assembler input identity SHALL NOT be described as content-addressed and SHALL NOT hold an authoritative assembled output. A non-authoritative input-identity index MAY reference zero, one, or multiple output identities and SHALL never permit distinct outputs to overwrite or alias one another. Pi and extension consumers MAY reuse downloads while retaining independent output identities and lifecycle policies.
 
 #### Scenario: Reusing an npm download
 - **WHEN** independent assemblies need a tarball already present in the assembler cache
-- **THEN** npm MAY reuse its opaque cache entry subject to lockfile integrity verification
+- **THEN** npm MAY reuse its opaque cache entry subject to locked SRI verification when present and pinned npm's native registry integrity behavior when the accepted lock entry omits SRI
+- **AND** published environment reuse SHALL require complete canonical tree-evidence verification and recomputation of the selected output identity, tree digest, and evidence digest
 - **AND** removing the cache SHALL affect performance only
 
 #### Scenario: Separating consumer environments

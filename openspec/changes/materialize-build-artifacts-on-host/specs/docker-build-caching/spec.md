@@ -10,7 +10,8 @@ Pi assembly SHALL use the opaque download cache and standalone pinned container 
 
 #### Scenario: Building Pi with an empty npm cache
 - **WHEN** the shared assembler npm cache is absent or pruned
-- **THEN** npm SHALL fetch and integrity-check every required locked dependency before Docker build
+- **THEN** npm SHALL fetch every required locked dependency before Docker build, verify locked SRI when present, and apply pinned npm's native registry integrity behavior to accepted integrity-less exact HTTPS registry nodes
+- **AND** assembler evidence SHALL identify every integrity-less node and canonically hash the published output tree
 - **AND** the build SHALL not require Constructor to interpret npm cache internals
 
 ### Requirement: Preserve independent artifact-stage invalidation with named inputs
