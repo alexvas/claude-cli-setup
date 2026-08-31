@@ -46,7 +46,7 @@ Execute `npm ci --ignore-scripts --no-bin-links --no-audit --no-fund` in empty s
 
 ### Publish a canonical hashed tree
 
-Hash every regular file and describe directories and contained symlinks in deterministic path order. `AssemblerInputIdentity` is computed before effects from canonical roots/package input, exact lock bytes, assembler image and asserted tools, script/policy versions, and platform. It is a stable input key, not a content address for assembled bytes.
+Hash every regular file and describe directories and contained symlinks in deterministic path order. `AssemblerInputIdentity` is computed before effects from canonical reviewed roots, the exact lockfile-byte digest, and the assembler identity (image digest, asserted tool versions, script/policy digests, and platform). It is a stable input key, not a content address for assembled bytes.
 
 After complete output and evidence validation, compute a canonical output-tree digest and a canonical assembler-evidence-body digest. The evidence body excludes its enclosing output-identity field to avoid a digest cycle. Derive `AssembledOutputIdentity` from the tuple `(assemblerInputIdentity, canonicalTreeDigest, assemblerEvidenceDigest)` and include all three components plus the resulting output identity in the immutable evidence envelope and result. Different validated trees or evidence bodies must produce different output identities even when their input identity is equal. Cache hits repeat no-follow tree verification and recompute all three bindings; performance is secondary to host evidence.
 
@@ -56,7 +56,7 @@ Use one assembler-identity npm cache for download reuse, but publish each immuta
 
 ### Run as the invoking host identity
 
-Create owner-private staging and run the container as host UID/GID with a private HOME, narrow read-only inputs, opaque cache and one writable output. This prevents root-owned output while keeping Docker daemon and container filesystem boundaries explicit.
+Create owner-private staging and run the container as host UID/GID with a private HOME, narrow read-only inputs, opaque cache and one writable output. Under rootless Docker the invoking host user maps to container UID/GID `0`, so the container runs as `0:0`; detection via `docker info` keeps the owner-private bind mounts writable in both rootful and rootless modes. This prevents root-owned output while keeping Docker daemon and container filesystem boundaries explicit.
 
 ### Apply one network and cancellation boundary
 
@@ -70,6 +70,7 @@ Render resolved credential-free proxy and CA inputs through structured Docker ar
 - [Install scripts are required for a consumer] → Keep scripts disabled and fail consumer acceptance rather than silently executing code.
 - [Optional dependencies vary by platform] → Support only declared platform and record validated omissions explicitly.
 - [Host UID lacks an image passwd entry] → Use numeric UID/GID, private HOME and paths requiring no account lookup.
+- [Rootless Docker remaps the host user to container UID/GID 0] → Detect rootless via `docker info` and run the container as `0:0` so owner-private bind mounts stay writable.
 - [Consumer requirements leak into the shared layer] → Preserve neutral validated root executable declarations but never derive a consumer launcher; dependent changes own launcher location, contents, evidence, layout and UX.
 
 ## Migration Plan

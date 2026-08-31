@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Dedicated host smoke test for the locked npm environment assembler.
+
+Usage:
+    scripts/smoke-npm-assembler <IMMUTABLE_IMAGE_REFERENCE> <REPORT_PATH>
+
+Accepts exactly the reviewed immutable image reference (bare
+``sha256:<64 lowercase hex>`` or a repository-qualified digest) and an
+explicit report-file path.  Runs the production assembler end to end with
+the fixed reviewed Node/npm versions, the embedded real-registry lockfile
+fixture, and the fixed npm policy, then writes a canonical JSON report and
+exits 0 only when the installed closure matches, no lifecycle script ran,
+and no executable link was created.
+
+``sys.path`` manipulation is confined to this bootstrap; ordinary imports
+of the underlying module never trigger it.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+def _bootstrap() -> int:
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from docker.npm_environment.smoke import main
+
+    return main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(_bootstrap())

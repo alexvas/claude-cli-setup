@@ -1,0 +1,172 @@
+"""Locked npm environment assembler — consumer-neutral, host-evidenced
+assembly of exact npm dependency closures from reviewed roots and standard
+``package-lock.json`` v3 files.
+
+Phase 1 exposes the closed lockfile-v3 model, strict registry-only input
+validation, npm range semantics, side-effect-free preflight, and
+deterministic assembler/assembler-input identities.  Phase 2 adds the
+owner-private assembler cache namespace, opaque npm download cache, safe
+staging, canonical hashed tree manifests, and no-follow tree verification.
+Phase 3 adds the fixed npm policy, consumer-neutral assembler script,
+deterministic Docker run-vector rendering, and structured/cancellable
+Docker execution.  Later phases add corporate network projection and
+atomic publication.
+"""
+
+from __future__ import annotations
+
+from .assembler import (
+    MANIFEST_DEPENDENCY_KEYS,
+    NPM_CI_FLAGS,
+    assembler_script_bytes,
+    assembler_script_digest,
+    npm_policy_digest,
+    npm_policy_flags,
+)
+from .errors import LockedNpmError
+from .execution import (
+    AssemblyRun,
+    CleanupFailure,
+    DockerRunExecutor,
+    ProcessResult,
+    RunExecutor,
+    assemble,
+    redact,
+)
+from .identity import (
+    AssemblerIdentity,
+    AssemblerInputIdentity,
+    compute_assembler_identity,
+    compute_assembler_input_identity,
+)
+from .image_ref import validate_image_reference
+from .lockfile import parse_lockfile
+from .model import (
+    IntegrityLessNode,
+    LockfileV3,
+    LockPackage,
+    OmittedOptional,
+    ReviewedRootMetadata,
+    RootMetadataKey,
+    RootSpec,
+    ValidatedAssemblyInput,
+)
+from .preflight import preflight
+from .run_vector import (
+    DockerRunVector,
+    Mount,
+    recheck_assembler_bindings,
+    render_docker_argv,
+    render_run_vector,
+)
+from .semver_range import (
+    NpmRange,
+    NpmRangeError,
+    parse_range,
+    satisfies,
+)
+from .smoke import (
+    LIFECYCLE_MARKER,
+    SMOKE_MARKER_PACKAGE,
+    SMOKE_MARKER_VERSION,
+    SMOKE_NODE_VERSION,
+    SMOKE_NPM_VERSION,
+    SMOKE_PLATFORM,
+    SMOKE_REPORT_SCHEMA_VERSION,
+    extract_image_digest,
+    parse_smoke_args,
+    render_smoke_report,
+    run_smoke,
+    serialize_smoke_report,
+    smoke_fixture_bytes,
+    smoke_fixture_digest,
+    smoke_roots,
+    verify_installed_closure,
+    verify_no_executable_link,
+    verify_no_lifecycle_effect,
+)
+from .storage import (
+    AssemblerNamespace,
+    assembler_namespace_path,
+    prepare_assembler_namespace,
+    prepare_identity_lock,
+    prepare_staging_workspace,
+    remove_staging_workspace,
+)
+from .tree import (
+    TreeEntry,
+    TreeManifest,
+    build_tree_manifest,
+    canonical_tree_digest,
+    verify_tree,
+)
+
+__all__ = [
+    "AssemblyRun",
+    "AssemblerIdentity",
+    "AssemblerInputIdentity",
+    "AssemblerNamespace",
+    "CleanupFailure",
+    "DockerRunExecutor",
+    "DockerRunVector",
+    "IntegrityLessNode",
+    "LIFECYCLE_MARKER",
+    "LockedNpmError",
+    "LockfileV3",
+    "LockPackage",
+    "MANIFEST_DEPENDENCY_KEYS",
+    "Mount",
+    "NPM_CI_FLAGS",
+    "NpmRange",
+    "NpmRangeError",
+    "OmittedOptional",
+    "ProcessResult",
+    "ReviewedRootMetadata",
+    "RootMetadataKey",
+    "RootSpec",
+    "RunExecutor",
+    "SMOKE_MARKER_PACKAGE",
+    "SMOKE_MARKER_VERSION",
+    "SMOKE_NODE_VERSION",
+    "SMOKE_NPM_VERSION",
+    "SMOKE_PLATFORM",
+    "SMOKE_REPORT_SCHEMA_VERSION",
+    "TreeEntry",
+    "TreeManifest",
+    "ValidatedAssemblyInput",
+    "assemble",
+    "assembler_namespace_path",
+    "assembler_script_bytes",
+    "assembler_script_digest",
+    "build_tree_manifest",
+    "canonical_tree_digest",
+    "compute_assembler_identity",
+    "compute_assembler_input_identity",
+    "extract_image_digest",
+    "npm_policy_digest",
+    "npm_policy_flags",
+    "parse_lockfile",
+    "parse_range",
+    "parse_smoke_args",
+    "preflight",
+    "prepare_assembler_namespace",
+    "prepare_identity_lock",
+    "prepare_staging_workspace",
+    "recheck_assembler_bindings",
+    "redact",
+    "remove_staging_workspace",
+    "render_docker_argv",
+    "render_run_vector",
+    "render_smoke_report",
+    "run_smoke",
+    "satisfies",
+    "serialize_smoke_report",
+    "smoke_fixture_bytes",
+    "smoke_fixture_digest",
+    "smoke_roots",
+    "validate_image_reference",
+    "verify_installed_closure",
+    "verify_no_executable_link",
+    "verify_no_lifecycle_effect",
+    "verify_tree",
+]
