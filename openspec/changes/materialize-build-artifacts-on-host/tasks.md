@@ -19,13 +19,13 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 
 **Deliverables:** canonical algorithm/digest identity shared by hex SHA-256 and SRI callers; fixed checkout-local build-cache paths; host-owner-private cache/snapshot paths; explicit prohibition on ancestor permission repair; updated ignore rules.
 
-- [ ] 1.1 **RED:** Add focused digest-identity tests for SHA-256 hex/SRI equivalence, canonical cache paths, deduplication, malformed input, and unsupported algorithms; verify they fail against the runtime-only identity model.
-- [ ] 1.2 **RED:** Add focused path tests for fixed checkout-local persistent/generated roots, containment, symlink/type rejection, and prohibition of shared-XDG or configurable roots; verify failure occurs before cache mutation.
-- [ ] 1.3 **RED:** Add focused permission tests proving published verified blobs are exactly `0444`, ordinary host-owner/group/other mutation attempts fail, the invoking host owner can read cache/snapshot state beneath a `0700` checkout parent, a differing UID cannot traverse those host paths, and path preparation leaves checkout, parent, home, and unrelated cache modes unchanged.
-- [ ] 1.4 **GREEN:** Implement canonical digest identity and adapters required by task 1.1; verify existing runtime SRI cache contracts still pass.
-- [ ] 1.5 **GREEN:** Implement checkout-local path preparation, host-owner traversal validation, strict no-repair handling for inaccessible ancestors, and ignore entries required by tasks 1.2–1.3.
-- [ ] 1.6 **INTROSPECT:** Review the phase diff for duplicated digest parsing, path derivation outside the owning module, ambient umask dependence, and accidental exposure of mutable control state; remove each issue found without adding later-phase behavior.
-- [ ] 1.7 **VALIDATE:** Run digest, cache-path, permission, runtime-cache security, and ignore-boundary tests; record host-owner success beneath a `0700` parent, differing-UID host denial, and unchanged ancestor modes.
+- [x] 1.1 **RED:** Add focused digest-identity tests for SHA-256 hex/SRI equivalence, canonical cache paths, deduplication, malformed input, and unsupported algorithms; verify they fail against the runtime-only identity model.
+- [x] 1.2 **RED:** Add focused path tests for fixed checkout-local persistent/generated roots, containment, symlink/type rejection, and prohibition of shared-XDG or configurable roots; verify failure occurs before cache mutation.
+- [x] 1.3 **RED:** Add focused permission tests proving published verified blobs are exactly `0444`, ordinary host-owner/group/other mutation attempts fail, the invoking host owner can read cache/snapshot state beneath a `0700` checkout parent, a differing UID cannot traverse those host paths, and path preparation leaves checkout, parent, home, and unrelated cache modes unchanged.
+- [x] 1.4 **GREEN:** Implement canonical digest identity and adapters required by task 1.1; verify existing runtime SRI cache contracts still pass.
+- [x] 1.5 **GREEN:** Implement checkout-local path preparation, host-owner traversal validation, strict no-repair handling for inaccessible ancestors, and ignore entries required by tasks 1.2–1.3.
+- [x] 1.6 **INTROSPECT:** Review the phase diff for duplicated digest parsing, path derivation outside the owning module, ambient umask dependence, and accidental exposure of mutable control state; remove each issue found without adding later-phase behavior.
+- [x] 1.7 **VALIDATE:** Run digest, cache-path, permission, runtime-cache security, and ignore-boundary tests; record host-owner success beneath a `0700` parent, differing-UID host denial, and unchanged ancestor modes.
 
 ## 2. Serialized Transaction and Retention State
 

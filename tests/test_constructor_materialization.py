@@ -48,7 +48,7 @@ from docker.versioning.artifact_cache import (
     TemporaryDirectory,
     VerifiedCacheBlob,
     _compute_digest,
-    _sri_to_algorithm_digest,
+    DigestIdentity,
     derive_cache_path_from_integrity,
     materialize_selected_artifacts,
     validate_cache_blob,
@@ -442,7 +442,8 @@ class TestMaterializationPipeline(_MaterializationTestCase):
         """GREEN — when a blob exists in the cache, transport is never used."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
 
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -468,7 +469,8 @@ class TestMaterializationPipeline(_MaterializationTestCase):
         """GREEN — cache hit returns VerifiedCacheBlob with correct fields."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
 
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -494,7 +496,8 @@ class TestMaterializationPipeline(_MaterializationTestCase):
         """GREEN — a cache hit is revalidated; a symlink is rejected."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
 
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -541,7 +544,8 @@ class TestMaterializationPipeline(_MaterializationTestCase):
 
         self.assertGreater(len(fs.published), 0)
         _, final = fs.published[0]
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
         expected_suffix = os.path.join(algo, f"{safe}.tgz")
         self.assertTrue(
             final.endswith(expected_suffix),
@@ -553,7 +557,8 @@ class TestMaterializationPipeline(_MaterializationTestCase):
         """GREEN — cache miss returns VerifiedCacheBlob."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
 
         transport = _FakeTransport({"https://x.test/pkg.tgz": data})
         fs = _FakeFilesystem()
@@ -1101,7 +1106,8 @@ class TestConcurrencyCoordination(_MaterializationTestCase):
         """GREEN — cache hit does not acquire the lock."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
 
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -1352,7 +1358,8 @@ class TestCorruptionRecovery(_MaterializationTestCase):
     ) -> tuple[str, SelectedArtifact, _FakeTransport]:
         """Create a valid blob at the cache path, then corrupt it."""
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
@@ -1373,7 +1380,9 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         from the reviewed URL."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, raw, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo = identity.algorithm
+        safe = identity.runtime_safe_digest()
         cache_root = self._cache_root
         algo_dir = os.path.join(cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -1413,7 +1422,9 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         the identity lock, and replaced with a verified blob."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, raw, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo = identity.algorithm
+        safe = identity.runtime_safe_digest()
         cache_root = self._cache_root
         algo_dir = os.path.join(cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -1453,7 +1464,9 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         and replaced with a verified blob from the reviewed URL."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, raw, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo = identity.algorithm
+        safe = identity.runtime_safe_digest()
         cache_root = self._cache_root
         algo_dir = os.path.join(cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -1487,7 +1500,8 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         """GREEN — valid-looking blob with wrong bytes is repaired."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
 
         wrong_data = b"wrong-content-" * 50
         algo_dir = os.path.join(self._cache_root, algo)
@@ -1517,7 +1531,8 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         truncated = data[:50]
 
         integrity = _make_integrity_for(data)
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")
@@ -1545,7 +1560,9 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         host path, and is revalidated."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, raw, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo = identity.algorithm
+        safe = identity.runtime_safe_digest()
         cache_root = self._cache_root
         algo_dir = os.path.join(cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -1584,7 +1601,9 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         never invoked."""
         data = _make_tarball_bytes()
         integrity = _make_integrity_for(data)
-        algo, raw, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo = identity.algorithm
+        safe = identity.runtime_safe_digest()
         cache_root = self._cache_root
         algo_dir = os.path.join(cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
@@ -1626,7 +1645,8 @@ class TestCorruptionRecovery(_MaterializationTestCase):
         # Create a valid blob (so validate_cache_blob checks
         # containment correctly), then make the filesystem fail
         # quarantine.
-        algo, _, safe = _sri_to_algorithm_digest(integrity)
+        identity = DigestIdentity.from_sri(integrity)
+        algo, safe = identity.algorithm, identity.runtime_safe_digest()
         algo_dir = os.path.join(self._cache_root, algo)
         os.makedirs(algo_dir, exist_ok=True)
         blob_path = os.path.join(algo_dir, f"{safe}.tgz")

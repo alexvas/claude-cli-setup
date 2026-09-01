@@ -1,5 +1,6 @@
 .env
 .docker-generated/
+.docker-cache/
 __pycache__/
 .claude/
 docker-constructor.local.toml

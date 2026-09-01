@@ -12,12 +12,11 @@ from __future__ import annotations
 import base64
 import dataclasses
 import os
-import re
 import stat as stat_module
 import urllib.request
 from typing import Iterator, Protocol
 
-from docker.versioning.integrity import matches_integrity_format
+from docker.versioning.digest_identity import DigestIdentity, DigestIdentityError
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -135,114 +134,15 @@ class CacheBlobInspection:
 # or invoking Docker.
 
 
-# Only these algorithms may appear in a cache path.  An algorithm
-# outside this set is rejected before path construction.
-_SUPPORTED_ALGORITHMS = frozenset({"sha256", "sha384", "sha512"})
-
-# A safe digest component contains only URL-safe base64 characters
-# (RFC 4648 § 5), preserves padding, and MUST NOT be empty or carry
-# traversal segments (``..``).  Path separators (``/``, ``\``) and
-# null bytes are explicitly forbidden.
-#
-# Allowed: ``[A-Za-z0-9._-]`` with at most two trailing ``=`` pad
-# chars.  Longer runs of ``=`` or ``=`` in the middle would indicate
-# a malformed or malicious digest.
-_DIGEST_RE = re.compile(r"^[A-Za-z0-9._-]+={0,2}$")
+def derive_cache_path(algorithm: str, digest: str, *, root: str) -> str:
+    """Legacy runtime path adapter for an encoded digest component."""
+    return DigestIdentity.runtime_cache_path_from_component(algorithm, digest, root)
 
 
-def _sri_to_algorithm_digest(integrity: str) -> tuple[str, str, str]:
-    """Split a validated SRI integrity string into ``(algorithm,
-    raw_base64, filesystem_safe_digest)``.
-
-    *integrity* MUST have already passed the SRI regex
-    (``sha(256|384|512)-[A-Za-z0-9+/]+=*``).
-
-    The filesystem-safe digest replaces ``+`` with ``-`` and ``/``
-    with ``_`` while preserving any ``=`` padding.  It does NOT
-    include the algorithm prefix or the ``.tgz`` suffix.
-    """
-    algo, raw = integrity.split("-", 1)
-    safe = raw.replace("+", "-").replace("/", "_")
-    return algo, raw, safe
-
-
-def derive_cache_path(
-    algorithm: str,
-    digest: str,
-    *,
-    root: str,
-) -> str:
-    """Return the deterministic content-addressed cache path for a
-    validated *algorithm* and *digest*.
-
-    The path is derived **solely** from *algorithm* and *digest*.
-    Package names, URLs, versions, and caller-provided paths do NOT
-    participate.
-
-    Parameters
-    ----------
-    algorithm:
-        Lower-case hash algorithm (``"sha256"``, ``"sha384"``, or
-        ``"sha512"``).  Unsupported algorithms raise
-        ``ValueError``.
-    digest:
-        Filesystem-safe digest string consisting only of URL-safe
-        base64 characters (``[A-Za-z0-9._-]`` with at most two
-        trailing ``=``).  Traversal segments, path separators,
-        null bytes, and empty strings are rejected with
-        ``ValueError``.
-    root:
-        Cache root directory.  When ``None`` the constructor-owned
-        An explicit resolved cache root is required.
-
-    Returns
-    -------
-    Absolute or relative path in the form
-    ``<root>/<algorithm>/<digest>.tgz``.
-    """
-    if algorithm not in _SUPPORTED_ALGORITHMS:
-        raise ValueError(
-            f"unsupported algorithm {algorithm!r}; "
-            f"must be one of {sorted(_SUPPORTED_ALGORITHMS)}"
-        )
-    if not digest:
-        raise ValueError("digest must not be empty")
-    if os.sep in digest or (os.sep != "/" and "/" in digest):
-        raise ValueError(
-            f"digest must not contain path separators: {digest!r}"
-        )
-    if "\x00" in digest:
-        raise ValueError("digest must not contain null bytes")
-    if digest in (".", ".."):
-        raise ValueError(
-            f"digest must not be a traversal component: {digest!r}"
-        )
-    if not _DIGEST_RE.match(digest):
-        raise ValueError(
-            f"digest contains unsafe characters: {digest!r}"
-        )
-    return os.path.join(root, algorithm, f"{digest}.tgz")
-
-
-def derive_cache_path_from_integrity(
-    integrity: str,
-    *,
-    root: str,
-) -> tuple[str, str]:
-    """Convenience that combines SRI parsing and cache-path derivation.
-
-    Returns ``(host_path, algorithm)`` where *host_path* is the
-    deterministic cache blob path and *algorithm* is the lower-case
-    hash algorithm.
-
-    The *integrity* string MUST have already been validated against
-    ``sha(256|384|512)-[A-Za-z0-9+/]+=*`` by the caller.  The
-    algorithm portion is re-checked against the supported set.
-    """
-    if "-" not in integrity:
-        raise ValueError(f"invalid integrity format: {integrity!r}")
-    algo, _raw, safe = _sri_to_algorithm_digest(integrity)
-    return derive_cache_path(algo, safe, root=root), algo
+def derive_cache_path_from_integrity(integrity: str, *, root: str) -> tuple[str, str]:
+    """Derive the legacy URL-safe-base64 ``.tgz`` runtime path."""
+    identity = DigestIdentity.from_sri(integrity)
+    return derive_cache_path(identity.algorithm, identity.runtime_safe_digest(), root=root), identity.algorithm
 
 
 # ── protocol boundaries ────────────────────────────────────────────────
@@ -406,15 +306,12 @@ def inspect_verified_blob_readonly(
     import stat as _stat
 
     try:
-        algo, raw_expected, safe_digest = \
-            _sri_to_algorithm_digest(integrity)
-    except (AttributeError, ValueError):
+        identity = DigestIdentity.from_sri(integrity)
+    except (DigestIdentityError, ValueError):
         return False
-
-    if algo not in _SUPPORTED_ALGORITHMS:
-        return False
-
-    blob_name = f"{safe_digest}.tgz"
+    algo = identity.algorithm
+    raw_expected = identity.sri().split("-", 1)[1]
+    blob_name = f"{identity.runtime_safe_digest()}.tgz"
 
     # ── open cache root (O_NOFOLLOW: reject symlinked root) ──
     root_rdonly = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
@@ -617,26 +514,13 @@ def _validate_selected(selected: list[SelectedArtifact]) -> None:
     """Reject any selected artifact with an unsupported algorithm
     or malformed integrity before any IO."""
     for art in selected:
-        if "-" not in art.integrity:
+        try:
+            DigestIdentity.from_sri(art.integrity)
+        except (DigestIdentityError, ValueError) as exc:
             raise ArtifactMaterializationError(
                 reason="integrity",
-                detail=f"malformed integrity: {art.integrity!r}",
-            )
-        algo = art.integrity.split("-", 1)[0]
-        if algo not in _SUPPORTED_ALGORITHMS:
-            raise ArtifactMaterializationError(
-                reason="integrity",
-                detail=(
-                    f"unsupported algorithm {algo!r} "
-                    f"in {art.integrity!r}"
-                ),
-            )
-        # Also validate via the SRI format regex.
-        if not matches_integrity_format(art.integrity):
-            raise ArtifactMaterializationError(
-                reason="integrity",
-                detail=f"integrity does not match SRI format: {art.integrity!r}",
-            )
+                detail=f"malformed or unsupported integrity: {art.integrity!r}",
+            ) from exc
 
 
 def _try_cache_hit(
@@ -664,15 +548,16 @@ def _try_cache_hit(
     except (ArtifactMaterializationError, FileNotFoundError, OSError):
         return None
 
-    expected_raw = _sri_to_algorithm_digest(integrity)[1]
+    identity = DigestIdentity.from_sri(integrity)
+    expected_raw = identity.base64_digest()
     actual_raw = inspection.digest
     if actual_raw != expected_raw:
         return None
 
-    safe_digest = _sri_to_algorithm_digest(integrity)[2]
+    safe_digest = identity.hex_digest()
     return VerifiedCacheBlob(
         algorithm=algorithm,
-        digest=safe_digest,
+        digest=identity.runtime_safe_digest(),
         integrity=integrity,
         host_path=path,
     )
@@ -703,9 +588,9 @@ def _materialize_one(
     8. Unconditional cleanup and lock release (with exception
        chaining — the primary error is always preserved).
     """
-    path, algorithm = derive_cache_path_from_integrity(
-        integrity, root=root,
-    )
+    identity = DigestIdentity.from_sri(integrity)
+    path = derive_cache_path(identity.algorithm, identity.runtime_safe_digest(), root=root)
+    algorithm = identity.algorithm
 
     # ── 0. harden private subtrees before any access ───────────
     cache_root = os.path.dirname(os.path.dirname(path))
@@ -718,13 +603,13 @@ def _materialize_one(
         return hit
 
     # ── 2. coordinated download ──────────────────────────────────
-    lock = lock_factory(integrity)
+    lock = lock_factory(identity.sri())
     tmp_root: str | None = None
     acquired: bool = False
     primary_exc: BaseException | None = None
 
     try:
-        acquired = lock.acquire(integrity)
+        acquired = lock.acquire(identity.sri())
 
         # ── 3. post-lock recheck ─────────────────────────────────
         hit = _try_cache_hit(integrity, algorithm, path, filesystem, root)
@@ -736,7 +621,7 @@ def _materialize_one(
 
         # ── 5. streaming download + hash ─────────────────────────
         filesystem.ensure_secure_dir(algorithm_dir)
-        expected_raw = _sri_to_algorithm_digest(integrity)[1]
+        expected_raw = identity.base64_digest()
 
         tmp_root = temp_dir.mkdtemp(
             prefix="materialize-", parent=temp_root,
@@ -803,10 +688,10 @@ def _materialize_one(
                     pass
             raise
 
-        safe_digest = _sri_to_algorithm_digest(integrity)[2]
+        safe_digest = identity.hex_digest()
         return VerifiedCacheBlob(
             algorithm=algorithm,
-            digest=safe_digest,
+            digest=identity.runtime_safe_digest(),
             integrity=integrity,
             host_path=path,
         )
@@ -903,7 +788,8 @@ def _validate_published_blob(
         )
 
     # ── digest re-check ──────────────────────────────────────────
-    expected_raw = _sri_to_algorithm_digest(integrity)[1]
+    identity = DigestIdentity.from_sri(integrity)
+    expected_raw = identity.base64_digest()
     actual_raw = inspection.digest
     if actual_raw is None:
         raise ArtifactMaterializationError(

@@ -18,15 +18,9 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
-_SPEC = (
-    _REPO
-    / "openspec"
-    / "changes"
-    / "add-locked-npm-environment-assembler"
-    / "specs"
-    / "locked-npm-environment-assembly"
-    / "spec.md"
-)
+# The change is archived, so its completed capability contract lives in the
+# canonical OpenSpec location rather than under the former active change.
+_SPEC = _REPO / "openspec" / "specs" / "locked-npm-environment-assembly" / "spec.md"
 _MAP_PATH = _REPO / "tests" / "data" / "npm_environment_scenario_coverage.json"
 
 _SCENARIO_RE = re.compile(r"^#### Scenario: (.*)$", re.MULTILINE)

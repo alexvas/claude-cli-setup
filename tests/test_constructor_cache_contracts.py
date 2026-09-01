@@ -28,82 +28,17 @@ from pathlib import Path
 
 
 class TestSRIIdentity(unittest.TestCase):
-    """Canonical integrity identity derivation."""
-
-    def test_parse_sha512_integrity(self) -> None:
-        from docker.versioning.artifact_cache import _sri_to_algorithm_digest
-
-        # Use a synthetic integrity that includes + and / so we can
-        # verify the URL-safe replacement.
-        algo, raw, safe = _sri_to_algorithm_digest(
-            "sha512-AA++BB//CC==",
-        )
-        self.assertEqual(algo, "sha512")
-        # raw preserves original base64 characters
-        self.assertIn("+", raw)
-        self.assertIn("/", raw)
-        # safe replaces +→-  /→_
-        self.assertNotIn("+", safe)
-        self.assertNotIn("/", safe)
-        self.assertIn("-", safe)
-        self.assertIn("_", safe)
-        # padding is preserved
-        self.assertTrue(safe.endswith("=="))
-
-    def test_parse_sha256_integrity(self) -> None:
-        from docker.versioning.artifact_cache import _sri_to_algorithm_digest
-
-        algo, raw, safe = _sri_to_algorithm_digest(
-            "sha256-abc123XYZ789+/==",
-        )
-        self.assertEqual(algo, "sha256")
-        self.assertEqual(raw, "abc123XYZ789+/==")
-        self.assertEqual(safe, "abc123XYZ789-_==")
-
-    def test_parse_sha384_integrity(self) -> None:
-        from docker.versioning.artifact_cache import _sri_to_algorithm_digest
-
-        algo, raw, safe = _sri_to_algorithm_digest(
-            "sha384-AABBCCDDEEaabbccddee//++==",
-        )
-        self.assertEqual(algo, "sha384")
-        self.assertEqual(safe, "AABBCCDDEEaabbccddee__--==")
-
-    def test_supported_algorithms_accepted(self) -> None:
-        for algo in ("sha256", "sha384", "sha512"):
-            with self.subTest(algorithm=algo):
-                from docker.versioning.artifact_cache import (
-                    _sri_to_algorithm_digest,
-                )
-
-                _integrity = f"{algo}-AAAA"
-                parsed_algo, _, _ = _sri_to_algorithm_digest(_integrity)
-                self.assertEqual(parsed_algo, algo)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 2.1b — filesystem-safe cache keys
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestCacheKeySafety(unittest.TestCase):
-    """Cache keys must be filesystem-safe."""
-
-    def test_no_plus_in_key(self) -> None:
-        from docker.versioning.artifact_cache import (
-            _sri_to_algorithm_digest,
-        )
-
-        _, _, safe = _sri_to_algorithm_digest("sha512-AA++BB//CC==")
-        self.assertNotIn("+", safe, "raw base64 '+' must be replaced")
-
-    def test_no_slash_in_key(self) -> None:
-        from docker.versioning.artifact_cache import (
-            _sri_to_algorithm_digest,
-        )
-
-        _, _, safe = _sri_to_algorithm_digest("sha512-AA++BB//CC==")
-        self.assertNotIn("/", safe, "raw base64 '/' must be replaced")
+    """SRI parsing is owned by DigestIdentity."""
+    def test_parse_and_canonical_encodings(self) -> None:
+        from docker.versioning.digest_identity import DigestIdentity
+        import hashlib, base64
+        data = b"cache-contract"
+        raw = hashlib.sha512(data).digest()
+        identity = DigestIdentity.from_sri("sha512-" + base64.b64encode(raw).decode())
+        self.assertEqual(identity.algorithm, "sha512")
+        self.assertEqual(identity.digest_bytes, raw)
+        self.assertEqual(identity.sri(), "sha512-" + base64.b64encode(raw).decode())
+        self.assertEqual(identity.hex_digest(), raw.hex())
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -125,7 +60,7 @@ class TestCacheLayout(unittest.TestCase):
             expected_root = runtime_artifacts_blobs_child(
                 resolve_default_root(xdg, home=Path(tmp) / "home")
             )
-            path = derive_cache_path("sha512", "abcdef", root=str(expected_root))
+            path = derive_cache_path("sha512", "a" * 128, root=str(expected_root))
             self.assertTrue(path.startswith(str(expected_root) + os.sep))
 
     def test_local_override_runtime_path_uses_blobs_child(self) -> None:
@@ -143,27 +78,27 @@ class TestCacheLayout(unittest.TestCase):
             assert root is not None
             expected = runtime_artifacts_blobs_child(root)
             self.assertTrue(
-                derive_cache_path("sha512", "abcdef", root=str(expected))
+                derive_cache_path("sha512", "a" * 128, root=str(expected))
                 .startswith(str(local / "runtime-artifacts" / "blobs") + os.sep)
             )
 
     def test_path_is_algorithm_then_digest(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
-        path = derive_cache_path("sha512", "abcdef", root="/tmp/c")
-        self.assertEqual(path, "/tmp/c/sha512/abcdef.tgz")
+        path = derive_cache_path("sha512", "a" * 128, root="/tmp/c")
+        self.assertEqual(path, "/tmp/c/sha512/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tgz")
 
     def test_extension_is_always_tgz(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
-        path = derive_cache_path("sha256", "xyz", root="/cache")
+        path = derive_cache_path("sha256", "b" * 64, root="/cache")
         self.assertTrue(path.endswith(".tgz"))
 
     def test_only_algorithm_and_digest_participate(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
-        p1 = derive_cache_path("sha512", "digest-a", root="/root")
-        p2 = derive_cache_path("sha512", "digest-b", root="/root")
+        p1 = derive_cache_path("sha512", "c" * 128, root="/root")
+        p2 = derive_cache_path("sha512", "e" * 128, root="/root")
         self.assertNotEqual(p1, p2)
 
     def test_default_root_is_constructor_owned(self) -> None:
@@ -171,12 +106,26 @@ class TestCacheLayout(unittest.TestCase):
             derive_cache_path,
         )
 
-        path = derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs")
+        path = derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs")
         self.assertTrue(
             path.startswith("/tmp/runtime-artifacts/blobs"),
         )
         self.assertIn("sha512", path)
         self.assertTrue(path.endswith(".tgz"))
+
+    def test_layout_adapters_share_identity_but_not_storage_names(self) -> None:
+        import hashlib
+        from docker.versioning.digest_identity import DigestIdentity
+        from docker.versioning.build_cache import build_blob_path
+        data = b"layout-boundary"
+        identity = DigestIdentity("sha256", hashlib.sha256(data).digest())
+        build = build_blob_path("/cache/build", identity)
+        runtime = identity.runtime_cache_path_from_component(
+            identity.algorithm, identity.runtime_safe_digest(), "/cache/runtime"
+        )
+        self.assertTrue(str(build).endswith(".blob"))
+        self.assertTrue(runtime.endswith(".tgz"))
+        self.assertNotEqual(str(build), runtime)
 
     def test_derive_cache_path_from_integrity(self, root="/tmp/runtime-artifacts/blobs") -> None:
         from docker.versioning.artifact_cache import (
@@ -404,11 +353,11 @@ class TestNoURLPackageVersionInPath(unittest.TestCase):
         from docker.versioning.artifact_cache import derive_cache_path
 
         p1 = derive_cache_path(
-            "sha512", "digest",
+            "sha512", "f" * 128,
             root="https://example.com/pkg-1.0.tgz",
         )
         p2 = derive_cache_path(
-            "sha512", "digest",
+            "sha512", "f" * 128,
             root="https://other.com/pkg-2.0.tgz",
         )
         # Only root changes, not algorithm/digest — but root is
@@ -416,24 +365,24 @@ class TestNoURLPackageVersionInPath(unittest.TestCase):
         # that URL never participates in path derivation.
         # The functions don't even accept a URL parameter.
         self.assertEqual(
-            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
-            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs"),
         )
 
     def test_version_does_not_affect_derived_path(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         self.assertEqual(
-            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
-            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs"),
         )
 
     def test_package_name_does_not_affect_derived_path(self) -> None:
         from docker.versioning.artifact_cache import derive_cache_path
 
         self.assertEqual(
-            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
-            derive_cache_path("sha512", "d", root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs"),
+            derive_cache_path("sha512", "e" * 128, root="/tmp/runtime-artifacts/blobs"),
         )
 
 
@@ -561,7 +510,7 @@ class TestBoundaryProtocols(unittest.TestCase):
             ArtifactMaterializationError,
         )
 
-        err = ArtifactMaterializationError(reason="t", detail="d")
+        err = ArtifactMaterializationError(reason="t", detail="e" * 128)
         with self.assertRaises(Exception):
             err.reason = "other"  # type: ignore[misc]
 
@@ -665,7 +614,7 @@ class TestDerivationInputValidation(unittest.TestCase):
         from docker.versioning.artifact_cache import derive_cache_path
 
         # Valid trailing padding (1 or 2 chars)
-        for ok in ("abc=", "abc=="):
+        for ok in ("a" * 128, "b" * 128):
             with self.subTest(digest=ok):
                 derive_cache_path("sha512", ok, root="/tmp/runtime-artifacts/blobs")  # must not raise
 
