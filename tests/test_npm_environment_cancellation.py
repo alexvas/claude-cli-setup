@@ -108,6 +108,12 @@ def _value_error_on_run(argv):
     return ProcessResult(argv, 0, "", "")
 
 
+def _system_exit_on_run(argv):
+    if argv[1] == "run":
+        raise SystemExit("cancelled")
+    return ProcessResult(argv, 0, "", "")
+
+
 class TestCancellationAndCleanup(unittest.TestCase):
     def _cache_root(self):
         tmp = tempfile.TemporaryDirectory(prefix="npm-env-cancel-")
@@ -144,13 +150,14 @@ class TestCancellationAndCleanup(unittest.TestCase):
     def test_executor_exception_cleans_staging(self):
         executor = RecordingExecutor(_value_error_on_run)
         cache_root = self._cache_root()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(LockedNpmError) as ctx:
             assemble(
                 validated=_validated(),
                 assembler=_assembler(),
                 cache_root=cache_root,
                 executor=executor,
             )
+        self.assertEqual(ctx.exception.reason, "executor_failure")
         self.assertEqual(self._staging_workspaces(cache_root), [])
 
     def test_nonzero_exit_cleans_staging(self):
@@ -178,6 +185,20 @@ class TestCancellationAndCleanup(unittest.TestCase):
         )
         self.assertTrue(result.staging.exists())
         self.assertIn(result.staging, self._staging_workspaces(cache_root))
+
+    def test_system_exit_cleans_container_and_staging(self):
+        executor = RecordingExecutor(_system_exit_on_run)
+        cache_root = self._cache_root()
+        with self.assertRaises(SystemExit) as ctx:
+            assemble(
+                validated=_validated(),
+                assembler=_assembler(),
+                cache_root=cache_root,
+                executor=executor,
+            )
+        self.assertEqual(str(ctx.exception), "cancelled")
+        self.assertTrue(any(c[1] == "rm" and c[2] == "-f" for c in executor.calls))
+        self.assertEqual(self._staging_workspaces(cache_root), [])
 
     def test_keyboard_interrupt_cleans_staging(self):
         executor = RecordingExecutor(_interrupt_on_run)

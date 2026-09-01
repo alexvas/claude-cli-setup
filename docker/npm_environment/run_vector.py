@@ -25,6 +25,7 @@ from .identity import (
 )
 from .image_ref import validate_image_reference
 from .model import ValidatedAssemblyInput
+from .network import CorporateNetworkPolicy
 
 #: Fixed container paths — private HOME and the opaque npm cache both live
 #: under the disposable cache mount; the staging workspace is the workdir.
@@ -32,6 +33,24 @@ ASSEMBLER_HOME = "/cache/home"
 ASSEMBLER_CACHE = "/cache"
 ASSEMBLER_WORKDIR = "/work"
 LOCKFILE_CONTAINER_PATH = "/work/package-lock.json"
+
+#: Fixed container-side system CA bundle that receives the corporate trust
+#: override when corporate trust is enabled.
+SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
+#: Standard proxy variable names emitted at runtime.  The endpoint is copied
+#: verbatim across every uppercase/lowercase HTTP, HTTPS, and ALL variable.
+PROXY_URL_ENV_NAMES: tuple[str, ...] = (
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+)
+
+#: Standard proxy bypass variable names, emitted only for an explicit list.
+PROXY_BYPASS_ENV_NAMES: tuple[str, ...] = ("NO_PROXY", "no_proxy")
 
 
 @dataclass(frozen=True, order=True)
@@ -112,6 +131,7 @@ def render_run_vector(
     uid: int,
     gid: int,
     name: str,
+    corporate_network: CorporateNetworkPolicy | None = None,
 ) -> DockerRunVector:
     """Render a deterministic run vector after rechecking all bindings.
 
@@ -120,17 +140,24 @@ def render_run_vector(
     script/policy digest drift, and then renders the vector with a pinned
     image digest, numeric UID/GID, private HOME, explicit environment,
     read-only lockfile input, opaque cache, and writable staging.
+
+    When *corporate_network* carries a credential-free proxy URL, the exact
+    URL is emitted under every standard proxy variable (with both bypass
+    variables only for an explicit bypass list).  When it carries an
+    enabled corporate trust bundle, that host path is mounted read-only at
+    the fixed system trust path before npm network access.  A disabled
+    policy emits no proxy environment and no trust override.
     """
     recheck_assembler_bindings(assembler)
     compute_assembler_input_identity(validated, assembler)
 
-    env = (
+    env: list[tuple[str, str]] = [
         ("HOME", ASSEMBLER_HOME),
         ("npm_config_cache", ASSEMBLER_CACHE),
         ("REVIEWED_NODE_VERSION", validated.node_version),
         ("REVIEWED_NPM_VERSION", validated.npm_version),
-    )
-    mounts = (
+    ]
+    mounts: list[Mount] = [
         Mount(str(staging), ASSEMBLER_WORKDIR, "rw"),
         Mount(
             str(staging / "package-lock.json"),
@@ -138,15 +165,32 @@ def render_run_vector(
             "ro",
         ),
         Mount(str(npm_cache), ASSEMBLER_CACHE, "rw"),
-    )
+    ]
+
+    if corporate_network is not None:
+        if corporate_network.proxy_url is not None:
+            for proxy_name in PROXY_URL_ENV_NAMES:
+                env.append((proxy_name, corporate_network.proxy_url))
+            if corporate_network.proxy_no_proxy is not None:
+                for bypass_name in PROXY_BYPASS_ENV_NAMES:
+                    env.append((bypass_name, corporate_network.proxy_no_proxy))
+        if corporate_network.corporate_trust_bundle is not None:
+            mounts.append(
+                Mount(
+                    corporate_network.corporate_trust_bundle,
+                    SYSTEM_CA_BUNDLE,
+                    "ro",
+                )
+            )
+
     return DockerRunVector(
         image=assembler.image_digest,
         user=f"{uid}:{gid}",
         name=name,
         home=ASSEMBLER_HOME,
         workdir=ASSEMBLER_WORKDIR,
-        env=env,
-        mounts=mounts,
+        env=tuple(env),
+        mounts=tuple(mounts),
         command=("/bin/sh", "-c", ASSEMBLER_SCRIPT),
     )
 

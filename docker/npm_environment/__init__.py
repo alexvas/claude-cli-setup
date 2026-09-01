@@ -32,6 +32,8 @@ from .execution import (
     RunExecutor,
     assemble,
     redact,
+    redact_docker_argv,
+    redact_run_vector,
 )
 from .identity import (
     AssemblerIdentity,
@@ -51,10 +53,17 @@ from .model import (
     RootSpec,
     ValidatedAssemblyInput,
 )
+from .network import (
+    CorporateNetworkPolicy,
+    validate_credential_free_proxy_url,
+)
 from .preflight import preflight
 from .run_vector import (
     DockerRunVector,
     Mount,
+    PROXY_BYPASS_ENV_NAMES,
+    PROXY_URL_ENV_NAMES,
+    SYSTEM_CA_BUNDLE,
     recheck_assembler_bindings,
     render_docker_argv,
     render_run_vector,
@@ -107,6 +116,7 @@ __all__ = [
     "AssemblerInputIdentity",
     "AssemblerNamespace",
     "CleanupFailure",
+    "CorporateNetworkPolicy",
     "DockerRunExecutor",
     "DockerRunVector",
     "IntegrityLessNode",
@@ -121,10 +131,13 @@ __all__ = [
     "NpmRangeError",
     "OmittedOptional",
     "ProcessResult",
+    "PROXY_BYPASS_ENV_NAMES",
+    "PROXY_URL_ENV_NAMES",
     "ReviewedRootMetadata",
     "RootMetadataKey",
     "RootSpec",
     "RunExecutor",
+    "SYSTEM_CA_BUNDLE",
     "SMOKE_MARKER_PACKAGE",
     "SMOKE_MARKER_VERSION",
     "SMOKE_NODE_VERSION",
@@ -154,6 +167,8 @@ __all__ = [
     "prepare_staging_workspace",
     "recheck_assembler_bindings",
     "redact",
+    "redact_docker_argv",
+    "redact_run_vector",
     "remove_staging_workspace",
     "render_docker_argv",
     "render_run_vector",
@@ -165,6 +180,7 @@ __all__ = [
     "smoke_fixture_digest",
     "smoke_roots",
     "validate_image_reference",
+    "validate_credential_free_proxy_url",
     "verify_installed_closure",
     "verify_no_executable_link",
     "verify_no_lifecycle_effect",

@@ -242,9 +242,10 @@ class TestCleanupCombinations(CleanupTestCase):
             rm_exc=OSError("docker rm failed"),
         )
         cache_root = self._cache_root()
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(LockedNpmError) as ctx:
             self._assemble(executor, cache_root)
-        self.assertEqual(str(ctx.exception), "executor exploded")
+        self.assertEqual(ctx.exception.reason, "executor_failure")
+        self.assertIn("executor exploded", str(ctx.exception))
         notes = ctx.exception.__notes__
         self.assertEqual(len(notes), 1)
         self.assertIn("container", notes[0])

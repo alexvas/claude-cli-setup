@@ -3,15 +3,21 @@
 ``assemble`` is the effectful assembly operation: it rechecks the validated
 input and assembler bindings before any filesystem effect, prepares an
 owner-private staging workspace, writes the read-only lockfile input, renders
-the deterministic run vector, and runs it through an injected executor.  A
+the deterministic run vector (including any resolved credential-free
+corporate proxy/trust policy), and runs it through an injected executor.  A
 nonzero container exit becomes a structured :class:`LockedNpmError` with
 redacted stdout/stderr.  Every ``BaseException`` path — interruption,
 executor failure, or npm failure — force-removes the container and removes
 the staging workspace while preserving any prior committed environments.
+
+Configured proxy endpoints and trust paths are never persisted: the
+successful :class:`AssemblyRun` stores only redacted vector/argv/log copies,
+and every failure detail is redacted before it is raised or attached.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import subprocess
 from dataclasses import dataclass
@@ -22,8 +28,10 @@ from .assembler import EXIT_NODE_VERSION_MISMATCH, EXIT_NPM_VERSION_MISMATCH
 from .errors import LockedNpmError
 from .identity import AssemblerIdentity, compute_assembler_input_identity
 from .model import ValidatedAssemblyInput
+from .network import CorporateNetworkPolicy
 from .run_vector import (
     DockerRunVector,
+    Mount,
     recheck_assembler_bindings,
     render_docker_argv,
     render_run_vector,
@@ -37,6 +45,10 @@ from .storage import (
 
 REDACTED = "<redacted>"
 
+#: Control-flow exceptions that must propagate unchanged from the executor
+#: boundary (never converted into a structured assembler failure).
+_CONTROL_FLOW_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
+
 
 def redact(text: str, secrets: Sequence[str]) -> str:
     """Replace every non-empty *secret* in *text* with ``<redacted>``."""
@@ -44,6 +56,25 @@ def redact(text: str, secrets: Sequence[str]) -> str:
         if secret:
             text = text.replace(secret, REDACTED)
     return text
+
+
+def redact_docker_argv(
+    argv: Sequence[str], secrets: Sequence[str]
+) -> tuple[str, ...]:
+    """Return a display-safe copy of *argv* with every secret redacted."""
+    return tuple(redact(token, secrets) for token in argv)
+
+
+def redact_run_vector(
+    vector: DockerRunVector, secrets: Sequence[str]
+) -> DockerRunVector:
+    """Return a display-safe copy of *vector* with every secret redacted."""
+    env = tuple((key, redact(value, secrets)) for key, value in vector.env)
+    mounts = tuple(
+        Mount(redact(mount.host, secrets), mount.container, mount.mode)
+        for mount in vector.mounts
+    )
+    return dataclasses.replace(vector, env=env, mounts=mounts)
 
 
 @dataclass(frozen=True)
@@ -127,13 +158,19 @@ class DockerRunExecutor:
 
 @dataclass(frozen=True)
 class AssemblyRun:
-    """Structured result of one successful assembler container execution."""
+    """Structured result of one successful assembler container execution.
+
+    The stored vector, argv, stdout, and stderr are redacted copies: every
+    configured proxy endpoint and trust path (plus any caller-supplied
+    secret) is replaced with ``<redacted>``.  The exact executable argv is
+    never persisted in the result.
+    """
 
     run_vector: DockerRunVector
-    """The exact vector that was executed."""
+    """Redacted run vector actually executed (secrets replaced)."""
 
     argv: tuple[str, ...]
-    """The exact ``docker run`` argument list executed."""
+    """Redacted ``docker run`` argument list executed (secrets replaced)."""
 
     staging: Path
     """The populated staging workspace (retained for later validation)."""
@@ -286,6 +323,7 @@ def assemble(
     uid: int | None = None,
     gid: int | None = None,
     secrets: Sequence[str] = (),
+    corporate_network: CorporateNetworkPolicy | None = None,
 ) -> AssemblyRun:
     """Run one standalone pinned assembler container.
 
@@ -295,9 +333,19 @@ def assemble(
     any failure the container is force-removed and the staging workspace is
     removed, and any cleanup failure is attached as a note on the original
     error before it is re-raised.
+
+    *corporate_network* carries the caller-resolved credential-free proxy
+    and corporate trust policy.  Its values are automatically added to the
+    redaction secrets, so the successful result and every raised or attached
+    failure are free of the configured proxy endpoint and trust path.
     """
     recheck_assembler_bindings(assembler)
     input_identity = compute_assembler_input_identity(validated, assembler)
+
+    policy_secrets = (
+        corporate_network.secrets() if corporate_network is not None else ()
+    )
+    effective_secrets = tuple(secrets) + policy_secrets
 
     uid, gid = _resolve_container_user(executor, uid, gid)
 
@@ -318,30 +366,49 @@ def assemble(
             uid=uid,
             gid=gid,
             name=container_name,
+            corporate_network=corporate_network,
         )
         argv = render_docker_argv(vector)
         container_started = True
-        result = executor.run(argv)
+        executor_failure_detail: str | None = None
+        try:
+            result = executor.run(argv)
+        except _CONTROL_FLOW_EXCEPTIONS:
+            raise
+        except BaseException as exc:
+            # Capture only the sanitized detail here.  The structured error
+            # is raised after leaving the except block so Python does not
+            # assign the original exception to __context__.
+            executor_failure_detail = redact(
+                f"{type(exc).__name__}: {str(exc) or repr(exc)}",
+                effective_secrets,
+            )
+
+        if executor_failure_detail is not None:
+            raise LockedNpmError(
+                "executor_failure",
+                executor_failure_detail,
+            ) from None
         if result.return_code != 0:
-            raise _exit_failure(result, secrets=secrets)
+            raise _exit_failure(result, secrets=effective_secrets)
         return AssemblyRun(
-            run_vector=vector,
-            argv=argv,
+            run_vector=redact_run_vector(vector, effective_secrets),
+            argv=redact_docker_argv(argv, effective_secrets),
             staging=staging,
-            stdout=redact(result.stdout, secrets),
-            stderr=redact(result.stderr, secrets),
+            stdout=redact(result.stdout, effective_secrets),
+            stderr=redact(result.stderr, effective_secrets),
         )
     except BaseException as exc:
         failures: list[CleanupFailure] = []
         if container_started:
             container_failure = _cleanup_container(
-                executor, container_name, secrets
+                executor, container_name, effective_secrets
             )
             if container_failure is not None:
                 failures.append(container_failure)
         if staging is not None:
             staging_failure = _remove_staging_safely(
-                namespace, staging_name, staging, secrets
+                namespace, staging_name, staging, effective_secrets
             )
             if staging_failure is not None:
                 failures.append(staging_failure)

@@ -65,13 +65,13 @@ Phase 1 ──> Phase 2 ──┬──> Phase 3 ──┐
 
 **Deliverables:** assembler credential-free proxy/CA projection; fixed trust mount; non-persistence of local network configuration in evidence and diagnostics.
 
-- [ ] 4.1 RED — Add failing tests for enabled/disabled credential-free corporate CA and proxy projection into assembler execution.
-- [ ] 4.2 RED — Add failing tests proving assembler execution receives only the resolved credential-free proxy and CA policy.
-- [ ] 4.3 RED — Add failing redaction tests over vectors, logs, exceptions, manifests, evidence and output trees for configured proxy endpoints and trust paths.
-- [ ] 4.4 GREEN — Integrate resolved credential-free trust/proxy policy with assembler Docker execution and verify tasks 4.1–4.2 pass.
-- [ ] 4.5 GREEN — Implement non-persistence and redaction of local network configuration and verify task 4.3 passes.
-- [ ] 4.6 INTROSPECT — Trace every local network-policy input to the process boundary and prove it is absent from published outputs and evidence.
-- [ ] 4.7 VALIDATE — Run corporate-network, disabled-policy, resolved-policy, and non-persistence acceptance tests.
+- [x] 4.1 RED — Add failing tests for enabled/disabled credential-free corporate CA and proxy projection into assembler execution.
+- [x] 4.2 RED — Add failing tests proving assembler execution receives only the resolved credential-free proxy and CA policy.
+- [x] 4.3 RED — Add failing redaction tests over vectors, logs, exceptions, manifests, evidence and output trees for configured proxy endpoints and trust paths.
+- [x] 4.4 GREEN — Integrate resolved credential-free trust/proxy policy with assembler Docker execution and verify tasks 4.1–4.2 pass.
+- [x] 4.5 GREEN — Implement non-persistence and redaction of local network configuration and verify task 4.3 passes.
+- [x] 4.6 INTROSPECT — Trace every local network-policy input to the process boundary and prove it is absent from published outputs and evidence.
+- [x] 4.7 VALIDATE — Run corporate-network, disabled-policy, resolved-policy, and non-persistence acceptance tests.
 
 ## 5. Validation, Locking, and Atomic Publication
 
