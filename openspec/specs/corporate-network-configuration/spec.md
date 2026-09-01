@@ -4,6 +4,8 @@
 
 Define optional machine-local corporate trust and credential-free proxy configuration for Docker builds and launched runtime containers.
 
+## Requirements
+
 ### Requirement: Configure optional local corporate trust
 The system SHALL support an optional `[corporate-trust]` section only in the resolved local companion. `enabled` SHALL be a boolean; absent or `false` SHALL disable corporate trust. When `enabled = true`, the system SHALL require the sole trust source to be the repository-local `.docker-local/corporate-ca-bundle.crt` file, validate that it is readable and contains one or more nonempty PEM `CERTIFICATE` blocks, and reject missing, unreadable, malformed, or unknown local configuration before Docker execution. PEM validation SHALL be dependency-free and SHALL require ASCII input, matching complete `BEGIN CERTIFICATE`/`END CERTIFICATE` delimiters, no non-whitespace content outside those blocks, and strictly decodable nonempty Base64 payloads. It SHALL not parse, verify, or assess payloads as X.509 certificates; certificate validity, trust-chain validity, and organizational trust coverage remain the operator's responsibility. The supplied file SHALL be treated as a complete replacement trust bundle.
 
@@ -93,3 +95,15 @@ The project-managed corporate trust and proxy configuration SHALL apply only to 
 - **WHEN** a Docker daemon needs proxy or trust configuration to pull a base image
 - **THEN** the constructor SHALL not claim that local corporate network configuration controls that operation
 - **AND** documentation SHALL identify daemon/client configuration as external to this feature
+
+### Requirement: Apply resolved credential-free network policy to npm assembler containers
+Standalone npm assembler containers SHALL receive the same resolved credential-free proxy and enabled corporate trust inputs as host-orchestrated dependency acquisition, scoped only to the assembly process. Enabled trust SHALL be mounted read-only at the fixed system trust path before npm network access; disabled trust SHALL introduce no override. The assembler SHALL NOT persist configured proxy endpoints or trust paths in command displays, logs, evidence, output trees, or cache manifests.
+
+#### Scenario: Assembling behind an enabled corporate network
+- **WHEN** corporate trust and a credential-free proxy are enabled and valid
+- **THEN** the assembler SHALL use those resolved inputs for locked HTTPS registry requests
+- **AND** the assembled output and evidence SHALL contain neither the configured proxy endpoint nor trust path
+
+#### Scenario: Preserving default assembler trust
+- **WHEN** corporate trust and proxy configuration are disabled
+- **THEN** assembler execution SHALL preserve the pinned image's default trust and introduce no constructor-defined certificate or proxy setting

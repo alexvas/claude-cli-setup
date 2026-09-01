@@ -95,11 +95,11 @@ Phase 1 ──> Phase 2 ──┬──> Phase 3 ──┐
 
 **Deliverables:** two neutral synthetic consumers; shared-download proof; complete documentation; full green loop.
 
-- [ ] 6.1 RED — Add failing acceptance tests where two independent locks share one tarball download but publish distinct trees and evidence.
-- [ ] 6.2 RED — Add failing acceptance tests for cold/warm cache, corruption recovery, network outage with valid environment, and incomplete cache failure.
-- [ ] 6.3 RED — Add failing documentation contracts for supported lock subset, fixed flags, trust model, evidence and consumer boundaries.
-- [ ] 6.4 GREEN — Complete integration wiring needed for tasks 6.1–6.2 without adding Pi or extension-specific behavior.
-- [ ] 6.5 GREEN — Document assembler contracts, cache recovery and dependent-consumer API and verify task 6.3 passes.
-- [ ] 6.6 INTROSPECT — Map every new spec scenario to a focused or acceptance test and verify dependent changes can consume only the public result boundary.
-- [ ] 6.7 VALIDATE — Run all focused assembler, cache, network, filesystem, concurrency and acceptance suites.
-- [ ] 6.8 VALIDATE — Run project typecheck, lint, complete tests, build/contracts and configured green loop; require a fully passing report.
+- [x] 6.1 RED — Add failing acceptance tests where two independent locks share one tarball download but publish distinct trees and evidence.
+- [x] 6.2 RED — Add failing acceptance tests for cold/warm cache, corruption recovery, network outage with valid environment, and incomplete cache failure.
+- [x] 6.3 RED — Add failing documentation contracts for supported lock subset, fixed flags, trust model, evidence and consumer boundaries.
+- [x] 6.4 GREEN — Complete integration wiring needed for tasks 6.1–6.2 without adding Pi or extension-specific behavior.
+- [x] 6.5 GREEN — Document assembler contracts, cache recovery and dependent-consumer API and verify task 6.3 passes.
+- [x] 6.6 INTROSPECT — Map every new spec scenario to a focused or acceptance test and verify dependent changes can consume only the public result boundary.
+- [x] 6.7 VALIDATE — Run all focused assembler, cache, network, filesystem, concurrency and acceptance suites.
+- [x] 6.8 VALIDATE — Run project typecheck, lint, complete tests, build/contracts and configured green loop; require a fully passing report.
