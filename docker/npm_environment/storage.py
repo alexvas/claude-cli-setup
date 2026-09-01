@@ -28,6 +28,8 @@ ASSEMBLER_CHILD = "assembler"
 NPM_CACHE_CHILD = "npm-cache"
 LOCKS_CHILD = "locks"
 STAGING_CHILD = "staging"
+OUTPUTS_CHILD = "outputs"
+INDEX_CHILD = "index"
 
 _DIR_FLAGS = (
     os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -161,6 +163,12 @@ class AssemblerNamespace:
     staging: Path
     """Owner-private staging workspace parent (``staging``)."""
 
+    outputs: Path
+    """Immutable assembled-output storage (``outputs``)."""
+
+    index: Path
+    """Non-authoritative input-identity lookup index (``index``)."""
+
 
 def assembler_namespace_path(
     cache_root: str | Path, assembler_digest: str
@@ -229,6 +237,14 @@ def prepare_assembler_namespace(
                 digest_fd, STAGING_CHILD, label=namespace_root / STAGING_CHILD
             )
             os.close(staging_fd)
+            outputs_fd = _create_or_open_child(
+                digest_fd, OUTPUTS_CHILD, label=namespace_root / OUTPUTS_CHILD
+            )
+            os.close(outputs_fd)
+            index_fd = _create_or_open_child(
+                digest_fd, INDEX_CHILD, label=namespace_root / INDEX_CHILD
+            )
+            os.close(index_fd)
         finally:
             os.close(digest_fd)
     finally:
@@ -239,6 +255,8 @@ def prepare_assembler_namespace(
         npm_cache=namespace_root / NPM_CACHE_CHILD,
         locks=namespace_root / LOCKS_CHILD,
         staging=namespace_root / STAGING_CHILD,
+        outputs=namespace_root / OUTPUTS_CHILD,
+        index=namespace_root / INDEX_CHILD,
     )
 
 

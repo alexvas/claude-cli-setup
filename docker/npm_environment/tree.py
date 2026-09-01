@@ -120,6 +120,106 @@ def canonical_tree_digest(entries: Iterable[TreeEntry]) -> str:
     return _sha256_hex(payload)
 
 
+_ENTRY_FIELDS = frozenset({"path", "kind", "digest", "target", "mode", "uid", "gid"})
+
+
+def _entry_to_jsonable(entry: TreeEntry) -> dict:
+    return {
+        "path": entry.path,
+        "kind": entry.kind,
+        "digest": entry.digest,
+        "target": entry.target,
+        "mode": entry.mode,
+        "uid": entry.uid,
+        "gid": entry.gid,
+    }
+
+
+def _entry_from_jsonable(value: object, context: str) -> TreeEntry:
+    if not isinstance(value, dict):
+        raise LockedNpmError("tree_manifest_malformed", f"{context}: not an object")
+    extra = sorted(set(value) - _ENTRY_FIELDS)
+    if extra:
+        raise LockedNpmError(
+            "tree_manifest_malformed", f"{context}: unexpected field(s) {extra}"
+        )
+    for key in _ENTRY_FIELDS:
+        if key not in value:
+            raise LockedNpmError(
+                "tree_manifest_malformed", f"{context}: missing field {key!r}"
+            )
+    if not isinstance(value["path"], str) or not isinstance(value["kind"], str):
+        raise LockedNpmError("tree_manifest_malformed", f"{context}: bad path/kind")
+    if not isinstance(value["digest"], str) or not isinstance(value["target"], str):
+        raise LockedNpmError("tree_manifest_malformed", f"{context}: bad digest/target")
+    for key in ("mode", "uid", "gid"):
+        if not isinstance(value[key], int) or isinstance(value[key], bool):
+            raise LockedNpmError(
+                "tree_manifest_malformed", f"{context}: {key!r} must be an integer"
+            )
+    return TreeEntry(
+        path=value["path"],
+        kind=value["kind"],
+        digest=value["digest"],
+        target=value["target"],
+        mode=value["mode"],
+        uid=value["uid"],
+        gid=value["gid"],
+    )
+
+
+def serialize_manifest(manifest: TreeManifest) -> bytes:
+    """Return the canonical, deterministic tree-manifest bytes."""
+    payload = {
+        "digest": manifest.digest,
+        "entries": [_entry_to_jsonable(e) for e in manifest.entries],
+    }
+    return _canonical_json(payload).encode("utf-8")
+
+
+def parse_manifest(data: bytes) -> TreeManifest:
+    """Parse and verify a serialized tree manifest, rejecting substitution."""
+    try:
+        text = data.decode("utf-8")
+        raw = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LockedNpmError(
+            "tree_manifest_malformed", "manifest is not valid UTF-8 JSON"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise LockedNpmError("tree_manifest_malformed", "manifest is not an object")
+    extra = sorted(set(raw) - {"digest", "entries"})
+    if extra:
+        raise LockedNpmError(
+            "tree_manifest_malformed", f"unexpected manifest field(s) {extra}"
+        )
+    digest = raw.get("digest")
+    if not isinstance(digest, str):
+        raise LockedNpmError("tree_manifest_malformed", "manifest digest must be a string")
+    entries_raw = raw.get("entries")
+    if not isinstance(entries_raw, list):
+        raise LockedNpmError("tree_manifest_malformed", "manifest entries must be a list")
+    entries = tuple(
+        _entry_from_jsonable(item, f"entries[{i}]")
+        for i, item in enumerate(entries_raw)
+    )
+    ordered = tuple(sorted(entries))
+    if entries != ordered:
+        raise LockedNpmError(
+            "tree_order_mismatch", "tree manifest entries are not in canonical path order"
+        )
+    if len(ordered) != len({e.path for e in ordered}):
+        raise LockedNpmError(
+            "tree_order_mismatch", "tree manifest contains duplicate paths"
+        )
+    if canonical_tree_digest(ordered) != digest:
+        raise LockedNpmError(
+            "tree_manifest_digest_mismatch",
+            "tree manifest digest does not match its entries",
+        )
+    return TreeManifest(entries=ordered, digest=digest)
+
+
 def _iter_entries(dir_fd: int, prefix: str) -> Iterator[_Found]:
     """Yield canonical entries beneath *dir_fd* without following symlinks.
 

@@ -66,7 +66,8 @@ class TestNpmCacheAuthority(unittest.TestCase):
         # no storage primitive reads from it or derives identity from it.
         ns_fields = {f.name for f in storage_module.AssemblerNamespace.__dataclass_fields__.values()}
         self.assertEqual(
-            ns_fields, {"root", "npm_cache", "locks", "staging"}
+            ns_fields,
+            {"root", "npm_cache", "locks", "staging", "outputs", "index"},
         )
 
 

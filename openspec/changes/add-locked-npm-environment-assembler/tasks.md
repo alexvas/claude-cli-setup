@@ -79,15 +79,15 @@ Phase 1 ──> Phase 2 ──┬──> Phase 3 ──┐
 
 **Deliverables:** exact post-install closure validator; canonical tree/evidence digests; assembled output identity serialization; non-authoritative input index; concurrent coordination; atomic immutable output-identity publication; consumer-neutral result DTO.
 
-- [ ] 5.1 RED — Add failing output tests for exact paths/names/versions, dependency closure, omissions, extras, ownership, permissions, symlinks and special files.
-- [ ] 5.2 RED — Add failing concurrency/storage/cache-hit tests proving identical inputs with different assembled bytes retain one input identity but receive distinct output identities, cannot overwrite or alias each other, may both be referenced by a non-authoritative input index, and undergo post-lock selection plus full recomputation of output identity, canonical tree digest, canonical assembler-evidence digest, and Phase 2 no-follow tree verification; cover corrupted and substituted tree/evidence candidates.
-- [ ] 5.3 RED — Add failing publication tests for durability-before-rename, immutable modes, collision handling, interruption and prior-generation preservation.
-- [ ] 5.4 RED — Add failing result/evidence serialization tests covering assembler input identity, assembled output identity, canonical tree/evidence digests, every input, package, integrity omission, flag and path without Pi/runtime fields; reject substituted tree/evidence pairs.
-- [ ] 5.5 GREEN — Implement independent post-install validation and verify task 5.1 passes.
-- [ ] 5.6 GREEN — Implement canonical assembler-evidence digest and assembled output identity derivation, input-identity coordination locking, non-authoritative lookup selection, complete output-identity cache-hit verification using Phase 2 primitives, atomic output-identity publication and failure cleanup, and verify tasks 5.2–5.3 pass.
-- [ ] 5.7 GREEN — Implement immutable consumer-neutral result/evidence DTOs and verify task 5.4 passes.
-- [ ] 5.8 INTROSPECT — Review the full state machine for races, partial publication, lock inversion, deletion of committed data and consumer leakage.
-- [ ] 5.9 VALIDATE — Run output, concurrency, crash, publication, cache-hit and serialization tests together and verify deterministic evidence bytes, output identities, non-aliasing, and full cache-hit binding.
+- [x] 5.1 RED — Add failing output tests for exact paths/names/versions, dependency closure, omissions, extras, ownership, permissions, symlinks and special files.
+- [x] 5.2 RED — Add failing concurrency/storage/cache-hit tests proving identical inputs with different assembled bytes retain one input identity but receive distinct output identities, cannot overwrite or alias each other, may both be referenced by a non-authoritative input index, and undergo post-lock selection plus full recomputation of output identity, canonical tree digest, canonical assembler-evidence digest, and Phase 2 no-follow tree verification; cover corrupted and substituted tree/evidence candidates.
+- [x] 5.3 RED — Add failing publication tests for durability-before-rename, immutable modes, collision handling, interruption and prior-generation preservation.
+- [x] 5.4 RED — Add failing result/evidence serialization tests covering assembler input identity, assembled output identity, canonical tree/evidence digests, every input, package, integrity omission, flag and path without Pi/runtime fields; reject substituted tree/evidence pairs.
+- [x] 5.5 GREEN — Implement independent post-install validation and verify task 5.1 passes.
+- [x] 5.6 GREEN — Implement canonical assembler-evidence digest and assembled output identity derivation, input-identity coordination locking, non-authoritative lookup selection, complete output-identity cache-hit verification using Phase 2 primitives, atomic output-identity publication and failure cleanup, and verify tasks 5.2–5.3 pass.
+- [x] 5.7 GREEN — Implement immutable consumer-neutral result/evidence DTOs and verify task 5.4 passes.
+- [x] 5.8 INTROSPECT — Review the full state machine for races, partial publication, lock inversion, deletion of committed data and consumer leakage.
+- [x] 5.9 VALIDATE — Run output, concurrency, crash, publication, cache-hit and serialization tests together and verify deterministic evidence bytes, output identities, non-aliasing, and full cache-hit binding.
 
 ## 6. Integration and Repository Validation
 

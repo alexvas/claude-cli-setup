@@ -118,6 +118,31 @@ class AssemblerInputIdentity:
     """Canonical SHA-256 over roots, lockfile digest, and assembler digest."""
 
 
+def input_identity_digest(
+    *,
+    roots: tuple[RootSpec, ...],
+    lockfile_digest: str,
+    assembler_digest: str,
+) -> str:
+    """Return the canonical input-identity digest from its components.
+
+    This is the pure, preflight-free form of the digest: it re-derives the
+    canonical payload from the name-sorted exact roots, the exact lockfile
+    digest, and the already-verified assembler digest.  Evidence verification
+    uses it to re-check a serialized input identity without holding the
+    original lockfile bytes.
+    """
+    ordered_roots = tuple(sorted(roots))
+    payload = _canonical_json(
+        {
+            "roots": [{"name": r.name, "version": r.version} for r in ordered_roots],
+            "lockfile_digest": lockfile_digest,
+            "assembler_digest": assembler_digest,
+        }
+    ).encode("utf-8")
+    return _sha256_hex(payload)
+
+
 def compute_assembler_input_identity(
     validated: ValidatedAssemblyInput,
     assembler: AssemblerIdentity,
@@ -195,16 +220,13 @@ def compute_assembler_input_identity(
             f"match assembler npm version {assembler.npm_version!r}",
         )
     roots = tuple(sorted(validated.roots))
-    payload = _canonical_json(
-        {
-            "roots": [{"name": r.name, "version": r.version} for r in roots],
-            "lockfile_digest": lockfile_digest,
-            "assembler_digest": assembler.digest,
-        }
-    ).encode("utf-8")
     return AssemblerInputIdentity(
         roots=roots,
         lockfile_digest=lockfile_digest,
         assembler=assembler,
-        digest=_sha256_hex(payload),
+        digest=input_identity_digest(
+            roots=roots,
+            lockfile_digest=lockfile_digest,
+            assembler_digest=assembler.digest,
+        ),
     )
