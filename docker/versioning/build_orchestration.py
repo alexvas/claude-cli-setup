@@ -41,6 +41,13 @@ from docker.networking import (
     apply_rootless_override,
 )
 from docker.versioning.dispatch_types import ExitKind
+from docker.versioning.build_cache import BuildCacheError
+from docker.versioning.build_materialization import (
+    HostNetworkPolicy,
+    MaterializationError,
+    UrllibStreamingTransport,
+    materialize_build_artifacts,
+)
 from docker.versioning.effective import (
     EffectiveBuildProjection,
     resolve_build_projection,
@@ -212,6 +219,9 @@ class BuildRequest:
     Returns a ``PublishResult`` or raises ``PublishError`` on failure.
     """
 
+    _materialize_artifacts: Callable[..., object] | None = None
+    """Injectable host materializer used before projection publication/Docker."""
+
     def __post_init__(self) -> None:
         """Normalize ``overrides`` to an immutable mapping.
 
@@ -381,6 +391,9 @@ class BuildTransactionPlan:
     effective_projection: EffectiveBuildProjection | None = None
     """Resolved build projection (available for publication)."""
 
+    host_network_policy: HostNetworkPolicy = HostNetworkPolicy()
+    """Validated host transport policy, separate from Docker rendering."""
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Plan / execute (Stage 9.3)
@@ -486,6 +499,13 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
         render_inputs=render_inputs,
         inventory=inventory,
         effective_projection=projection,
+        host_network_policy=HostNetworkPolicy(
+            proxy_url=local.network_proxy.url,
+            ca_bundle=(
+                Path(request.repo_root) / ".docker-local" / "corporate-ca-bundle.crt"
+                if local.corporate_trust.enabled and request.repo_root else None
+            ),
+        ),
     )
 
 
@@ -507,7 +527,33 @@ def execute_build(
         else Path(request.inventory_path).parent
     )
 
-    # 1. Publish effective projection
+    # 1. Materialize every selected artifact before publishing any reference
+    # or invoking Docker. The transport is the sole owner of host HTTP policy.
+    materialize = request._materialize_artifacts or materialize_build_artifacts
+    projection = plan.effective_projection
+    if projection is None:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message="build artifact materialization failed: missing effective projection",
+            build_args=build_args,
+            display_string=display_string,
+        )
+    try:
+        transport = UrllibStreamingTransport(plan.host_network_policy)
+        materialize(
+            projection,
+            checkout_root=repo_root,
+            transport=transport,
+        )
+    except (MaterializationError, BuildCacheError, OSError, ValueError) as exc:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=f"build artifact materialization failed: {exc}",
+            build_args=build_args,
+            display_string=display_string,
+        )
+
+    # 2. Publish effective projection
     publish = request._publish_projection
     try:
         if publish is not None:
@@ -527,7 +573,7 @@ def execute_build(
             display_string=display_string,
         )
 
-    # 2. Execute Docker build
+    # 3. Execute Docker build
     runner = request.runner or SubprocessBuildExecutor(request.output_policy)
     try:
         proc = runner.run(build_args)

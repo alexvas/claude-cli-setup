@@ -60,6 +60,17 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         fake.write_text(_FAKE_DOCKER.format(python=sys.executable), encoding="utf-8")
         fake.chmod(0o755)
         cls.fake_dir = fake_dir
+        # This subprocess fixture explicitly replaces the host materialization
+        # dependency. Production code remains unchanged and fake Docker alone
+        # does not bypass integrity checks.
+        cls.acceptance_cli = cls.root / "acceptance_cli.py"
+        cls.acceptance_cli.write_text(
+            "from docker.versioning import build_orchestration\n"
+            "build_orchestration.materialize_build_artifacts = lambda *args, **kwargs: ()\n"
+            "from docker.constructor_cli import main\n"
+            "raise SystemExit(main())\n",
+            encoding="utf-8",
+        )
         cls.release_dir = cls.root / "release-signals"
         cls.release_dir.mkdir()
         cls._release_number = 0
@@ -80,7 +91,7 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         return env, release_file
 
     def _command(self, *args: str) -> list[str]:
-        return [sys.executable, str(self.root / "docker/docker-constructor.py"), *args]
+        return [sys.executable, str(self.acceptance_cli), *args]
 
     def test_text_progress_is_visible_before_cli_exits(self):
         env, release_file = self._env("stream-success")

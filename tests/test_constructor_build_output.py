@@ -30,6 +30,7 @@ def _request(policy: BuildOutputPolicy, runner: RecordingExecutor, *, progress: 
     return BuildRequest(
         inventory_path=str(INVENTORY_PATH), confirmed=True, progress=progress,
         output_policy=policy, runner=runner,
+        _materialize_artifacts=lambda *_args, **_kwargs: (),
         _publish_projection=lambda *_args, **_kwargs: __import__(
             "docker.versioning.build_orchestration", fromlist=["PublishResult"]
         ).PublishResult("/tmp/effective.toml"),

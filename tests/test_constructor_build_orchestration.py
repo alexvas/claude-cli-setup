@@ -121,6 +121,11 @@ def _persist_fail(path=None, gateway=None):
 def _publish_ok(projection, *, repo_root=None):
     return PublishResult(published_path="/tmp/effective.toml")
 
+
+def _materialize_ok(*args, **kwargs):
+    """Explicit provider-independent materialization boundary for unit tests."""
+    return ()
+
 # ═══════════════════════════════════════════════════════════════════════
 # 7.  DTO expectations (GREEN — these test the DTOs, not the stub)
 # ═══════════════════════════════════════════════════════════════════════
@@ -165,6 +170,7 @@ class TestBuildRequestDto(unittest.TestCase):
             uid=1000,
             gid=1000,
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             dry_run=True,
             runner=FakeBuildExecutor(),
             gateway_probe_image="busybox:1.36",
@@ -509,6 +515,7 @@ class TestProjectionPublication(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=record_publish,
             runner=FakeBuildExecutor(),
@@ -783,6 +790,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             uid=-1,
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
@@ -866,6 +874,7 @@ class TestBuildGatewayIsolation(unittest.TestCase):
         result = orchestrate_build(BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=diagnose,
             _publish_projection=_publish_ok,
             runner=runner,
@@ -941,6 +950,7 @@ class TestConfirmation(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=docker_runner,
@@ -965,6 +975,7 @@ class TestConfirmation(unittest.TestCase):
         result = orchestrate_build(BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=lambda **kw: (_ for _ in ()).throw(
                 AssertionError("build must not diagnose gateway")),
             _publish_projection=publish,
@@ -1129,6 +1140,7 @@ class TestDirectExecution(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1145,6 +1157,7 @@ class TestDirectExecution(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1168,6 +1181,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1185,6 +1199,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1200,6 +1215,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1229,6 +1245,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         result = orchestrate_build(BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=broken_diagnose,
             _publish_projection=_publish_ok,
             runner=runner,
@@ -1247,6 +1264,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
@@ -1266,6 +1284,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
@@ -1287,6 +1306,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=MissingDockerRunner(),
@@ -1305,6 +1325,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
+            _materialize_artifacts=_materialize_ok,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=DeniedDockerRunner(),

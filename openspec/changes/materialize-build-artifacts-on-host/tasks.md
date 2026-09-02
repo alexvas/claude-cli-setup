@@ -48,14 +48,14 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 
 **Deliverables:** exact `linux-amd64` selection for rustup, uv, rtk, and fd; streaming SHA-256 host materialization; verified hit reuse; atomic miss publication; host proxy/CA application and redacted diagnostics.
 
-- [ ] 3.1 **RED:** Add selection tests requiring exactly the effective `linux-amd64` rustup, uv, rtk, and fd URL/digest pairs and explicit rejection of unsupported platforms.
-- [ ] 3.2 **RED:** Add materializer tests for a verified cache hit, streamed cache miss, digest mismatch, transport interruption, atomic publication, and immediate temporary-file cleanup.
-- [ ] 3.3 **RED:** Add orchestration tests proving materialization or integrity failure prevents Docker invocation and leaves no committed reference.
-- [ ] 3.4 **RED:** Add corporate-network tests for enabled credential-free proxy, enabled replacement CA, disabled-policy neutrality, invalid-policy early failure, and secret/URL redaction.
-- [ ] 3.5 **GREEN:** Implement effective build-artifact selection and streaming materialization required by tasks 3.1–3.3.
-- [ ] 3.6 **GREEN:** Inject resolved host corporate network policy into the materialization transport as required by task 3.4.
-- [ ] 3.7 **INTROSPECT:** Review the phase diff for full-buffer downloads, duplicate HTTP policy, unredacted diagnostics, network after integrity failure, and coupling to CLI/rendering modules; remove each issue found.
-- [ ] 3.8 **VALIDATE:** Run provider-independent transport, materialization, orchestration, corporate-network, and failure-cleanup tests; record that Docker is never invoked on a materialization failure.
+- [x] 3.1 **RED:** Add selection tests requiring exactly the effective `linux-amd64` rustup, uv, rtk, and fd URL/digest pairs and explicit rejection of unsupported platforms.
+- [x] 3.2 **RED:** Add materializer tests for a verified cache hit, streamed cache miss, digest mismatch, transport interruption, atomic publication, and immediate temporary-file cleanup.
+- [x] 3.3 **RED:** Add orchestration tests proving materialization or integrity failure prevents Docker invocation and leaves no committed reference.
+- [x] 3.4 **RED:** Add corporate-network tests for enabled credential-free proxy, enabled replacement CA, disabled-policy neutrality, invalid-policy early failure, and secret/URL redaction.
+- [x] 3.5 **GREEN:** Implement effective build-artifact selection and streaming materialization required by tasks 3.1–3.3.
+- [x] 3.6 **GREEN:** Inject resolved host corporate network policy into the materialization transport as required by task 3.4.
+- [x] 3.7 **INTROSPECT:** Review the phase diff for full-buffer downloads, duplicate HTTP policy, unredacted diagnostics, network after integrity failure, and coupling to CLI/rendering modules; remove each issue found.
+- [x] 3.8 **VALIDATE:** Run provider-independent transport, materialization, orchestration, corporate-network, and failure-cleanup tests; record that Docker is never invoked on a materialization failure.
 
 ## 4. Immutable Named Build Context
 
