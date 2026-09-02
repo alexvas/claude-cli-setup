@@ -33,14 +33,14 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 
 **Deliverables:** checkout-wide nonblocking build lock; abandoned-transaction detection; atomic committed-build manifest; atomic uncommitted markers; fixed 2,592,000-second GC policy; commit-before-delete ordering.
 
-- [ ] 2.1 **RED:** Add lock tests for single ownership, competing-build rejection before mutation, owner interruption, and release on all normal outcomes; verify no second transaction enters the critical section.
-- [ ] 2.2 **RED:** Add abandoned-snapshot tests proving only snapshots without the live checkout lock are removed and their verified blobs remain uncommitted.
-- [ ] 2.3 **RED:** Add manifest tests for atomic replacement, durability-before-GC, failed-build preservation, immediate removal of every superseded committed build blob, and strict non-interaction with the shared XDG runtime-artifact cache.
-- [ ] 2.4 **RED:** Add marker/GC tests for `verified_at`, exact 2,592,000-second expiry boundary, committed-blob immunity, immediate corrupt/partial cleanup, and immediate post-commit removal of superseded unreferenced blobs.
-- [ ] 2.5 **GREEN:** Implement the checkout-wide lock and abandoned-snapshot recovery required by tasks 2.1–2.2.
-- [ ] 2.6 **GREEN:** Implement atomic committed manifests, uncommitted markers, fixed-policy GC, and commit-before-delete sequencing required by tasks 2.3–2.4.
-- [ ] 2.7 **INTROSPECT:** Review transaction state transitions for TOCTOU windows, lock-order inversion, clock misuse, deletion before durable commit, and hidden configurability of the fixed TTL; simplify to one explicit state machine.
-- [ ] 2.8 **VALIDATE:** Run deterministic lock, crash-recovery, manifest, retention, and fake-clock tests; record that failed/interrupted transactions preserve the prior committed live set.
+- [x] 2.1 **RED:** Add lock tests for single ownership, competing-build rejection before mutation, owner interruption, and release on all normal outcomes; verify no second transaction enters the critical section.
+- [x] 2.2 **RED:** Add abandoned-snapshot tests proving only snapshots without the live checkout lock are removed and their verified blobs remain uncommitted.
+- [x] 2.3 **RED:** Add manifest tests for atomic replacement, durability-before-GC, failed-build preservation, immediate removal of every superseded committed build blob, and strict non-interaction with the shared XDG runtime-artifact cache.
+- [x] 2.4 **RED:** Add marker/GC tests for `verified_at`, exact 2,592,000-second expiry boundary, committed-blob immunity, immediate corrupt/partial cleanup, and immediate post-commit removal of superseded unreferenced blobs.
+- [x] 2.5 **GREEN:** Implement the checkout-wide lock and abandoned-snapshot recovery required by tasks 2.1–2.2.
+- [x] 2.6 **GREEN:** Implement atomic committed manifests, uncommitted markers, fixed-policy GC, and commit-before-delete sequencing required by tasks 2.3–2.4.
+- [x] 2.7 **INTROSPECT:** Review transaction state transitions for TOCTOU windows, lock-order inversion, clock misuse, deletion before durable commit, and hidden configurability of the fixed TTL; simplify to one explicit state machine.
+- [x] 2.8 **VALIDATE:** Run deterministic lock, crash-recovery, manifest, retention, and fake-clock tests; record that failed/interrupted transactions preserve the prior committed live set.
 
 ## 3. Host Materialization and Corporate Network Policy
 
