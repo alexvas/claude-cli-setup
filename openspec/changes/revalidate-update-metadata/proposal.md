@@ -26,4 +26,4 @@ None.
 
 ## Impact
 
-Affected areas include the HTTP transport/cache contract, provider response provenance, update result DTOs, text and JSON rendering, cache persistence, `--no-cache`, inventory cache-policy removal, and deterministic transport/provider/facade tests. Existing TTL cache files are discarded and repopulated in the new format.
+Affected areas include the HTTP transport/cache contract, provider response provenance, update result DTOs, text and JSON rendering, cache persistence, `--no-cache`, inventory cache-policy removal, and deterministic transport/provider/facade tests. Existing TTL cache files are discarded and repopulated in the new format. This change depends on `add-durable-filesystem-transactions` for validated atomic envelope replacement and durable removal, but deliberately adopts neither its journal protocol nor a broad transaction lock because metadata cache entries are disposable and independently keyed.

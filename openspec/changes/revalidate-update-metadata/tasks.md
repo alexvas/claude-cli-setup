@@ -1,7 +1,8 @@
 ## 1. Validated Metadata Envelope
 
+- [ ] 1.0 Require completed `add-durable-filesystem-transactions` and verify metadata persistence uses only its validated read, atomic replacement, and durable removal layers—not its journal protocol or a broad transaction lock.
 - [ ] 1.1 Add RED cache-format tests for request/auth/representation identity, ETag, Last-Modified, body fetch time, validation time, atomic publication, corrupt entries, and unconditional deletion of removed-format TTL entries; verify the focused cache tests fail for the missing envelope behavior.
-- [ ] 1.2 Implement the versioned validated metadata envelope and private disk persistence, and verify the focused cache tests pass without weakening existing permission and auth-isolation tests.
+- [ ] 1.2 Implement the versioned validated metadata envelope and private disk persistence over shared durable-I/O primitives, retaining metadata-owned schema/request/auth validation and independent cache-key scope; verify the focused cache tests pass without weakening existing permission and auth-isolation tests or introducing duplicate atomic-write helpers.
 - [ ] 1.3 Add RED tests proving each fresh HTTP 200 is acknowledged only after its owning parser accepts it, malformed data preserves the prior validated entry, and multi-request providers acknowledge release metadata and checksum assets independently; verify tests fail against immediate or all-at-once write-through behavior.
 - [ ] 1.4 Add the parse-acknowledged publication boundary and verify provider adapters remain independently testable with injected transports.
 
@@ -23,5 +24,5 @@
 ## 4. TTL Removal and Validation
 
 - [ ] 4.1 Add RED inventory and CLI tests requiring reviewed `[cache].ttl` to be rejected as an unsupported field while `--cache-ttl` remains unsupported, with no compatibility or migration path; verify local `[cache].dir` alone still resolves the separated `versioning` and `runtime-artifacts/blobs` namespaces.
-- [ ] 4.2 Delete TTL policy, transport behavior, and removed-format cache entries, update inventory examples/documentation, and verify endpoints without validators perform a full request on every run.
+- [ ] 4.2 Delete TTL policy, transport behavior, and removed-format cache entries through shared durable removal, update inventory examples/documentation, and verify endpoints without validators perform a full request on every run and no metadata-cache journal or global lock is created.
 - [ ] 4.3 Run the complete provider, cache, update reporting, readonly behavior, inventory, CLI, and security test suites; verify all pass and an acceptance test demonstrates cached npm `0.84.2` is revalidated to newly published `0.84.3`.

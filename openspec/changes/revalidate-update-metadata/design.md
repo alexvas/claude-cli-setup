@@ -1,6 +1,6 @@
 ## Context
 
-The current read-through HTTP cache can return a stored response without contacting upstream, and a reviewed TTL of `None` makes that response permanent. Providers parse ordinary `HttpResponse` values, so cache provenance is currently lost before update classification and rendering. See proposal.md and the delta specs for the required behavior.
+The current read-through HTTP cache can return a stored response without contacting upstream, and a reviewed TTL of `None` makes that response permanent. Providers parse ordinary `HttpResponse` values, so cache provenance is currently lost before update classification and rendering. `add-durable-filesystem-transactions` supplies validated owner-private reads, atomic replacement, and durable removal used by the new envelope storage. Metadata entries remain independently keyed and disposable, so this change does not adopt recoverable journals or a broad transaction lock. See proposal.md and the delta specs for the required behavior.
 
 ## Goals / Non-Goals
 
@@ -19,7 +19,7 @@ The current read-through HTTP cache can return a stored response without contact
 
 ### Separate cached HTTP representation from validation provenance
 
-Persist an envelope containing request key, auth and Accept scopes, body, response validators, `body_fetched_at`, and `validated_at`. A cache hit is no longer an early return. The transport sends validators and returns a response carrying provenance: network body, conditionally validated body, or stale fallback candidate.
+Persist an envelope containing request key, auth and Accept scopes, body, response validators, `body_fetched_at`, and `validated_at` through the shared durable-I/O layer. Keep envelope schema validation, request/auth identity, cache-key derivation, and provider acknowledgment in the metadata domain; the shared layer receives bytes and owned paths but no metadata authority. A cache hit is no longer an early return. The transport sends validators and returns a response carrying provenance: network body, conditionally validated body, or stale fallback candidate.
 
 Provider parsing remains authoritative. A newly fetched body is committed only after provider parsing succeeds. To avoid coupling the generic transport to each parser, the provider/coordinator acknowledges successful consumption through a cache publication boundary; malformed bodies leave the prior validated envelope intact.
 
@@ -59,8 +59,8 @@ Always serialize the four-state freshness value. Stale-only diagnostics enter `D
 
 ## Delivery Plan
 
-1. Delete the TTL cache format and `[cache].ttl` policy, discarding existing TTL entries.
-2. Introduce the validated-envelope format and provenance DTOs.
+1. Require completed `add-durable-filesystem-transactions`, then delete the TTL cache format and `[cache].ttl` policy using its durable removal primitive while discarding existing TTL entries.
+2. Introduce the validated-envelope format and provenance DTOs using shared validated reads and atomic replacement without a journal or broad lock.
 3. Add conditional request and provider acknowledgment behavior.
 4. Propagate freshness through update results and renderers.
 5. Update examples and documentation; no backward-compatible configuration or cache migration is provided.
