@@ -4,10 +4,13 @@
 
 An isolated Docker environment for Pi and development tools. Selected non-Debian inputs live in `docker-constructor.toml`; do not duplicate their versions in README files, `.env`, Dockerfile, or Compose.
 
-## Requirements
+## Supported host environments and requirements
 
-- Docker Engine 24+ with BuildKit
-- Python 3 on the host
+- Linux, or Windows through WSL2
+- Docker Engine 24+ with BuildKit; on Windows, enable Docker Desktop integration for the WSL2 distribution (or run Docker Engine inside WSL2)
+- Python 3 installed in the Linux/WSL2 environment
+
+Native Windows Python and direct execution from PowerShell or Command Prompt are not supported. On Windows, clone the repository and keep constructor caches in the WSL2 Linux filesystem (for example under `~/src` and `~/.cache`), not under `/mnt/c`; the project relies on Linux ownership, permission, locking, symlink, and atomic-filesystem semantics. Run all constructor commands from the WSL2 shell using Linux paths.
 
 ## 1. Build the environment
 

@@ -4,10 +4,13 @@
 
 用于 Pi 和开发工具的隔离 Docker 环境。除 Debian 外，所有选定输入都保存在 `docker-constructor.toml`；不要在 README、`.env`、Dockerfile 或 Compose 中重复具体版本。
 
-## 要求
+## 支持的主机环境和要求
 
-- 启用 BuildKit 的 Docker Engine 24+
-- 主机上的 Python 3
+- Linux，或通过 WSL2 使用 Windows
+- 启用 BuildKit 的 Docker Engine 24+；在 Windows 上，请为所用的 WSL2 发行版启用 Docker Desktop 集成（或在 WSL2 内运行 Docker Engine）
+- 安装在 Linux/WSL2 环境中的 Python 3
+
+不支持原生 Windows Python，也不支持直接从 PowerShell 或 Windows 命令提示符运行。在 Windows 上，请将仓库和构造器缓存放在 WSL2 的 Linux 文件系统中（例如 `~/src` 和 `~/.cache`），不要放在 `/mnt/c` 下；本项目依赖 Linux 的所有权、权限、文件锁、符号链接和原子文件系统语义。请从 WSL2 shell 使用 Linux 路径运行所有构造器命令。
 
 ## 1. 构建环境
 
