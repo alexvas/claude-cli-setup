@@ -19,11 +19,12 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from tests.build_test_support import INVENTORY_PATH
+from tests.build_test_support import INVENTORY_PATH, fixture_directory
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -409,8 +410,23 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
         # A copied inventory prevents machine-local companions from affecting
         # orchestration tests that do not exercise companion resolution.
         cls._INVENTORY = str(INVENTORY_PATH)
+        from docker.versioning.build_snapshot import MaterializedSnapshot
+        def snapshot(*_args, **_kwargs):
+            path = fixture_directory("fixture-snapshot-")
+            return MaterializedSnapshot(path, path / "manifest.json")
+        cls._snapshot_patcher = patch("docker.versioning.build_orchestration.create_artifact_snapshot", side_effect=snapshot)
+        cls._snapshot_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._snapshot_patcher.stop()
 
     # ── helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _materialize_fixture(*_args, **_kwargs):
+        root = fixture_directory("fixture-blobs-")
+        return tuple(root / name for name in ("rustup.blob", "uv.blob", "rtk.blob", "fd.blob"))
 
     @staticmethod
     def _make_fake_diagnose(ip: str = "192.168.1.1") -> Callable[..., Any]:
@@ -477,6 +493,8 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
+            _named_context_supported=lambda: True,
+            _materialize_artifacts=self._materialize_fixture,
         )
         result = orchestrate_build(req)
 
@@ -510,6 +528,8 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
+            _named_context_supported=lambda: True,
+            _materialize_artifacts=self._materialize_fixture,
         )
         result = orchestrate_build(req)
 
@@ -540,6 +560,8 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
+            _named_context_supported=lambda: True,
+            _materialize_artifacts=self._materialize_fixture,
         )
         result = orchestrate_build(req)
 
@@ -567,12 +589,15 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
+            _named_context_supported=lambda: True,
+            _materialize_artifacts=self._materialize_fixture,
         )
         result = orchestrate_build(req)
 
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertIsNotNone(result.build_args)
-        self.assertIn("build", result.build_args)
+        self.assertEqual((), result.build_args)
+        self.assertIn("Planned build (not executable)", result.display_string or "")
+        self.assertIn("constructor-artifacts=<prospective:not-materialized>", result.display_string or "")
         # Dry run: never touched the runner.
         self.assertIsNone(result.process_result)
         self.assertEqual((), runner.called)

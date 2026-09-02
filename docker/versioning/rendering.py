@@ -100,6 +100,71 @@ class CacheControls:
 
 
 @dataclass(frozen=True)
+class NoDerivedEnvironment:
+    """Closed attestation for selected prebuilt artifacts only."""
+
+
+@dataclass(frozen=True)
+class DerivedEnvironment:
+    assembled_output_identity: str
+    canonical_tree_digest: str
+    assembler_evidence_digest: str
+    consumer_launcher_evidence_digest: str
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(value, str) and value for value in (
+            self.assembled_output_identity, self.canonical_tree_digest,
+            self.assembler_evidence_digest, self.consumer_launcher_evidence_digest,
+        )):
+            raise ValueError("derived-environment attestation values must be non-empty")
+
+
+def is_platform_native_path(path: str, path_module: object = os.path) -> bool:
+    """Validate an absolute host path using the selected path semantics.
+
+    Kept separate from ``Prospective`` so its display token can never become a
+    candidate filesystem path. ``ntpath`` and ``posixpath`` are accepted by
+    tests; production uses the current host's ``os.path``.
+    """
+    if not isinstance(path, str) or not path or "\x00" in path:
+        return False
+    isabs = getattr(path_module, "isabs", None)
+    normpath = getattr(path_module, "normpath", None)
+    if not callable(isabs) or not callable(normpath) or not isabs(path):
+        return False
+    normalized = normpath(path)
+    return normalized not in (".", "")
+
+
+@dataclass(frozen=True)
+class Materialized:
+    path: str
+    attestation: NoDerivedEnvironment | DerivedEnvironment
+
+    def __post_init__(self) -> None:
+        if not is_platform_native_path(self.path):
+            raise ValueError("materialized named context requires an absolute platform-native path")
+        if not isinstance(self.attestation, (NoDerivedEnvironment, DerivedEnvironment)):
+            raise ValueError("materialized named context has an invalid closed attestation")
+
+
+@dataclass(frozen=True)
+class Prospective:
+    name: str = "constructor-artifacts"
+
+    @property
+    def path(self) -> None:
+        return None
+
+    @property
+    def attestation(self) -> dict[str, str]:
+        return {"state": "prospective"}
+
+
+NamedBuildContext = Materialized | Prospective
+
+
+@dataclass(frozen=True)
 class BuildRenderInputs:
     """Immutable input for ``docker build`` command rendering.
 
@@ -163,6 +228,10 @@ class BuildRenderInputs:
     """True when the resolved local companion enables corporate trust.  When
     true the renderer injects client CA-path build arguments pointing at the
     final system-bundle path; when false it injects none."""
+
+    named_context: NamedBuildContext | None = None
+    """Required isolated BuildKit input; executable rendering accepts only
+    ``Materialized`` contexts and never turns a prospective display token into a path."""
 
 
 @dataclass(frozen=True)
@@ -340,18 +409,14 @@ _BUILD_ARG_ORDER: tuple[tuple[str, str], ...] = (
     ("RUST_VERSION", "rust.version"),
     ("RUST_PROFILE", "rust.profile"),
     ("RUST_COMPONENTS", "rust.components"),
-    ("RUSTUP_URL", "rust.rustup.url"),
     ("RUSTUP_SHA256", "rust.rustup.sha256"),
     ("UV_VERSION", "uv.version"),
-    ("UV_URL", "uv.artifact.url"),
     ("UV_SHA256", "uv.artifact.sha256"),
     ("PYTHON_VERSION", "python_version"),
     ("TY_VERSION", "ty_version"),
     ("RTK_VERSION", "rtk.version"),
-    ("RTK_URL", "rtk.artifact.url"),
     ("RTK_SHA256", "rtk.artifact.sha256"),
     ("FD_VERSION", "fd.version"),
-    ("FD_URL", "fd.artifact.url"),
     ("FD_SHA256", "fd.artifact.sha256"),
     ("PI_VERSION", "pi_version"),
     ("OPENSPEC_VERSION", "openspec_version"),
@@ -766,6 +831,13 @@ def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
             f"expected 'auto', 'plain', or 'tty'"
         )
 
+    # An executable Docker invocation has no representation for an unresolved
+    # plan.  Keep prospective contexts exclusively in dry-run presentation.
+    if not isinstance(inputs.named_context, Materialized):
+        raise EffectiveConfigError(
+            "executable build rendering requires a materialized constructor-artifacts context"
+        )
+
     # 3.  Build the deterministic argument vector.
     args: list[str] = ["docker", "build"]
 
@@ -783,6 +855,8 @@ def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
 
     if inputs.pull:
         args.append("--pull")
+
+    args.extend(("--build-context", f"constructor-artifacts={inputs.named_context.path}"))
 
     # Build arguments — deterministic order matching the Dockerfile ARGs.
     _emit_build_args(args, inputs.projection)
@@ -884,6 +958,49 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     return tuple(args)
 
 
+def render_prospective_build_display(
+    inputs: BuildRenderInputs, *, path_semantics: object = os.path,
+) -> str:
+    """Render an explicitly non-executable, platform-neutral dry-run plan.
+
+    ``path_semantics`` is a test seam only: prospective contexts must never
+    pass a value into it because they have no filesystem path.
+    """
+    if not isinstance(inputs.named_context, Prospective):
+        raise ValueError("prospective display requires a prospective named context")
+    if inputs.named_context.path is not None:
+        raise ValueError("prospective context must not enter path handling")
+    if not callable(getattr(path_semantics, "isabs", None)):
+        raise ValueError("path_semantics must provide isabs")
+    expected_platform = _docker_platform(inputs.projection.platform)
+    if inputs.platform != expected_platform:
+        raise EffectiveConfigError("platform mismatch in prospective build plan")
+    _validate_build_projection(inputs.projection)
+    if not inputs.image_tag.strip() or not inputs.target_stage.strip() or not inputs.build_context.strip():
+        raise ValueError("prospective build requires tag, target, and primary context")
+    args = ["docker", "build", "--tag", inputs.image_tag, "--target", inputs.target_stage,
+            "--platform", inputs.platform, "--progress", inputs.progress]
+    if inputs.dockerfile is not None:
+        args.extend(("--file", inputs.dockerfile))
+    if not inputs.cache.enabled:
+        args.append("--no-cache")
+    if inputs.pull:
+        args.append("--pull")
+    args.extend(("--build-context", "constructor-artifacts=<prospective:not-materialized>"))
+    _emit_build_args(args, inputs.projection)
+    _emit_proxy_build_args(args, inputs)
+    _emit_corporate_trust_build_args(args, inputs)
+    if inputs.dev_uid < 0 or inputs.dev_gid < 0:
+        raise ValueError("dev_uid and dev_gid must be >= 0")
+    args.extend(("--build-arg", f"DEV_UID={inputs.dev_uid}", "--build-arg", f"DEV_GID={inputs.dev_gid}"))
+    args.append(inputs.build_context)
+    display = render_command_display(tuple(args))
+    # This is presentation metadata, not shell input; retain the required
+    # stable token instead of shell-quoting its angle brackets.
+    display = display.replace("'constructor-artifacts=<prospective:not-materialized>'", "constructor-artifacts=<prospective:not-materialized>")
+    return "Planned build (not executable)\n" + display
+
+
 def render_command_display(args: tuple[str, ...]) -> str:
     """Render a command vector as a shell-escaped string for display.
 
@@ -946,20 +1063,16 @@ def render_build_environment(
         raise EffectiveConfigError(
             f"No artifact for platform {platform!r} in rustup entry"
         )
-    result["RUSTUP_URL"] = rustup_artifact.url
     result["RUSTUP_SHA256"] = rustup_artifact.sha256
     result["UV_VERSION"] = inv.stages.toolchain.uv.version
-    result["UV_URL"] = artifacts_uv.url
     result["UV_SHA256"] = artifacts_uv.sha256
     result["PYTHON_VERSION"] = inv.stages.toolchain.python.version
     result["TY_VERSION"] = inv.stages.toolchain.ty.version
 
     # Prebuilt
     result["RTK_VERSION"] = inv.stages.rtk_prebuilt.rtk.version
-    result["RTK_URL"] = artifacts_rtk.url
     result["RTK_SHA256"] = artifacts_rtk.sha256
     result["FD_VERSION"] = inv.stages.fd_prebuilt.fd.version
-    result["FD_URL"] = artifacts_fd.url
     result["FD_SHA256"] = artifacts_fd.sha256
 
     # Node tools

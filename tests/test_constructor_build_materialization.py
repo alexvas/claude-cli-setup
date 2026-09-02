@@ -8,6 +8,9 @@ from unittest.mock import patch
 from dataclasses import replace
 from pathlib import Path
 
+from tests.build_test_support import fixture_directory
+
+from docker.versioning.build_snapshot import MaterializedSnapshot
 from docker.versioning.build_materialization import (
     HostNetworkPolicy, MaterializationError, SelectedBuildArtifact,
     UrllibStreamingTransport, materialize_artifact, select_build_artifacts,
@@ -44,11 +47,21 @@ class TestBuildArtifactSelection(unittest.TestCase):
     def test_exact_effective_linux_amd64_pairs(self):
         selected = select_build_artifacts(selection())
         self.assertEqual([
-            ("rustup", "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init", "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"),
+            ("rustup", "https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init", "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"),
             ("uv", "https://github.com/astral-sh/uv/releases/download/0.12.5/uv-x86_64-unknown-linux-gnu.tar.gz", "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"),
             ("rtk", "https://github.com/rtk-ai/rtk/releases/download/v0.45.0/rtk_amd64.deb", "0ba496b2531cd4357edfb2ac2fe2eb19ec99eb9ba46401dffa8459e1cfbd0061"),
             ("fd", "https://github.com/sharkdp/fd/releases/download/v10.4.2/fd_10.4.2_amd64.deb", "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"),
         ], [(x.name, x.url, x.identity.hex_digest()) for x in selected])
+
+    def test_rustup_is_pinned_to_reviewed_immutable_archive_source(self):
+        inventory = load_inventory(ROOT / "docker-constructor.toml")
+        rustup = inventory.stages.toolchain.rust.rustup["linux-amd64"]
+        source = inventory.stages.toolchain.rust.rustup_source
+        self.assertEqual("https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init", rustup.url)
+        self.assertEqual("https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init.sha256", source.checksum_url)
+        self.assertNotIn("/rustup/dist/", rustup.url)
+        self.assertNotIn("/rustup/dist/", source.checksum_url)
+        self.assertEqual("4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10", rustup.sha256)
 
     def test_rejects_every_unsupported_platform(self):
         with self.assertRaisesRegex(MaterializationError, "unsupported"):
@@ -92,12 +105,28 @@ class TestStreamingMaterializer(unittest.TestCase):
             self.assertTrue(destination.exists())
 
 
+def _fixture_snapshot(*_args, **_kwargs):
+    path = fixture_directory("fixture-snapshot-")
+    return MaterializedSnapshot(path, path / "manifest.json")
+
+
+def setUpModule():
+    global _snapshot_patcher
+    _snapshot_patcher = patch("docker.versioning.build_orchestration.create_artifact_snapshot", side_effect=_fixture_snapshot)
+    _snapshot_patcher.start()
+
+
+def tearDownModule():
+    _snapshot_patcher.stop()
+
+
 class TestMaterializationOrchestration(unittest.TestCase):
     def test_injected_docker_runner_does_not_skip_materialization(self):
         effects = []
         def materialize(*args, **kwargs):
             effects.append("materialize")
-            return ()
+            root = fixture_directory("fixture-blobs-")
+            return tuple(root / name for name in ("rustup.blob", "uv.blob", "rtk.blob", "fd.blob"))
         def publish(*args, **kwargs):
             effects.append("publish")
             return PublishResult("/tmp/effective.toml")
@@ -108,7 +137,8 @@ class TestMaterializationOrchestration(unittest.TestCase):
         result = orchestrate_build(BuildRequest(
             inventory_path=str(ROOT / "docker-constructor.toml"),
             repo_root=str(ROOT), confirmed=True, runner=Docker(),
-            _materialize_artifacts=materialize, _publish_projection=publish,
+            _materialize_artifacts=materialize, _named_context_supported=lambda: True,
+            _publish_projection=publish,
         ))
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         self.assertEqual(["materialize", "publish", "docker"], effects)
@@ -139,7 +169,7 @@ class TestMaterializationOrchestration(unittest.TestCase):
             request = BuildRequest(
                 inventory_path=str(inventory), repo_root=str(root), confirmed=True,
                 runner=Docker(), _materialize_artifacts=materialize,
-                _publish_projection=publish,
+                _named_context_supported=lambda: True, _publish_projection=publish,
             )
             plan = plan_build(request)
             self.assertEqual(ExitKind.SUCCESS, plan.exit_kind, plan.message)
@@ -170,7 +200,8 @@ class TestMaterializationOrchestration(unittest.TestCase):
         result = orchestrate_build(BuildRequest(
             inventory_path=str(ROOT / "docker-constructor.toml"),
             repo_root=str(ROOT), confirmed=True, runner=Docker(),
-            _materialize_artifacts=fail, _publish_projection=publish,
+            _materialize_artifacts=fail, _named_context_supported=lambda: True,
+            _publish_projection=publish,
         ))
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertEqual(["materialize"], effects)

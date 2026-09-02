@@ -57,36 +57,35 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 - [x] 3.7 **INTROSPECT:** Review the phase diff for full-buffer downloads, duplicate HTTP policy, unredacted diagnostics, network after integrity failure, and coupling to CLI/rendering modules; remove each issue found.
 - [x] 3.8 **VALIDATE:** Run provider-independent transport, materialization, orchestration, corporate-network, and failure-cleanup tests; record that Docker is never invoked on a materialization failure.
 
-## 4. Immutable Named Build Context
+## 4. Immutable Named Build Context and Minimal Dockerfile Conversion
 
 **Depends on:** Phase 3
 
-**Deliverables:** selected-prebuilt-artifact-only owner-private transaction snapshot with canonical manifest and stable filenames; hard-link/copy fallback; host-owner named-context import; in-build read-only copies for remapped `dev`; fail-fast BuildKit/path checks; removed artifact URL arguments.
+**Deliverables:** selected-prebuilt-artifact-only owner-private transaction snapshot with canonical manifest and stable filenames; hard-link/copy fallback; host-owner named-context import; in-build read-only copies for remapped `dev`; fail-fast BuildKit/path checks; rustup, uv, rtk, and fd stages minimally converted to consume named-context files with retained SHA-256 verification and no artifact URL arguments or corresponding in-Docker downloads; Rustup's already reviewed `4acc9acc…` bytes sourced from the immutable official `archive/1.29.0/` URL and matching archived checksum URL instead of mutable `dist/` aliases.
 
-- [ ] 4.1 **RED:** Add snapshot-content tests for deterministic manifest bytes, stable logical filenames, selected-prebuilt-artifact-only exposure, hard-link creation, copy fallback, and post-copy digest verification.
-- [ ] 4.2 **RED:** Add snapshot-lifecycle tests for owner-private mutable population followed by `0444` selected-prebuilt-artifact finalization and removal of every directory write bit; failed ordinary host-owner mutation and permission assertions; host-owner import beneath a `0700` parent; no host traversal for differing UID; readable non-writable in-build copies for remapped `dev`; cache-name unlink survival; and unconditional cleanup.
-- [ ] 4.3 **RED:** Add BuildKit prerequisite tests proving missing named-context support fails before download, snapshot publication, or Docker execution.
-- [ ] 4.4 **RED:** Add typed-plan tests requiring Phase 4 real builds to hold `Materialized(platform-native-path, NoDerivedEnvironment)`, dry-runs to hold `{name: constructor-artifacts, state: prospective, path: null, attestation: {state: prospective}}`, and executable rendering to reject every unresolved prospective context or invalid closed attestation before producing argv.
-- [ ] 4.5 **RED:** Add presentation tests requiring dry-run text `--build-context constructor-artifacts=<prospective:not-materialized>` beneath `Planned build (not executable)`, byte-identical POSIX/Windows output, retained digest inputs, absent artifact URL inputs, and zero filesystem/cache/network/Docker side effects.
-- [ ] 4.6 **GREEN:** Implement selected-prebuilt-artifact snapshot creation, verification, `0444` finalization, host-client import boundary, explicit in-build copy permissions, and cleanup required by tasks 4.1–4.2.
-- [ ] 4.7 **GREEN:** Implement the named-context prerequisite check, closed `Materialized`/`Prospective` context model, real executable rendering, cross-platform dry-run serialization/presentation, and unresolved-plan rejection required by tasks 4.3–4.5.
-- [ ] 4.8 **INTROSPECT:** Review the phase diff for exposure of the whole cache, mutable snapshots, unstable manifest ordering, primary-context leakage, permission changes through hard links, OS-specific prospective paths, and command/display divergence; correct each issue found.
-- [ ] 4.9 **VALIDATE:** Run snapshot, private-ancestor, host-owner import, remapped in-build UID, typed-plan, build-vector, capability-failure, and command-display tests; record byte-identical POSIX/Windows dry-runs with `path: null`, no lock/filesystem/cache/network/Docker interaction, no executable argv for prospective plans, and platform-native paths only for materialized plans.
+- [x] 4.1 **RED:** Add snapshot-content tests for deterministic manifest bytes, stable logical filenames, selected-prebuilt-artifact-only exposure, hard-link creation, copy fallback, and post-copy digest verification.
+- [x] 4.2 **RED:** Add snapshot-lifecycle tests for owner-private mutable population followed by `0444` selected-prebuilt-artifact finalization and removal of every directory write bit; failed ordinary host-owner mutation and permission assertions; host-owner import beneath a `0700` parent; no host traversal for differing UID; readable non-writable in-build copies for remapped `dev`; cache-name unlink survival; and unconditional cleanup.
+- [x] 4.3 **RED:** Add BuildKit prerequisite tests proving missing named-context support fails before download, snapshot publication, or Docker execution.
+- [x] 4.4 **RED:** Add typed-plan tests requiring Phase 4 real builds to hold `Materialized(platform-native-path, NoDerivedEnvironment)`, dry-runs to hold `{name: constructor-artifacts, state: prospective, path: null, attestation: {state: prospective}}`, and executable rendering to reject every unresolved prospective context or invalid closed attestation before producing argv.
+- [x] 4.5 **RED:** Add presentation tests requiring dry-run text `--build-context constructor-artifacts=<prospective:not-materialized>` beneath `Planned build (not executable)`, byte-identical POSIX/Windows output, retained digest inputs, absent artifact URL inputs, and zero filesystem/cache/network/Docker side effects.
+- [x] 4.6 **RED:** Add Dockerfile contract tests requiring rustup and uv to use stable named-context files, retain in-stage SHA-256 checks, and contain no corresponding curl or URL input; add a focused inventory contract proving Rustup's reviewed SHA-256 `4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10` is paired with the immutable official `archive/1.29.0/` artifact and checksum URLs rather than mutable `dist/` aliases.
+- [x] 4.7 **RED:** Add Dockerfile contract tests requiring independent rtk and fd stages to use stable named-context files, retain in-stage SHA-256 checks, and contain no corresponding network download.
+- [x] 4.8 **GREEN:** Implement selected-prebuilt-artifact snapshot creation, verification, `0444` finalization, host-client import boundary, explicit in-build copy permissions, and cleanup required by tasks 4.1–4.2.
+- [x] 4.9 **GREEN:** Implement the named-context prerequisite check, closed `Materialized`/`Prospective` context model, real executable rendering, cross-platform dry-run serialization/presentation, and unresolved-plan rejection required by tasks 4.3–4.5.
+- [x] 4.10 **GREEN:** Minimally convert the rustup, uv, rtk, and fd stages to named-context inputs, removing their URL inputs and corresponding downloads while retaining independent stages and in-stage SHA-256 verification; correct Rustup's reviewed inventory provenance from mutable `dist/` aliases to the immutable official `archive/1.29.0/` artifact and checksum URLs without changing the selected bytes or digest, as required by tasks 4.6–4.7.
+- [x] 4.11 **INTROSPECT:** Review the phase diff for exposure of the whole cache, mutable snapshots, unstable manifest ordering, primary-context leakage, permission changes through hard links, OS-specific prospective paths, command/display divergence, retained artifact URLs, or unnecessary artifact network access; correct each issue found without taking on Phase 5 cache-boundary tuning.
+- [x] 4.12 **VALIDATE:** Run snapshot, private-ancestor, host-owner import, remapped in-build UID, typed-plan, build-vector, capability-failure, command-display, and Dockerfile contract tests; record byte-identical POSIX/Windows dry-runs with `path: null`, no lock/filesystem/cache/network/Docker interaction, no executable argv for prospective plans, platform-native paths only for materialized plans, and named-context Dockerfile consumption with retained digest checks and absent artifact URL inputs.
 
-## 5. Dockerfile Pinned-Artifact Conversion
+## 5. Dockerfile Independent Invalidation and Build Acceptance
 
 **Depends on:** Phase 4
 
-**Deliverables:** rustup, uv, rtk, and fd stages consuming named-context files; no corresponding in-Docker network downloads; second SHA-256 verification boundary; preserved independent BuildKit invalidation.
+**Deliverables:** preserved independent BuildKit invalidation for the converted rustup, uv, rtk, and fd stages; focused valid/tampered-snapshot and cache-boundary build evidence.
 
-- [ ] 5.1 **RED:** Add Dockerfile contract tests requiring rustup and uv to use stable named-context files, retain in-stage SHA-256 checks, and contain no corresponding curl or URL input.
-- [ ] 5.2 **RED:** Add Dockerfile contract tests requiring independent rtk and fd stages to use stable named-context files, retain in-stage SHA-256 checks, and contain no corresponding network download.
-- [ ] 5.3 **RED:** Add focused BuildKit cache tests proving a changed rtk input does not invalidate fd, rustup, uv, Pi, or OpenSpec stages and a changed fd input has the symmetric boundary.
-- [ ] 5.4 **GREEN:** Convert rustup and uv stages to named-context inputs and satisfy task 5.1 without changing unrelated stages.
-- [ ] 5.5 **GREEN:** Convert rtk and fd stages to named-context inputs and satisfy task 5.2 without changing unrelated stages.
-- [ ] 5.6 **GREEN:** Adjust stage/context structure only as required to satisfy the independent invalidation tests in task 5.3.
-- [ ] 5.7 **INTROSPECT:** Review Dockerfile stages for retained artifact URLs, duplicated verification, accidental payload persistence in the final image, cross-stage invalidation, and unnecessary network access; remove each issue found.
-- [ ] 5.8 **VALIDATE:** Run focused `linux-amd64` builds with valid and tampered snapshots plus plain-progress cache-boundary rebuilds; record successful installs, integrity rejection, and expected cached stages.
+- [ ] 5.1 **RED:** Add focused BuildKit cache tests proving a changed rtk input does not invalidate fd, rustup, uv, Pi, or OpenSpec stages and a changed fd input has the symmetric boundary.
+- [ ] 5.2 **GREEN:** Adjust stage/context structure only as required to satisfy the independent invalidation tests in task 5.1.
+- [ ] 5.3 **INTROSPECT:** Review Dockerfile stages for duplicated verification, accidental payload persistence in the final image, cross-stage invalidation, and unnecessary coupling introduced by the minimal Phase 4 conversion; remove each issue found.
+- [ ] 5.4 **VALIDATE:** Run focused `linux-amd64` builds with valid and tampered snapshots plus plain-progress cache-boundary rebuilds; record successful installs, integrity rejection, and expected cached stages.
 
 ## 6. Official Locked Pi Installation
 

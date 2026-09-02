@@ -21,7 +21,7 @@ and ``orchestrate_doctor`` with planning/execution separation.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, TypedDict
@@ -47,6 +47,11 @@ from docker.versioning.build_materialization import (
     MaterializationError,
     UrllibStreamingTransport,
     materialize_build_artifacts,
+    select_build_artifacts,
+)
+from docker.versioning.build_snapshot import (
+    MaterializedSnapshot, SnapshotError, cleanup_artifact_snapshot,
+    create_artifact_snapshot,
 )
 from docker.versioning.effective import (
     EffectiveBuildProjection,
@@ -63,8 +68,12 @@ from docker.versioning.rendering import (
     BuildRenderInputs,
     CacheControls,
     _docker_platform,
+    Materialized,
+    NoDerivedEnvironment,
+    Prospective,
     render_build_vector,
     render_command_display,
+    render_prospective_build_display,
     write_effective_build,
 )
 
@@ -221,6 +230,9 @@ class BuildRequest:
 
     _materialize_artifacts: Callable[..., object] | None = None
     """Injectable host materializer used before projection publication/Docker."""
+
+    _named_context_supported: Callable[[], bool] | None = None
+    """Injectable BuildKit named-context capability probe."""
 
     def __post_init__(self) -> None:
         """Normalize ``overrides`` to an immutable mapping.
@@ -481,11 +493,29 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
             proxy_url=local.network_proxy.url,
             proxy_no_proxy=local.network_proxy.no_proxy,
             corporate_trust_enabled=local.corporate_trust.enabled,
+            named_context=Prospective(),
         )
 
-        # 4. Render
-        build_args = render_build_vector(render_inputs)
-        display_string = render_command_display(build_args)
+        # Validate fields shared by executable and prospective plans without
+        # attempting argv rendering (which correctly rejects Prospective).
+        if not build_context.strip():
+            raise ValueError("build_context must not be empty")
+        if not tag.strip():
+            raise ValueError("image_tag must not be empty")
+        if render_inputs.dev_uid < 0 or render_inputs.dev_gid < 0:
+            raise ValueError("dev_uid and dev_gid must be >= 0")
+        if request.progress not in ("auto", "plain", "tty"):
+            raise ValueError("unsupported progress mode")
+
+        # Dry-runs are deliberately non-executable and perform no probe,
+        # cache, filesystem, network, or Docker operation.
+        if request.dry_run:
+            build_args = ()
+            display_string = render_prospective_build_display(render_inputs)
+        else:
+            # The real path is assigned only after host materialization.
+            build_args = ()
+            display_string = None
     except (ValueError, VersionConfigError) as exc:
         return BuildTransactionPlan(
             exit_kind=ExitKind.CONFIG,
@@ -509,6 +539,15 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
     )
 
 
+def _default_named_context_supported() -> bool:
+    """Probe the exact ``docker build`` interface used by this constructor."""
+    completed = subprocess.run(
+        ["docker", "build", "--help"], shell=False, text=True,
+        capture_output=True,
+    )
+    return completed.returncode == 0 and "--build-context" in completed.stdout
+
+
 def execute_build(
     plan: BuildTransactionPlan,
     request: BuildRequest,
@@ -527,7 +566,22 @@ def execute_build(
         else Path(request.inventory_path).parent
     )
 
-    # 1. Materialize every selected artifact before publishing any reference
+    # 1. Fail before download, publication, or a Docker build when the local
+    # client cannot import BuildKit named contexts.
+    supported = request._named_context_supported or _default_named_context_supported
+    try:
+        if not supported():
+            raise SnapshotError("Docker BuildKit named-context support is required")
+    except (OSError, SnapshotError) as exc:
+        return BuildResult(
+            exit_kind=ExitKind.OPERATIONAL,
+            message=("Docker BuildKit named contexts are required; use a Docker "
+                     "build interface that advertises --build-context "
+                     f"({exc})"),
+            build_args=build_args, display_string=display_string,
+        )
+
+    # 2. Materialize every selected artifact before publishing any reference
     # or invoking Docker. The transport is the sole owner of host HTTP policy.
     materialize = request._materialize_artifacts or materialize_build_artifacts
     projection = plan.effective_projection
@@ -538,79 +592,73 @@ def execute_build(
             build_args=build_args,
             display_string=display_string,
         )
+    # 3. Construct the narrow owner-private immutable context.  Snapshot
+    # cleanup is unconditional across publication and Docker outcomes.
+    snapshot: MaterializedSnapshot | None = None
     try:
         transport = UrllibStreamingTransport(plan.host_network_policy)
-        materialize(
-            projection,
-            checkout_root=repo_root,
-            transport=transport,
+        materialized = materialize(
+            projection, checkout_root=repo_root, transport=transport,
         )
-    except (MaterializationError, BuildCacheError, OSError, ValueError) as exc:
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"build artifact materialization failed: {exc}",
-            build_args=build_args,
-            display_string=display_string,
+        if not isinstance(materialized, (tuple, list)) or not all(
+            isinstance(path, Path) for path in materialized
+        ):
+            raise SnapshotError("artifact materializer returned invalid blob paths")
+        blobs = tuple(materialized)
+        snapshot = create_artifact_snapshot(
+            select_build_artifacts(projection), blobs, checkout_root=repo_root,
         )
+        if plan.render_inputs is None:
+            raise SnapshotError("missing build rendering inputs")
+        render_inputs = dataclass_replace(plan.render_inputs, named_context=Materialized(
+            str(snapshot.path), NoDerivedEnvironment(),
+        ))
+        build_args = render_build_vector(render_inputs)
+        display_string = render_command_display(build_args)
+    except (MaterializationError, BuildCacheError, SnapshotError, OSError, ValueError) as exc:
+        cleanup_artifact_snapshot(snapshot)
+        return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                           message=f"build artifact materialization failed: {exc}",
+                           build_args=build_args, display_string=display_string)
 
-    # 2. Publish effective projection
-    publish = request._publish_projection
+    # 4–5. Everything after snapshot creation shares one cleanup boundary.
+    # ``finally`` also runs for interruption and unexpected exceptions.
     try:
-        if publish is not None:
-            publish_result = publish(
-                plan.effective_projection,
-                repo_root=repo_root,
+        publish = request._publish_projection
+        try:
+            if publish is not None:
+                publish_result = publish(plan.effective_projection, repo_root=repo_root)
+            else:
+                publish_result = _publish_projection_default(plan.effective_projection, repo_root=repo_root)
+        except Exception as exc:
+            return BuildResult(
+                exit_kind=ExitKind.OPERATIONAL,
+                message=f"failed to publish effective projection: {getattr(exc, 'detail', str(exc))}",
+                build_args=build_args, display_string=display_string,
             )
-        else:
-            publish_result = _publish_projection_default(
-                plan.effective_projection, repo_root=repo_root,
-            )
-    except (PublishError, Exception) as exc:
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"failed to publish effective projection: {getattr(exc, 'detail', str(exc))}",
-            build_args=build_args,
-            display_string=display_string,
-        )
 
-    # 3. Execute Docker build
-    runner = request.runner or SubprocessBuildExecutor(request.output_policy)
-    try:
-        proc = runner.run(build_args)
-    except FileNotFoundError as exc:
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"docker executable not found: {exc}",
-            build_args=build_args,
-            display_string=display_string,
-            publish_result=publish_result,
-        )
-    except OSError as exc:
-        return BuildResult(
-            exit_kind=ExitKind.OPERATIONAL,
-            message=f"docker execution failed: {exc}",
-            build_args=build_args,
-            display_string=display_string,
-            publish_result=publish_result,
-        )
-    exit_kind = ExitKind.SUCCESS if proc.return_code == 0 else ExitKind.OPERATIONAL
-    message: str | None = "image build completed" if proc.return_code == 0 else None
-    if proc.return_code != 0:
-        message = (
-            f"build exited with code {proc.return_code}"
-            if getattr(proc, "output_policy", BuildOutputPolicy.CAPTURED)
-            is BuildOutputPolicy.STREAMED
-            else (proc.stderr or f"build exited with code {proc.return_code}")
-        )
+        runner = request.runner or SubprocessBuildExecutor(request.output_policy)
+        try:
+            proc = runner.run(build_args)
+        except FileNotFoundError as exc:
+            return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                message=f"docker executable not found: {exc}", build_args=build_args,
+                display_string=display_string, publish_result=publish_result)
+        except OSError as exc:
+            return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                message=f"docker execution failed: {exc}", build_args=build_args,
+                display_string=display_string, publish_result=publish_result)
 
-    return BuildResult(
-        exit_kind=exit_kind,
-        message=message,
-        build_args=build_args,
-        display_string=display_string,
-        process_result=proc,
-        publish_result=publish_result,
-    )
+        exit_kind = ExitKind.SUCCESS if proc.return_code == 0 else ExitKind.OPERATIONAL
+        message: str | None = "image build completed" if proc.return_code == 0 else None
+        if proc.return_code != 0:
+            message = (f"build exited with code {proc.return_code}"
+                if getattr(proc, "output_policy", BuildOutputPolicy.CAPTURED) is BuildOutputPolicy.STREAMED
+                else (proc.stderr or f"build exited with code {proc.return_code}"))
+        return BuildResult(exit_kind=exit_kind, message=message, build_args=build_args,
+            display_string=display_string, process_result=proc, publish_result=publish_result)
+    finally:
+        cleanup_artifact_snapshot(snapshot)
 
 
 # ═══════════════════════════════════════════════════════════════════════

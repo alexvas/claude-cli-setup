@@ -47,10 +47,10 @@ version = "1.98.0"
 
 [build.stages.toolchain.rust.rustup.artifacts.linux-amd64]
 sha256 = "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10"
-url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init"
+url = "https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init"
 
 [build.stages.toolchain.rust.rustup.source]
-checksum_url = "https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256"
+checksum_url = "https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init.sha256"
 type = "static-url"
 
 [build.stages.toolchain.rust.rustup.update]

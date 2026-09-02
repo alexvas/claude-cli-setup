@@ -90,10 +90,10 @@ ARG CORPORATE_TRUST_ENABLED
 ARG PI_CORPORATE_CA_PATH
 
 ARG RTK_VERSION
-ARG RTK_URL
 ARG RTK_SHA256
-RUN . /tmp/corp-network-env.sh && curl -fsSL -o /tmp/rtk.deb "${RTK_URL}" \
-    && ACTUAL=$(sha256sum /tmp/rtk.deb | cut -d' ' -f1) \
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts --chmod=0444 rtk.deb /tmp/rtk.deb
+RUN ACTUAL=$(sha256sum /tmp/rtk.deb | cut -d' ' -f1) \
     && if [ "$ACTUAL" != "${RTK_SHA256}" ]; then echo "SHA256 mismatch: expected ${RTK_SHA256}, got $ACTUAL" >&2; exit 1; fi \
     && dpkg-deb -x /tmp/rtk.deb /tmp/rtk-extract \
     && install -m 755 /tmp/rtk-extract/usr/bin/rtk /usr/local/bin/rtk \
@@ -109,10 +109,10 @@ ARG CORPORATE_TRUST_ENABLED
 ARG PI_CORPORATE_CA_PATH
 
 ARG FD_VERSION
-ARG FD_URL
 ARG FD_SHA256
-RUN . /tmp/corp-network-env.sh && curl -fsSL -o /tmp/fd.deb "${FD_URL}" \
-    && ACTUAL=$(sha256sum /tmp/fd.deb | cut -d' ' -f1) \
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts --chmod=0444 fd.deb /tmp/fd.deb
+RUN ACTUAL=$(sha256sum /tmp/fd.deb | cut -d' ' -f1) \
     && if [ "$ACTUAL" != "${FD_SHA256}" ]; then echo "SHA256 mismatch: expected ${FD_SHA256}, got $ACTUAL" >&2; exit 1; fi \
     && dpkg-deb -x /tmp/fd.deb /tmp/fd-extract \
     && install -m 755 /tmp/fd-extract/usr/bin/fd /usr/local/bin/fd \
@@ -144,8 +144,9 @@ RUN mkdir -p /home/dev/.cargo /home/dev/.rustup /home/dev/.cache/uv /home/dev/mc
 ARG RUST_VERSION
 ARG RUST_PROFILE
 ARG RUST_COMPONENTS
-ARG RUSTUP_URL
 ARG RUSTUP_SHA256
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts --chown=dev:dev --chmod=0555 rustup-init /tmp/rustup-init
 # The single-quoted program intentionally defers expansion to the inner bash.
 # hadolint ignore=SC2016
 RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/.cargo/registry,uid=${DEV_UID},gid=${DEV_GID} \
@@ -153,10 +154,7 @@ RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/
     --mount=type=cache,id=rustup-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.rustup/downloads,uid=${DEV_UID},gid=${DEV_GID} \
     env HOME=/home/dev CARGO_HOME=/home/dev/.cargo RUSTUP_HOME=/home/dev/.rustup \
     bash -euo pipefail -c ' \
-        . /tmp/corp-network-env.sh; \
-        curl -fsSL -o /tmp/rustup-init "${RUSTUP_URL}" \
-        && printf "%s  %s\n" "${RUSTUP_SHA256}" /tmp/rustup-init | sha256sum -c - \
-        && chmod +x /tmp/rustup-init \
+        printf "%s  %s\n" "${RUSTUP_SHA256}" /tmp/rustup-init | sha256sum -c - \
         && /tmp/rustup-init -y --profile "${RUST_PROFILE}" --default-toolchain "${RUST_VERSION}" \
         && rustup component add ${RUST_COMPONENTS} \
         && ACTUAL_RUSTC="$(rustc --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" \
@@ -168,13 +166,12 @@ RUN --mount=type=cache,id=cargo-registry-${DEV_UID}-${DEV_GID},target=/home/dev/
         && rm -f /tmp/rustup-init'
 
 ARG UV_VERSION
-ARG UV_URL
 ARG UV_SHA256
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts --chown=dev:dev --chmod=0444 uv.tar.gz /tmp/uv.tar.gz
 RUN --mount=type=cache,id=uv-downloads-${DEV_UID}-${DEV_GID},target=/home/dev/.cache/uv,uid=${DEV_UID},gid=${DEV_GID} \
     bash -euo pipefail -c ' \
-        . /tmp/corp-network-env.sh; \
-        curl -fsSL -o /tmp/uv.tar.gz "${UV_URL}" \
-        && printf "%s  %s\n" "${UV_SHA256}" /tmp/uv.tar.gz | sha256sum -c - \
+        printf "%s  %s\n" "${UV_SHA256}" /tmp/uv.tar.gz | sha256sum -c - \
         && tar xzf /tmp/uv.tar.gz -C /tmp \
         && ACTUAL_UV="$(/tmp/uv-*/uv --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" \
         && test "${ACTUAL_UV}" = "${UV_VERSION}" \

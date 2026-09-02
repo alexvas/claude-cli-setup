@@ -4,13 +4,16 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
+from pathlib import Path
 
-from tests.build_test_support import INVENTORY_PATH
+from tests.build_test_support import INVENTORY_PATH, fixture_directory
 
 from docker.networking import BuildOutputPolicy, ProcessResult
+from docker.versioning.build_snapshot import MaterializedSnapshot
 from docker.versioning.build_orchestration import (
     BuildRequest, BuildResult, PublishResult, SubprocessBuildExecutor, orchestrate_build,
 )
@@ -26,11 +29,32 @@ class RecordingExecutor:
         return self.result
 
 
+def _fixture_materialize(*_args, **_kwargs):
+    root = fixture_directory("fixture-blobs-")
+    return tuple(root / name for name in ("rustup.blob", "uv.blob", "rtk.blob", "fd.blob"))
+
+
+def _fixture_snapshot(*_args, **_kwargs):
+    path = fixture_directory("fixture-snapshot-")
+    return MaterializedSnapshot(path, path / "manifest.json")
+
+
+def setUpModule():
+    global _snapshot_patcher
+    _snapshot_patcher = patch("docker.versioning.build_orchestration.create_artifact_snapshot", side_effect=_fixture_snapshot)
+    _snapshot_patcher.start()
+
+
+def tearDownModule():
+    _snapshot_patcher.stop()
+
+
 def _request(policy: BuildOutputPolicy, runner: RecordingExecutor, *, progress: str = "auto") -> BuildRequest:
     return BuildRequest(
         inventory_path=str(INVENTORY_PATH), confirmed=True, progress=progress,
         output_policy=policy, runner=runner,
-        _materialize_artifacts=lambda *_args, **_kwargs: (),
+        _materialize_artifacts=_fixture_materialize,
+        _named_context_supported=lambda: True,
         _publish_projection=lambda *_args, **_kwargs: __import__(
             "docker.versioning.build_orchestration", fromlist=["PublishResult"]
         ).PublishResult("/tmp/effective.toml"),

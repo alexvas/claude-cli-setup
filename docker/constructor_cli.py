@@ -552,7 +552,7 @@ def _real_dispatcher(
         # A normal text build has already shown Docker's native output; do
         # not turn its command vector into a second primary result.
         show_vector = dry_run or request.output == "json" or request.verbose
-        if show_vector and result.build_args:
+        if show_vector and (result.build_args or result.display_string):
             data = {
                 "build_args": list(result.build_args),
                 "display_string": result.display_string,

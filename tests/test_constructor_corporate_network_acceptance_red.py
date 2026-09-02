@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import shlex
 import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -161,6 +162,8 @@ def _collect_env(args) -> dict[str, str]:
 
 
 def _build_arg_pairs(args) -> dict[str, str]:
+    if isinstance(args, str):
+        args = shlex.split(args.split("\n", 1)[-1])
     it = iter(args)
     pairs = {}
     for token in it:
@@ -207,7 +210,7 @@ class TestConfiguredBuildRunAcceptanceRed(unittest.TestCase):
             self.assertEqual(0, rc, out)
             data = _json_data(out)
             self.assertEqual("success", data["status"])
-            pairs = _build_arg_pairs(data["data"]["build_args"])
+            pairs = _build_arg_pairs(data["data"]["display_string"])
             self.assertEqual(_PROXY_URL, pairs["PI_CORPORATE_PROXY_URL"])
             self.assertEqual(_NO_PROXY, pairs["PI_CORPORATE_NO_PROXY"])
             self.assertEqual("true", pairs["CORPORATE_TRUST_ENABLED"])
@@ -258,7 +261,7 @@ class TestDisabledCompatibilityAcceptanceRed(unittest.TestCase):
                     self.assertEqual(0, rc, out)
                     data = _json_data(out)
                     _assert_no_corporate_build_args(
-                        self, data["data"]["build_args"],
+                        self, data["data"]["display_string"],
                     )
 
     def test_disabled_run_dry_run_emits_no_mount_or_proxy(self) -> None:
@@ -306,7 +309,7 @@ class TestCustomInventoryCompanionAcceptanceRed(unittest.TestCase):
                      "build", "--dry-run"],
                 )
             self.assertEqual(0, rc, out)
-            pairs = _build_arg_pairs(_json_data(out)["data"]["build_args"])
+            pairs = _build_arg_pairs(_json_data(out)["data"]["display_string"])
             self.assertEqual(_PROXY_URL, pairs["PI_CORPORATE_PROXY_URL"])
 
     def test_custom_inventory_does_not_fall_back_to_repo_root_companion(self) -> None:
@@ -326,7 +329,7 @@ class TestCustomInventoryCompanionAcceptanceRed(unittest.TestCase):
                      "build", "--dry-run"],
                 )
             self.assertEqual(0, rc, out)
-            pairs = _build_arg_pairs(_json_data(out)["data"]["build_args"])
+            pairs = _build_arg_pairs(_json_data(out)["data"]["display_string"])
             self.assertNotIn("PI_CORPORATE_PROXY_URL", pairs)
 
 
@@ -482,7 +485,7 @@ class TestHostAccessIndependenceAcceptanceRed(unittest.TestCase):
                 self.m, ["--output", "json", "build", "--dry-run"],
             )
             self.assertEqual(0, rc, out)
-            pairs = _build_arg_pairs(_json_data(out)["data"]["build_args"])
+            pairs = _build_arg_pairs(_json_data(out)["data"]["display_string"])
             self.assertEqual(_PROXY_URL, pairs["PI_CORPORATE_PROXY_URL"])
 
             rc, out, _ = _run(

@@ -11,6 +11,8 @@ import unittest
 from docker.versioning.rendering import (
     BuildRenderInputs,
     CacheControls,
+    Materialized,
+    NoDerivedEnvironment,
     render_build_vector,
 )
 from docker.versioning.model import (
@@ -122,6 +124,7 @@ def _render(*, build_context: str = ".",
         dockerfile=dockerfile,
         dev_uid=dev_uid,
         dev_gid=dev_gid,
+        named_context=Materialized("/tmp/constructor-artifacts", NoDerivedEnvironment()),
     ))
 
 
@@ -299,7 +302,7 @@ class TestBuildArgMapping(unittest.TestCase):
         )
         proj = _projection(rustup=rustup)
         pairs = _arg_pairs(_render(projection=proj))
-        self.assertEqual(pairs["RUSTUP_URL"], "https://rustup.example.com/rustup-arm64")
+        self.assertNotIn("RUSTUP_URL", pairs)
         self.assertEqual(pairs["RUSTUP_SHA256"],
                          "arm64rustup0000000000000000000000000000000000000000000000000000")
 
@@ -311,7 +314,7 @@ class TestBuildArgMapping(unittest.TestCase):
         proj = _projection(uv_version="0.7.0", uv_artifact=uv)
         pairs = _arg_pairs(_render(projection=proj))
         self.assertEqual(pairs["UV_VERSION"], "0.7.0")
-        self.assertEqual(pairs["UV_URL"], "https://uv.example.com/uv-0.7.0.tar.gz")
+        self.assertNotIn("UV_URL", pairs)
         self.assertEqual(pairs["UV_SHA256"],
                          "uv070000000000000000000000000000000000000000000000000000000000")
 
@@ -333,7 +336,7 @@ class TestBuildArgMapping(unittest.TestCase):
         proj = _projection(rtk_version="0.2.0", rtk_artifact=rtk)
         pairs = _arg_pairs(_render(projection=proj))
         self.assertEqual(pairs["RTK_VERSION"], "0.2.0")
-        self.assertEqual(pairs["RTK_URL"], "https://rtk.example.com/rtk-0.2.0.tar.gz")
+        self.assertNotIn("RTK_URL", pairs)
         self.assertEqual(pairs["RTK_SHA256"],
                          "rtk020000000000000000000000000000000000000000000000000000000000")
 
@@ -345,7 +348,7 @@ class TestBuildArgMapping(unittest.TestCase):
         proj = _projection(fd_version="0.2.0", fd_artifact=fd)
         pairs = _arg_pairs(_render(projection=proj))
         self.assertEqual(pairs["FD_VERSION"], "0.2.0")
-        self.assertEqual(pairs["FD_URL"], "https://fd.example.com/fd-0.2.0.tar.gz")
+        self.assertNotIn("FD_URL", pairs)
         self.assertEqual(pairs["FD_SHA256"],
                          "fd0200000000000000000000000000000000000000000000000000000000000")
 
@@ -371,12 +374,12 @@ class TestBuildArgMapping(unittest.TestCase):
         expected = {
             "NODE_BASE_IMAGE",
             "RUST_VERSION", "RUST_PROFILE", "RUST_COMPONENTS",
-            "RUSTUP_URL", "RUSTUP_SHA256",
-            "UV_VERSION", "UV_URL", "UV_SHA256",
+            "RUSTUP_SHA256",
+            "UV_VERSION", "UV_SHA256",
             "PYTHON_VERSION",
             "TY_VERSION",
-            "RTK_VERSION", "RTK_URL", "RTK_SHA256",
-            "FD_VERSION", "FD_URL", "FD_SHA256",
+            "RTK_VERSION", "RTK_SHA256",
+            "FD_VERSION", "FD_SHA256",
             "PI_VERSION",
             "OPENSPEC_VERSION",
             "OH_MY_ZSH_VERSION",
@@ -471,8 +474,7 @@ class TestPlatformRendering(unittest.TestCase):
         a_pairs = _arg_pairs(_render(projection=amd64, platform="linux/amd64"))
         b_pairs = _arg_pairs(_render(projection=arm64, platform="linux/arm64"))
 
-        for key in ("RUSTUP_URL", "RUSTUP_SHA256", "UV_URL", "UV_SHA256",
-                    "RTK_URL", "RTK_SHA256", "FD_URL", "FD_SHA256"):
+        for key in ("RUSTUP_SHA256", "UV_SHA256", "RTK_SHA256", "FD_SHA256"): 
             self.assertNotEqual(a_pairs[key], b_pairs[key],
                                 f"{key} must differ between platforms")
 
@@ -646,6 +648,7 @@ class TestDeterministicOutput(unittest.TestCase):
             target_stage="runtime",
             image_tag="pi-cli-pi:latest",
             platform="linux/amd64",
+            named_context=Materialized("/tmp/constructor-artifacts", NoDerivedEnvironment()),
         )
         a = render_build_vector(bi)
         b = render_build_vector(bi)
@@ -663,6 +666,7 @@ class TestDeterministicOutput(unittest.TestCase):
             target_stage="runtime",
             image_tag="pi-cli-pi:latest",
             platform="linux/amd64",
+            named_context=Materialized("/tmp/constructor-artifacts", NoDerivedEnvironment()),
         ))
         b = render_build_vector(BuildRenderInputs(
             platform="linux/amd64",
@@ -670,6 +674,7 @@ class TestDeterministicOutput(unittest.TestCase):
             target_stage="runtime",
             projection=proj,
             build_context=".",
+            named_context=Materialized("/tmp/constructor-artifacts", NoDerivedEnvironment()),
         ))
         self.assertEqual(a, b)
 

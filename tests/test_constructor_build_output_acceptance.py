@@ -49,7 +49,7 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         cls.root = Path(cls._tmp.name) / "repo"
         source = Path(__file__).resolve().parents[1]
         shutil.copytree(source, cls.root, ignore=shutil.ignore_patterns(
-            ".git", "__pycache__", ".docker-generated", ".docker-local",
+            ".git", "__pycache__", ".docker-generated", ".docker-cache", ".docker-local",
             "docker-constructor.local.toml",
         ))
         if (cls.root / "docker-constructor.local.toml").exists():
@@ -65,10 +65,27 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         # does not bypass integrity checks.
         cls.acceptance_cli = cls.root / "acceptance_cli.py"
         cls.acceptance_cli.write_text(
+            "import itertools\n"
+            "import tempfile\n"
+            "from pathlib import Path\n"
             "from docker.versioning import build_orchestration\n"
-            "build_orchestration.materialize_build_artifacts = lambda *args, **kwargs: ()\n"
+            "from docker.versioning.build_snapshot import MaterializedSnapshot\n"
             "from docker.constructor_cli import main\n"
-            "raise SystemExit(main())\n",
+            "with tempfile.TemporaryDirectory() as fixture_root:\n"
+            "    fixture_root = Path(fixture_root)\n"
+            "    blobs = fixture_root / 'blobs'; blobs.mkdir()\n"
+            "    snapshots = fixture_root / 'snapshots'; snapshots.mkdir()\n"
+            "    sequence = itertools.count()\n"
+            "    def materialize(*args, **kwargs):\n"
+            "        root = blobs / str(next(sequence)); root.mkdir()\n"
+            "        return tuple(root / n for n in ('rustup.blob', 'uv.blob', 'rtk.blob', 'fd.blob'))\n"
+            "    def snapshot(*args, **kwargs):\n"
+            "        path = snapshots / str(next(sequence)); path.mkdir()\n"
+            "        return MaterializedSnapshot(path, path / 'manifest.json')\n"
+            "    build_orchestration.materialize_build_artifacts = materialize\n"
+            "    build_orchestration.create_artifact_snapshot = snapshot\n"
+            "    build_orchestration._default_named_context_supported = lambda: True\n"
+            "    raise SystemExit(main())\n",
             encoding="utf-8",
         )
         cls.release_dir = cls.root / "release-signals"

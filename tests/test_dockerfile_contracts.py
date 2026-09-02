@@ -198,9 +198,9 @@ class TestDockerfileBuildContract(unittest.TestCase):
         # corporate-network keys are included even when a particular build omits them.
         rendered = {
             "NODE_BASE_IMAGE", "RUST_VERSION", "RUST_PROFILE", "RUST_COMPONENTS",
-            "RUSTUP_URL", "RUSTUP_SHA256", "UV_VERSION", "UV_URL", "UV_SHA256",
-            "PYTHON_VERSION", "TY_VERSION", "RTK_VERSION", "RTK_URL", "RTK_SHA256",
-            "FD_VERSION", "FD_URL", "FD_SHA256", "PI_VERSION", "OPENSPEC_VERSION",
+            "RUSTUP_SHA256", "UV_VERSION", "UV_SHA256",
+            "PYTHON_VERSION", "TY_VERSION", "RTK_VERSION", "RTK_SHA256",
+            "FD_VERSION", "FD_SHA256", "PI_VERSION", "OPENSPEC_VERSION",
             "OH_MY_ZSH_VERSION", "PI_CORPORATE_PROXY_URL", "PI_CORPORATE_NO_PROXY",
             "CORPORATE_TRUST_ENABLED", "PI_CORPORATE_CA_PATH", "DEV_UID", "DEV_GID",
         }

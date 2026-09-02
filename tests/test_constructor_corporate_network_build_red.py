@@ -27,6 +27,7 @@ boundary exists.
 """
 from __future__ import annotations
 
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,7 +80,7 @@ _NETWORK_MARKERS = (
 )
 
 _EXPECTED_NETWORKED_STAGES = {
-    "base", "rtk-prebuilt", "fd-prebuilt", "toolchain",
+    "base", "toolchain",
     "pi-tools", "openspec-tools", "runtime",
 }
 
@@ -100,8 +101,10 @@ def _recording_build_executor(effects: list[str]):
     return _Exec()
 
 
-def _build_arg_pairs(args: tuple[str, ...]) -> dict[str, str]:
-    """Extract ``--build-arg KEY=VALUE`` pairs into a plain dict."""
+def _build_arg_pairs(args: tuple[str, ...] | str) -> dict[str, str]:
+    """Extract dry-run display or executable ``--build-arg`` pairs."""
+    if isinstance(args, str):
+        args = tuple(shlex.split(args.split("\n", 1)[-1]))
     it = iter(args)
     pairs: dict[str, str] = {}
     for token in it:
@@ -148,7 +151,7 @@ class TestDisabledBuildVectorRed(_BuildOrchestrationRed):
     def test_disabled_build_vector_emits_no_proxy_args(self) -> None:
         result = self.build_with_local(None)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
-        pairs = _build_arg_pairs(result.build_args or ())
+        pairs = _build_arg_pairs(result.display_string or "")
         for name in _CONSTRUCTOR_PROXY_ARGS:
             self.assertNotIn(name, pairs)
         for name in _PROXY_ARG_NAMES:
@@ -159,7 +162,7 @@ class TestDisabledBuildVectorRed(_BuildOrchestrationRed):
         # [corporate-trust] must not require the fixed bundle to exist.
         result = self.build_with_local("[corporate-trust]\nenabled = false\n")
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
-        pairs = _build_arg_pairs(result.build_args or ())
+        pairs = _build_arg_pairs(result.display_string or "")
         for name in _CONSTRUCTOR_PROXY_ARGS:
             self.assertNotIn(name, pairs)
         for name in _PROXY_ARG_NAMES:
@@ -172,7 +175,7 @@ class TestDisabledBuildVectorRed(_BuildOrchestrationRed):
             with self.subTest(companion=companion):
                 result = self.build_with_local(companion)
                 self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
-                pairs = _build_arg_pairs(result.build_args or ())
+                pairs = _build_arg_pairs(result.display_string or "")
                 self.assertNotIn("CORPORATE_TRUST_ENABLED", pairs)
                 self.assertNotIn("PI_CORPORATE_CA_PATH", pairs)
                 for name in _CLIENT_CA_ARG_NAMES:
@@ -185,7 +188,7 @@ class TestDisabledBuildVectorRed(_BuildOrchestrationRed):
             with self.subTest(companion=companion):
                 result = self.build_with_local(companion, bundle=_VALID_BUNDLE)
                 self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
-                pairs = _build_arg_pairs(result.build_args or ())
+                pairs = _build_arg_pairs(result.display_string or "")
                 self.assertNotIn("CORPORATE_TRUST_ENABLED", pairs)
                 self.assertNotIn("PI_CORPORATE_CA_PATH", pairs)
                 for name in _CLIENT_CA_ARG_NAMES:
@@ -201,7 +204,7 @@ class TestEnabledTrustBuildVectorRed(_BuildOrchestrationRed):
             bundle=_VALID_BUNDLE,
         )
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
-        pairs = _build_arg_pairs(result.build_args or ())
+        pairs = _build_arg_pairs(result.display_string or "")
         self.assertEqual("true", pairs.get("CORPORATE_TRUST_ENABLED"))
         self.assertEqual(
             "/etc/ssl/certs/ca-certificates.crt",
@@ -228,7 +231,7 @@ class TestConfiguredProxyBuildVectorRed(_BuildOrchestrationRed):
                     f'[network.proxy]\nurl = "{url}"\n'
                 )
                 self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
-                pairs = _build_arg_pairs(result.build_args or ())
+                pairs = _build_arg_pairs(result.display_string or "")
                 self.assertEqual(url, pairs.get("PI_CORPORATE_PROXY_URL"))
                 self.assertNotIn("PI_CORPORATE_NO_PROXY", pairs)
                 # Same-named proxy build args would be overridden by inherited ENV.
@@ -242,14 +245,14 @@ class TestConfiguredProxyBuildVectorRed(_BuildOrchestrationRed):
             'no_proxy = "localhost,.corp.example"\n'
         )
         self.assertEqual(ExitKind.SUCCESS, configured.exit_kind, configured.message)
-        pairs = _build_arg_pairs(configured.build_args or ())
+        pairs = _build_arg_pairs(configured.display_string or "")
         self.assertEqual("localhost,.corp.example", pairs.get("PI_CORPORATE_NO_PROXY"))
 
         unconfigured = self.build_with_local(
             '[network.proxy]\nurl = "http://proxy.corp.example:3128"\n'
         )
         self.assertEqual(ExitKind.SUCCESS, unconfigured.exit_kind, unconfigured.message)
-        pairs2 = _build_arg_pairs(unconfigured.build_args or ())
+        pairs2 = _build_arg_pairs(unconfigured.display_string or "")
         self.assertNotIn("PI_CORPORATE_NO_PROXY", pairs2)
 
 

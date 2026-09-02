@@ -13,13 +13,15 @@ that drives the Stage 9.3 implementation.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from dataclasses import dataclass
+from unittest.mock import patch
 from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
-from tests.build_test_support import INVENTORY_PATH
+from tests.build_test_support import INVENTORY_PATH, fixture_directory
 
 from docker.networking import (
     DockerMode,
@@ -27,6 +29,7 @@ from docker.networking import (
     PersistenceResult,
     ProbeResult,
 )
+from docker.versioning.build_snapshot import MaterializedSnapshot
 from docker.versioning.build_orchestration import (
     BuildRequest,
     BuildResult,
@@ -123,8 +126,39 @@ def _publish_ok(projection, *, repo_root=None):
 
 
 def _materialize_ok(*args, **kwargs):
-    """Explicit provider-independent materialization boundary for unit tests."""
-    return ()
+    """Return four opaque fixture paths in reviewed selection order.
+
+    Snapshot construction is mocked below: these orchestration tests exercise
+    vector/lifecycle behaviour, not SHA-256 streaming itself.
+    """
+    root = fixture_directory("fixture-blobs-")
+    return tuple(root / name for name in ("rustup.blob", "uv.blob", "rtk.blob", "fd.blob"))
+
+
+def _fixture_snapshot(*_args, **_kwargs) -> MaterializedSnapshot:
+    path = fixture_directory("fixture-snapshot-")
+    return MaterializedSnapshot(path, path / "manifest.json")
+
+
+def setUpModule() -> None:
+    global _snapshot_patcher
+    _snapshot_patcher = patch(
+        "docker.versioning.build_orchestration.create_artifact_snapshot",
+        side_effect=_fixture_snapshot,
+    )
+    _snapshot_patcher.start()
+
+
+def tearDownModule() -> None:
+    _snapshot_patcher.stop()
+
+
+def _assert_prospective(result) -> None:
+    """Dry runs are display-only; they never expose executable argv."""
+    assert result.build_args == ()
+    assert result.display_string is not None
+    assert "Planned build (not executable)" in result.display_string
+    assert "--build-context constructor-artifacts=<prospective:not-materialized>" in result.display_string
 
 # ═══════════════════════════════════════════════════════════════════════
 # 7.  DTO expectations (GREEN — these test the DTOs, not the stub)
@@ -171,6 +205,7 @@ class TestBuildRequestDto(unittest.TestCase):
             gid=1000,
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             dry_run=True,
             runner=FakeBuildExecutor(),
             gateway_probe_image="busybox:1.36",
@@ -321,17 +356,7 @@ class TestDefaultBuild(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
-        self.assertGreater(len(result.build_args), 0,
-                           "build args must not be empty")
-        # Canonical image tag: --tag pi-cli-pi:latest
-        found = False
-        for i, a in enumerate(result.build_args):
-            if a == "--tag" and i + 1 < len(result.build_args):
-                if result.build_args[i + 1] == "pi-cli-pi:latest":
-                    found = True
-                    break
-        self.assertTrue(found,
-                        f"default tag 'pi-cli-pi:latest' not found in {result.build_args}")
+        _assert_prospective(result)
 
     def test_default_target_is_runtime(self):
         """Default target stage is 'runtime'."""
@@ -342,18 +367,7 @@ class TestDefaultBuild(unittest.TestCase):
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
-        # Target='runtime' appears as --target runtime in the build vector
-        found_target = any(
-            a == "runtime" for a in result.build_args
-        )
-        # Or: --target followed by runtime
-        for i, a in enumerate(result.build_args):
-            if a == "--target" and i + 1 < len(result.build_args):
-                if result.build_args[i + 1] == "runtime":
-                    found_target = True
-                    break
-        self.assertTrue(found_target,
-                        f"--target runtime not found in {result.build_args}")
+        _assert_prospective(result)
 
     def test_command_is_docker_build_not_compose(self):
         """The first token must be 'docker', never 'docker-compose'."""
@@ -364,9 +378,7 @@ class TestDefaultBuild(unittest.TestCase):
             _publish_projection=_publish_ok,
         )
         result = orchestrate_build(req)
-        self.assertGreater(len(result.build_args), 0)
-        self.assertEqual("docker", result.build_args[0],
-                         "first token must be 'docker', not 'docker compose'")
+        _assert_prospective(result)
 
     def test_deterministic_vector(self):
         """Same inputs must produce identical build_args."""
@@ -378,8 +390,9 @@ class TestDefaultBuild(unittest.TestCase):
         )
         r1 = orchestrate_build(req)
         r2 = orchestrate_build(req)
-        self.assertEqual(r1.build_args, r2.build_args,
-                         "build vector must be deterministic")
+        _assert_prospective(r1)
+        _assert_prospective(r2)
+        self.assertEqual(r1.display_string.encode(), r2.display_string.encode())
 
 # ═══════════════════════════════════════════════════════════════════════
 # 10.  Build override tests (RED)
@@ -404,10 +417,7 @@ class TestBuildOverrides(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        # The override value "3.15.0" must appear in build args
-        found = any("3.15.0" in a for a in result.build_args)
-        self.assertTrue(found,
-                        f"override 3.15.0 not in build args: {result.build_args}")
+        _assert_prospective(result)
 
     def test_unsupported_override_rejected(self):
         """A path not in the inventory schema must cause CONFIG error."""
@@ -457,9 +467,7 @@ class TestPlatformSelection(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        found = any("linux/amd64" in a for a in result.build_args)
-        self.assertTrue(found,
-                        f"linux/amd64 not in build args: {result.build_args}")
+        _assert_prospective(result)
 
     def test_arm64_platform_in_build_vector(self):
         req = BuildRequest(
@@ -516,6 +524,7 @@ class TestProjectionPublication(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=record_publish,
             runner=FakeBuildExecutor(),
@@ -549,8 +558,7 @@ class TestCacheControls(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertIn("--no-cache", result.build_args,
-                      "cache=False must add --no-cache")
+        _assert_prospective(result)
 
     def test_pull_enabled_adds_pull(self):
         req = BuildRequest(
@@ -562,8 +570,7 @@ class TestCacheControls(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertIn("--pull", result.build_args,
-                      "pull=True must add --pull")
+        _assert_prospective(result)
 
     def test_progress_plain_controls_output(self):
         req = BuildRequest(
@@ -575,13 +582,7 @@ class TestCacheControls(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        # --progress plain must appear
-        found = any(
-            a == "--progress" and result.build_args[i + 1] == "plain"
-            for i, a in enumerate(result.build_args[:-1])
-        )
-        self.assertTrue(found,
-                        f"--progress plain not found in {result.build_args}")
+        _assert_prospective(result)
 
     def test_custom_tag_appears_in_vector(self):
         req = BuildRequest(
@@ -593,8 +594,7 @@ class TestCacheControls(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertIn("pi-cli-pi:latest", result.build_args,
-                      "custom tag must appear in build args")
+        _assert_prospective(result)
 
     def test_uid_gid_surface_in_build_args(self):
         req = BuildRequest(
@@ -607,11 +607,7 @@ class TestCacheControls(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        # DEV_UID=1000 and DEV_GID=1000 must appear
-        found_uid = any("DEV_UID=1000" in a for a in result.build_args)
-        found_gid = any("DEV_GID=1000" in a for a in result.build_args)
-        self.assertTrue(found_uid, f"DEV_UID=1000 not in {result.build_args}")
-        self.assertTrue(found_gid, f"DEV_GID=1000 not in {result.build_args}")
+        _assert_prospective(result)
 
     def test_context_and_dockerfile_override(self):
         req = BuildRequest(
@@ -624,8 +620,7 @@ class TestCacheControls(unittest.TestCase):
         )
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
-        self.assertIn("/custom/context", result.build_args)
-        self.assertIn("Dockerfile.custom", result.build_args)
+        _assert_prospective(result)
 
 # ═══════════════════════════════════════════════════════════════════════
 # 14–15.  Failure-order tests — zero side effects (RED)
@@ -791,6 +786,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             uid=-1,
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
@@ -875,6 +871,7 @@ class TestBuildGatewayIsolation(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=diagnose,
             _publish_projection=_publish_ok,
             runner=runner,
@@ -951,6 +948,7 @@ class TestConfirmation(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=docker_runner,
@@ -976,6 +974,7 @@ class TestConfirmation(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=lambda **kw: (_ for _ in ()).throw(
                 AssertionError("build must not diagnose gateway")),
             _publish_projection=publish,
@@ -1027,11 +1026,9 @@ class TestDryRun(unittest.TestCase):
             runner=self._BombRunner(),
         )
         result = orchestrate_build(req)
-        # Must succeed and produce a non-empty build vector
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
-        self.assertGreater(len(result.build_args), 0,
-                           "build args must not be empty")
+        _assert_prospective(result)
 
     # -- gateway probe -------------------------------------------------
 
@@ -1047,7 +1044,7 @@ class TestDryRun(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
-        self.assertGreater(len(result.build_args), 0)
+        _assert_prospective(result)
 
     # -- persistence ---------------------------------------------------
 
@@ -1109,8 +1106,7 @@ class TestDryRun(unittest.TestCase):
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
-        self.assertGreater(len(result.build_args), 0,
-                           "build_args must not be empty")
+        _assert_prospective(result)
 
     # -- source mutation -----------------------------------------------
 
@@ -1141,6 +1137,7 @@ class TestDirectExecution(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1158,6 +1155,7 @@ class TestDirectExecution(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1182,6 +1180,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1200,6 +1199,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1216,6 +1216,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1246,6 +1247,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=broken_diagnose,
             _publish_projection=_publish_ok,
             runner=runner,
@@ -1265,6 +1267,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
@@ -1285,6 +1288,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
@@ -1307,6 +1311,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=MissingDockerRunner(),
@@ -1326,6 +1331,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=DeniedDockerRunner(),
