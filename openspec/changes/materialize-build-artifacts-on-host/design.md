@@ -5,10 +5,11 @@ Reviewed SHA-256 artifacts are currently passed as URL/digest build arguments an
 ## Goals / Non-Goals
 
 **Goals:**
-- Establish a private checkout-local host trust boundary for selected `linux-amd64` build artifacts.
+- Establish a private project-scoped host trust boundary outside the checkout for selected `linux-amd64` build artifacts and all implicit constructor-generated project state.
 - Pass a minimal immutable input snapshot through a required BuildKit named context.
 - Commit one current build live set only after successful image construction.
-- Reuse verified failed-build downloads for 30 days and serialize builds per checkout.
+- Reuse verified failed-build downloads for 30 days and serialize builds per namespace identity defined by the canonical path of the selected constructor project.
+- Keep normal build, run, verification, and default evidence operations free of checkout mutations, including `.docker-cache` and `.docker-generated` creation.
 - Install Pi directly from its official release lockfile with deterministic input identity and host-hashed output evidence while preserving `/opt/pi` interfaces.
 
 **Non-Goals:**
@@ -18,23 +19,27 @@ Reviewed SHA-256 artifacts are currently passed as URL/digest build arguments an
 
 ## Decisions
 
-### Generalize verified blob identity and keep build storage checkout-local
+### Generalize verified blob identity and externalize project state
 
-Represent cache identity as algorithm plus digest bytes, with hex and SRI adapters. Reuse the runtime materializer's streaming, locking, no-follow inspection, atomic publication, and revalidation concepts without forcing build SHA-256 values through npm-specific DTOs. Resolve persistent build state under a fixed ignored checkout path and transaction snapshots under `.docker-generated`; do not honor shared `[cache].dir` for build blobs.
+Represent cache identity as algorithm plus digest bytes, with hex and SRI adapters. Reuse the runtime materializer's streaming, locking, no-follow inspection, atomic publication, and revalidation concepts without forcing build SHA-256 values through npm-specific DTOs.
 
-Alternative considered: shared XDG cache. Rejected because aggressive single-live-set cleanup would conflict across checkouts.
+Resolve the existing configured or default constructor cache root through the shared cache-storage policy, then derive `<cache-root>/projects/<safe-constructor-project-basename>-<canonical-constructor-project-path-hash-prefix>/`. Canonicalize the selected constructor project directory to one absolute filesystem identity and hash its UTF-8 path representation with SHA-256. This canonical constructor-project path is the sole namespace identity for the operation. Primary and extra workspaces are mounted workspaces rather than constructor projects and do not receive separate runtime projection namespaces merely by participating in a launch. A directory receives such a namespace only when independently selected as the constructor project for an operation. Render its basename into a conservative filesystem-safe diagnostic label; the label is not identity. Store the canonical path, complete digest identity, and metadata schema version in atomically published owner-private `project.json`. Before reading or mutating any child, no-follow validate the namespace and metadata and require the complete identity to match. A short-prefix collision or malformed/missing/mismatched metadata on an existing namespace fails closed without adoption, replacement, or deletion.
+
+Use distinct children of the selected constructor project's namespace for generated build projections, runtime projections, default evidence, persistent build artifacts, and ephemeral transactions. Build artifacts retain project-scoped lifecycle semantics without living in the project: lock, blobs, tmp files, markers, committed manifest, and snapshots all remain inside that project's namespace, so aggressive single-live-set cleanup cannot conflict across projects. Explicit user-selected evidence destinations remain user-directed outputs.
+
+Alternative considered: mirroring paths relative to the user's home. Rejected because it creates separate inside/outside-home rules, deep unsafe intermediate paths, and weaker collision handling. A hash-only directory was rejected as unnecessarily opaque during diagnosis; safe basename plus hash prefix and complete identity metadata provides discovery without making the label authoritative. A shared blob pool was rejected because aggressive single-live-set cleanup would conflict across projects.
 
 ### Keep host paths private and cross the UID boundary through BuildKit import
 
-Keep locks, manifests, markers, temporary downloads, verified blobs, and transaction snapshots under host-owner-controlled checkout paths. Populate blobs and snapshots in private mutable staging state, then publish verified blob files and finalized prebuilt-artifact snapshot files as `0444`; finalize derived-environment snapshot files with every write bit removed while preserving the executable bits validated by their canonical evidence; and remove every write bit from finalized snapshot directories. Immutability therefore applies to the host owner as well as group/other ordinary write attempts; later constructor mutation uses replacement/unlink under locked control state rather than in-place payload writes. The invoking host user's Docker client reads the snapshot and streams/imports it as a named BuildKit context; the in-container `dev` UID never traverses the host checkout. Dockerfile `COPY --from=constructor-artifacts` creates an in-build copy with explicit read permissions before a stage runs as `dev`. Thus a private `0700` checkout or ancestor owned by the invoking host user remains compatible, while unrelated users and container UID mappings receive no host-cache access.
+Keep locks, manifests, markers, temporary downloads, verified blobs, and transaction snapshots under the invoking user's owner-private namespace identified by the canonical path of the selected constructor project. Populate blobs and snapshots in private mutable staging state, then publish verified blob files and finalized prebuilt-artifact snapshot files as `0444`; finalize derived-environment snapshot files with every write bit removed while preserving the executable bits validated by their canonical evidence; and remove every write bit from finalized snapshot directories. Immutability therefore applies to the host owner as well as group/other ordinary write attempts; later constructor mutation uses replacement/unlink under locked control state rather than in-place payload writes. The invoking host user's Docker client reads the external snapshot and streams/imports it as a named BuildKit context; the in-container `dev` UID never traverses the constructor project, any primary or extra workspace, or the constructor project's cache namespace. Dockerfile `COPY --from=constructor-artifacts` creates an in-build copy with explicit read permissions before a stage runs as `dev`. Thus a constructor project, primary workspace, or extra workspace owned by another user remains compatible when the invoking user has the required read and traversal access, while unrelated users and container UID mappings receive no host-cache access.
 
-Validate that the invoking host user can traverse the resolved checkout and snapshot path, but never chmod or chown the checkout, its ancestors, the home directory, shared cache roots, or unrelated paths. If host-owner traversal is unavailable, fail with the path and remediation left to the operator.
+Validate that the invoking user can read and traverse required inputs from the selected constructor project and the primary workspace and all extra workspaces and can securely own and traverse the constructor project's external namespace and snapshot path. Never chmod or chown the constructor project, the primary workspace or any extra workspace, their ancestors, the home directory, cache-root parents, or unrelated paths. Ownership of the constructor project, primary workspace, or any extra workspace is not a precondition; unavailable read/traversal access fails with the path and remediation left to the operator.
 
-Alternative considered: making payload directories `0555` or ancestors traversable by other UIDs. Rejected because it cannot overcome an earlier `0700` ancestor safely and would unnecessarily broaden host access. Directly bind-mounting the cache was rejected because named-context import already provides the required isolation boundary.
+Alternative considered: repairing project or ancestor ownership and permissions. Rejected because constructor state must not control reviewed source permissions and because repair could broaden access unexpectedly. Directly bind-mounting the cache was rejected because named-context import already provides the required isolation boundary.
 
 ### Materialize before Docker and expose a narrow snapshot
 
-Under the checkout-wide build lock, resolve the effective projection, materialize cache misses, then create a unique owner-private staging snapshot with stable logical names (`rustup-init`, `uv.tar.gz`, `rtk.deb`, `fd.deb`) and a canonical manifest. Prefer hard links to immutable blobs with copy fallback and revalidate the completed payload. Finalize prebuilt-artifact files to `0444`, finalize derived-environment files without write bits while preserving their evidence-validated executable bits, and remove all directory write bits before passing it as `--build-context constructor-artifacts=<snapshot>` so the host Docker client imports it before any build-stage user consumes files.
+Under the canonical-project-wide build lock inside the external namespace, resolve the effective projection, materialize cache misses, then create a unique owner-private external staging snapshot with stable logical names (`rustup-init`, `uv.tar.gz`, `rtk.deb`, `fd.deb`) and a canonical manifest. Prefer hard links to immutable blobs with copy fallback and revalidate the completed payload. Finalize prebuilt-artifact files to `0444`, finalize derived-environment files without write bits while preserving their evidence-validated executable bits, and remove all directory write bits before passing it as `--build-context constructor-artifacts=<snapshot>` so the host Docker client imports it before any build-stage user consumes files.
 
 Dockerfile stages use `COPY --from=constructor-artifacts` and retain `sha256sum` verification. URL build args disappear for these artifacts, while digest args remain the common authority. Named-context capability is checked before downloads.
 
@@ -48,7 +53,7 @@ Alternative considered: exposing the entire cache. Rejected because it broadens 
 
 ### Use a single transaction lock and atomic commit
 
-A nonblocking checkout-wide lock rejects a competing build with an actionable message. A successful Docker exit atomically replaces `committed-build.json`; only afterward does GC remove every digest unique to the old checkout-local build set. Failure preserves the old set and marks newly published verified build blobs uncommitted. Shared XDG runtime artifacts have no committed manifest in this design and are never inspected or mutated by build GC. Abandoned snapshot directories without the active lock are removed on the next build.
+A nonblocking lock scoped to the complete namespace identity defined by the canonical path of the selected constructor project rejects a competing build with an actionable message. A successful Docker exit atomically replaces that namespace's `committed-build.json`; only afterward does GC remove every digest unique to the old project build set. Failure preserves the old set and marks newly published verified build blobs uncommitted. Other project namespaces and global runtime artifacts have separate ownership and are never inspected or mutated by this project's build GC. Abandoned snapshot directories inside the canonical constructor-project namespace without the active lock are removed on the next build.
 
 Alternative considered: multiple concurrent generations. Rejected by the explicit single-build and single-live-set product model.
 
@@ -75,20 +80,22 @@ The streaming downloader receives the resolved credential-free proxy and validat
 ## Risks / Trade-offs
 
 - [Hard-link snapshots can encounter filesystem limitations] → Fall back to verified copies and recheck the snapshot digest.
-- [A container UID cannot traverse a private checkout ancestor] → Do not require it to; import the named context through the invoking host owner, expose explicit in-build copies, test a checkout beneath a `0700` parent, and never repair ancestor permissions.
+- [A container UID cannot traverse private external state] → Do not require it to; import the named context through the invoking host owner, expose explicit in-build copies, and never repair project or ancestor permissions.
+- [A readable project is owned by another user] → Require read/traversal rather than ownership, keep every mutable constructor path beneath the invoking user's external namespace, and test recursive project ownership changes independently of cache ownership.
+- [A diagnostic hash prefix collides] → Verify complete identity metadata before use and fail closed without adopting or overwriting the conflicting namespace.
 - [BuildKit named context is unavailable] → Probe capability before downloads and fail with minimum-prerequisite guidance.
 - [Dry-run has no real named-context path] → Preserve a typed `Prospective` state with `path: null`, render only a clearly non-executable display token, require `Materialized(path)` at the argv boundary, and test identical POSIX/Windows output with zero side effects.
 - [Pi `npm ci` layout differs from global npm layout] → Add focused contract tests for `/opt/pi/bin/pi`, package resolution, SDK imports, extension behavior, and runtime verification before replacing the old stage.
 - [Host corporate TLS behavior differs from in-build clients] → Share resolved policy through an injectable downloader and add corporate-network acceptance coverage.
-- [Crash occurs between commit and GC] → Commit first; later maintenance safely recomputes deletions from the sole checkout-local committed build manifest.
+- [Crash occurs between commit and GC] → Commit first; later maintenance safely recomputes deletions from the sole project-scoped committed build manifest.
 - [Pi npm and GitHub releases diverge] → Require reviewed repository/tag metadata and all three exact-version assets before Docker execution; never infer a GitHub release from npm alone.
 - [Thirty-day abandoned downloads consume space] → Run bounded GC at build startup/commit and keep only digest-deduplicated verified blobs.
 
 ## Migration Plan
 
-1. Add ignored checkout-local cache/generated paths, generalized digest identity, locking, materialization, markers, and manifests without changing Dockerfile consumption.
-2. Add snapshot and named-context build rendering plus capability validation.
+1. Add external constructor-project identity/namespace resolution and migrate implicit generated build projection, runtime projection, default evidence, and build-artifact destinations away from the constructor project, primary workspace, and every extra workspace; primary and extra workspaces receive no separate runtime projection namespace during a launch.
+2. Add generalized digest identity, project-scoped locking, materialization, markers, manifests, snapshots, and named-context build rendering plus capability validation.
 3. Convert rustup, uv, rtk, and fd stages individually to named-context inputs with double verification.
 4. After the shared assembler prerequisite is implemented, convert Pi to verified official installation metadata, standalone host assembly, named-context copy, and established `/opt/pi` interface validation.
 5. Enable commit/GC only after all stages consume host materialization.
-6. Rollback restores URL-based stages and build arguments; checkout-local blobs are inert and can be removed without affecting built images.
+6. Do not automatically adopt or delete legacy `.docker-cache` or `.docker-generated` entries: new operations ignore them and diagnostics identify them as operator-removable legacy state. Rollback restores URL-based stages and build arguments; external project blobs remain inert and can be removed without affecting built images.

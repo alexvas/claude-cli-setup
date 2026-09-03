@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Use a central version inventory
-Each selected constructor project SHALL maintain `docker-constructor.toml` directly beneath its project root as the single reviewed dependency source with explicit, closed `build` and `runtime` sections. Every independently selected dependency SHALL be represented in exactly one section by a complete typed source entry. The resolver SHALL apply phase-owned overrides and derive separate effective build and runtime projections beneath the same project's `.docker-generated/` directory. Runtime artifact URLs SHALL remain host-only materialization inputs; only the narrow effective runtime projection and individually selected read-only artifact blobs may enter a running container.
+Each selected constructor project SHALL maintain `docker-constructor.toml` directly beneath its project root as the single reviewed dependency source with explicit, closed `build` and `runtime` sections. Every independently selected dependency SHALL be represented in exactly one section by a complete typed source entry. The resolver SHALL apply phase-owned overrides and derive separate effective build and runtime projections beneath the external namespace identified by the canonical path of that constructor project. Runtime artifact URLs SHALL remain host-only materialization inputs; only the narrow effective runtime projection and individually selected read-only artifact blobs may enter a running container.
 
 The target dependency and configuration graph SHALL remain:
 
@@ -9,7 +9,7 @@ The target dependency and configuration graph SHALL remain:
 graph TD
     ROOT[constructor project root] --> INV[(docker-constructor.toml<br/>build + runtime sections)]
     INV --> CLI[docker-constructor.py]
-    CLI --> BP[effective build projection<br/>project-local, host-only]
+    CLI --> BP[effective build projection<br/>external project state, host-only]
     BP --> BUILD[Docker build arguments]
     BUILD --> IMG[Docker runtime image]
     BP --> VERIFY[host-side verification API]
@@ -35,6 +35,11 @@ graph TD
 - **THEN** it SHALL use exactly `docker-constructor.toml` directly beneath that project root
 - **AND** it SHALL NOT accept `--inventory`, alternate basenames, separate phase source files, parent discovery, or installation-root fallback
 
+#### Scenario: Using an explicit custom inventory
+- **WHEN** a caller attempts to select an inventory with the removed `--inventory` option
+- **THEN** parsing SHALL reject the option
+- **AND** SHALL require selecting the containing constructor project through CWD or `--project-directory`
+
 #### Scenario: Describing uv-managed Python
 - **WHEN** the build section declares the selected CPython runtime
 - **THEN** its source and update metadata SHALL use the dedicated `uv-python` type/provider and identify the `cpython` implementation
@@ -56,7 +61,7 @@ graph TD
 #### Scenario: Building with default selections
 - **WHEN** the canonical build command runs without overrides
 - **THEN** it SHALL pass values derived from the selected project's build section to Docker
-- **AND** it SHALL keep the reviewed source and effective build projection on the host beneath the selected project
+- **AND** it SHALL keep the reviewed source in the selected constructor project and the effective build projection beneath the external namespace identified by the selected constructor project's canonical path
 - **AND** it SHALL NOT require runtime artifact materialization for image correctness
 
 #### Scenario: Building with a supported override
@@ -67,7 +72,7 @@ graph TD
 
 #### Scenario: Generating effective build configuration
 - **WHEN** effective Docker construction inputs are rendered with default paths
-- **THEN** the build projection SHALL be written atomically to `<project-directory>/.docker-generated/docker-constructor.build.effective.toml`
+- **THEN** the build projection SHALL be written atomically beneath the selected constructor project's verified external generated-state namespace
 - **AND** the runtime image SHALL NOT expose that file
 
 #### Scenario: Preparing runtime dependency configuration
@@ -77,14 +82,14 @@ graph TD
 - **AND** an override with no matching reviewed catalog entry SHALL be rejected before materialization without network discovery, URL synthesis, or reuse of another version's integrity
 - **AND** the host SHALL derive a canonical content identity and deterministic cache location only from the selected validated integrity
 - **AND** it SHALL materialize and verify each selected blob before Docker execution
-- **AND** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, canonical mounted-artifact identity, checksum/integrity, and validation metadata beneath the selected project's `.docker-generated/` directory
+- **AND** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, canonical mounted-artifact identity, checksum/integrity, and validation metadata beneath the external namespace identified by the canonical selected constructor-project path
 - **AND** it SHALL mount that projection read-only at `/run/pi-cli/docker-constructor.runtime.toml`
 - **AND** it SHALL mount only the selected verified blobs as individual read-only files beneath `/run/pi-cli/runtime-artifacts`
 - **AND** neither downloadable URLs, host cache paths, the reviewed source, nor an effective build projection SHALL be copied or mounted into the container
 
 #### Scenario: Looking up a runtime projection for verification
 - **WHEN** `verify` runs without `--runtime-projection`
-- **THEN** it SHALL use the default runtime-projection lookup beneath the selected project's `.docker-generated/` directory
+- **THEN** it SHALL use the default runtime-projection lookup beneath the external namespace identified by the canonical selected constructor-project path
 - **AND** when `verify --runtime-projection PATH` is supplied, it SHALL instead read exactly the caller-directed `PATH`, including when `PATH` is outside the selected constructor project
 - **AND** the explicit path SHALL NOT change runtime projection creation paths, the constructor-project root, or any other project-owned path
 

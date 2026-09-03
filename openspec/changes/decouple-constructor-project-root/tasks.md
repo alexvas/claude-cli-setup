@@ -2,6 +2,8 @@
 
 This task list is the binding implementation contract for `decouple-constructor-project-root`.
 
+External prerequisite: `materialize-build-artifacts-on-host` Phase 1 tasks 1.6 and 1.8 SHALL be complete before this change's Phase 3 begins. That change exclusively owns the `user-cache-storage` external namespace contract: task 1.6 owns the resolver, namespace identity, metadata, cache-root resolution, containment, and path derivation, and task 1.8 owns generated-state routing infrastructure. This change owns only constructor-project selection and command-level integration; Phase 3 SHALL supply the normalized physical constructor-project path to the existing resolver and verify consumption of its returned namespace. Phases 1 and 2 remain independent and MAY complete before that prerequisite.
+
 Rules:
 
 - Phases form a directed acyclic graph (DAG). A phase MAY depend only on phases listed before it.
@@ -22,7 +24,7 @@ Rules:
 ### RED
 
 - [ ] P1.R1 Add resolver tests for default CWD selection, relative selection, absolute selection, symlink normalization, missing paths, non-directory paths, and absence of parent or installation-root fallback.
-- [ ] P1.R2 Add path-derivation tests for `docker-constructor.toml`, `docker-constructor.local.toml`, `Dockerfile`, `.env`, `.docker-local/`, and `.docker-generated/` beneath one normalized root.
+- [ ] P1.R2 Add path-derivation tests for project-owned inputs `docker-constructor.toml`, `docker-constructor.local.toml`, `Dockerfile`, `.env`, and `.docker-local/` beneath one normalized root; external generated-state consumption remains owned by Phase 3.
 - [ ] P1.R3 Add parser tests that accept global `--project-directory` and reject `--inventory` without an alias.
 - [ ] P1.R4 Add a dispatcher-boundary test proving one resolved constructor-project value is reused for the complete invocation.
 
@@ -74,35 +76,35 @@ Rules:
 
 ## Phase 3 — Generated Outputs and Cache Boundaries
 
-**Dependencies:** Phase 1 and Phase 2.
+**Dependencies:** Phase 1, Phase 2, and `materialize-build-artifacts-on-host` Phase 1 tasks 1.6 and 1.8.
 
-**Deliverables:** project-local build/runtime projection creation; default project-local runtime-projection lookup; preserved caller-directed verify `--runtime-projection`; default project-local evidence; unrestricted explicit evidence output; persistent caches remain distinct from projections and evidence.
+**Deliverables:** externally namespaced build/runtime projection creation keyed by canonical constructor-project path; external default runtime-projection lookup and evidence; preserved caller-directed verify `--runtime-projection` and evidence `--output-dir`; no constructor-project, primary-workspace, or extra-workspace mutation; global caches remain distinct from project-scoped state.
 
 ### RED
 
-- [ ] P3.R1 Add a build orchestration test proving the effective build projection is atomically published under the selected project's `.docker-generated/` tree.
-- [ ] P3.R2 Add run and verify tests proving runtime projections are created under, and looked up by default from, the selected project's `.docker-generated/` tree.
-- [ ] P3.R3 Add an evidence test proving omission of `--output-dir` writes to `<project-directory>/.docker-generated/evidence/`.
+- [ ] P3.R1 Add build orchestration tests proving the effective build projection is atomically published beneath the external namespace identified by the selected constructor project's canonical path and no `.docker-generated` entry is created in that project.
+- [ ] P3.R2 Add run and verify tests proving runtime projections are created under, and looked up by default from, the same external constructor-project namespace.
+- [ ] P3.R3 Add an evidence test proving omission of `--output-dir` writes beneath the external constructor-project namespace.
 - [ ] P3.R4 Add an evidence test proving explicit `--output-dir DIR` writes to `DIR`, including when `DIR` is beneath `XDG_CACHE_HOME`.
-- [ ] P3.R5 Add an isolation test proving explicit `--output-dir` does not change the constructor-project root or any other project-owned path.
-- [ ] P3.R6 Add a foreign-project test proving default projections and evidence are neither read from nor written to the installation checkout or constructor-managed persistent cache.
-- [ ] P3.R7 Add a verify test proving `--runtime-projection PATH` reads exactly a valid projection outside the selected project and does not alter any project-owned path.
+- [ ] P3.R5 Add isolation tests proving explicit `--output-dir` does not change the constructor-project root, external namespace, or any other project-owned input.
+- [ ] P3.R6 Add foreign-project tests proving default projections and evidence are neither read from nor written to the installation checkout, constructor-project directory, or primary/extra workspaces, and that workspaces receive no namespaces merely by being mounted.
+- [ ] P3.R7 Add a verify test proving `--runtime-projection PATH` reads exactly a valid projection outside the selected constructor-project namespace and does not alter any project-owned input or default generated path.
 
 ### GREEN
 
-- [ ] P3.G1 Route effective build projection publication through the selected project's generated-output path required by P3.R1.
-- [ ] P3.G2 Route runtime projection creation and default verify lookup through the selected project's generated-output path required by P3.R2.
-- [ ] P3.G3 Make the default evidence directory `<project-directory>/.docker-generated/evidence/` as required by P3.R3.
+- [ ] P3.G1 Pass the normalized physical constructor-project path to the existing external-state resolver and consume its returned namespace for effective build projection publication required by P3.R1; do not implement any `user-cache-storage` namespace contract behavior.
+- [ ] P3.G2 Connect run orchestration and default runtime-projection verification lookup to the existing external-state resolver using the same resolved constructor-project identity required by P3.R2.
+- [ ] P3.G3 Connect default evidence output to the existing external-state resolver using the same resolved constructor-project identity required by P3.R3.
 - [ ] P3.G4 Preserve explicit evidence `--output-dir` independently of its location as required by P3.R4 and P3.R5.
 - [ ] P3.G5 Preserve verify `--runtime-projection PATH` as a caller-directed lookup independently of its location as required by P3.R7.
 
 ### INTROSPECT
 
-- [ ] P3.I1 Inspect generated-output, verification-lookup, and cache APIs to confirm projection creation and default lookup are project-owned, explicit `--runtime-projection` is caller-directed, default evidence is project-owned, explicit evidence is caller-directed, and evidence is never classified as constructor-managed cache content; fix every boundary violation found.
+- [ ] P3.I1 Inspect generated-output, verification-lookup, and cache APIs to confirm namespace identity comes only from canonical constructor-project path, primary/extra workspaces remain namespace-neutral, explicit paths remain caller-directed, and no implicit constructor-project/workspace write remains; fix every boundary violation found.
 
 ### VALIDATE
 
-- [ ] P3.V1 Run the projection, explicit verification lookup, evidence, cache-boundary, and foreign-project tests introduced in P3.R1–P3.R7 and record that they all pass.
+- [ ] P3.V1 Run projection, explicit verification lookup, evidence, namespace-identity, workspace-neutrality, cache-boundary, and foreign-project tests introduced in P3.R1–P3.R7 and record that they all pass.
 
 ## Phase 4 — Workspace Host Interface
 
@@ -202,8 +204,8 @@ Rules:
 
 ### RED
 
-- [ ] P7.R1 Add acceptance coverage invoking every facade command from outside the source checkout with `--project-directory` and asserting applicable reads, writes, Docker vectors, local state, projections, and default evidence use the selected project.
-- [ ] P7.R2 Add acceptance coverage for explicit evidence `--output-dir`, including a destination beneath `XDG_CACHE_HOME`, while asserting all unrelated project-owned paths remain under the selected project.
+- [ ] P7.R1 Add acceptance coverage invoking every facade command from outside the source checkout with `--project-directory` and asserting applicable inputs and Docker vectors use the selected constructor project while projections and default evidence use its canonical-path-keyed external namespace without mutating the constructor project, primary workspace, or any extra workspace.
+- [ ] P7.R2 Add acceptance coverage for explicit evidence `--output-dir`, including a destination beneath `XDG_CACHE_HOME`, while asserting all project-owned inputs remain under the selected constructor project and all other generated state remains beneath its external namespace.
 - [ ] P7.R3 Add acceptance coverage for the default-CWD project flow: validate, build dry-run, run dry-run, doctor planning, and verify path selection.
 
 ### GREEN

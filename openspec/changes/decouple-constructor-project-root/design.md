@@ -6,13 +6,17 @@ Runtime launch has a second use of “project”: `--main-project` and `--projec
 
 The change is intentionally breaking. There is no compatibility period for custom inventory paths, old launcher flags, old domain names, `.env` `BASE_PROJECT_DIR`, or `PROJECT_PATH_*` container variables.
 
+## Cross-change dependency
+
+Constructor-project selection and fixed project-owned input resolution are independent and may be implemented first. `materialize-build-artifacts-on-host` exclusively owns the `user-cache-storage` external namespace contract and, specifically, Phase 1 task 1.6 owns the shared resolver, namespace identity, metadata, cache-root resolution, containment, and path derivation while task 1.8 owns generated-state routing infrastructure. This change owns only constructor-project selection and command-level integration: its Phase 3 supplies the normalized physical constructor-project path to those existing facilities and verifies that build/runtime projections and default evidence consume the returned namespace. It does not require completion of later materialization phases.
+
 ## Goals / Non-Goals
 
 **Goals:**
 
 - Make environment definitions portable directories independent of the constructor installation checkout.
 - Establish one authoritative, normalized constructor project root for every command invocation.
-- Resolve fixed inventory, companion, Dockerfile, local input, dotenv, and generated output paths from that root.
+- Resolve fixed inventory, companion, Dockerfile, local input, and dotenv paths from that root, and use its canonical path as the identity of the external generated-state namespace.
 - Keep runtime source workspaces distinct in CLI, domain, TUI, rendering, entrypoint, verification, tests, and documentation.
 - Fail before side effects when project resolution or required project inputs are invalid.
 
@@ -35,7 +39,7 @@ Introduce a small immutable project-path value resolved from global CLI input. I
 <root>/Dockerfile
 <root>/.env
 <root>/.docker-local/
-<root>/.docker-generated/
+<resolved-cache-root>/projects/<safe-constructor-project-basename>-<canonical-constructor-project-path-hash-prefix>/
 ```
 
 The facade passes this resolved value, or explicit derived paths from it, to command services. Installation/source location remains usable only for Python bootstrap/import concerns and must not select project-owned state.
@@ -54,9 +58,9 @@ A fixed layout is preferred over precedence between `--project-directory` and `-
 
 Although the rendering DTO can express alternate context and Dockerfile values, the canonical CLI does not expose them. Keeping lower-level rendering general is acceptable, but orchestration inputs that exist only for the removed ambiguity should be narrowed where practical.
 
-### Put all project-owned reads and writes under the selected root
+### Keep project-owned inputs separate from external generated state
 
-Build and runtime projection creation paths, the default evidence path, the default verification projection lookup, `.env`, and `.docker-local/corporate-ca-bundle.crt` resolve under the selected root. An explicit verify `--runtime-projection PATH` remains caller-directed and may point outside the selected project without changing projection creation or any other project-owned path. The local companion remains the only machine-local TOML input. Persistent artifact/HTTP caches continue to use their existing local-companion or XDG policy; they are not moved beneath the project merely because project-local configuration selects them.
+`.env` and `.docker-local/corporate-ca-bundle.crt` resolve under the selected constructor-project root. Build and runtime projection creation paths, the default evidence path, the default verification projection lookup, and project-scoped build-artifact state resolve beneath the external namespace identified by that root's canonical path. An explicit verify `--runtime-projection PATH` remains caller-directed and may point outside the selected project without changing projection creation or any other path. The local companion remains the only machine-local TOML input. Global runtime-artifact and HTTP caches continue to use their existing local-companion or XDG policy. The constructor SHALL create no implicit `.docker-generated` or other output beneath the constructor project or any primary/extra workspace.
 
 All commands (`validate`, `show`, `check-updates`, `build`, `run`, `doctor`, and `verify`) consume the same project root even when a command only needs a subset of its derived paths.
 
@@ -83,7 +87,7 @@ CLI parsing, run-vector rendering, image entrypoint behavior, verification, acce
 
 - **[Existing automation breaks immediately]** → Document an explicit old-to-new mapping and update all repository-owned scripts and examples in the same change.
 - **[A command accidentally retains `_REPO_ROOT`]** → Add cross-command tests from a foreign CWD with an explicit project directory, plus semantic scans for project-owned `_REPO_ROOT` and removed names.
-- **[Generated files and lookup inputs are split across roots]** → Derive build/runtime projection creation paths, the default runtime-projection lookup, and the default evidence path from the single immutable constructor-project value, while preserving explicit evidence `--output-dir` and verify `--runtime-projection PATH` as caller-directed paths; assert default placement and both explicit redirection boundaries in orchestration tests.
+- **[Generated files and lookup inputs are split across roots]** → Derive build/runtime projection creation paths, the default runtime-projection lookup, and the default evidence path from the external namespace keyed by the single immutable constructor-project value, while preserving explicit evidence `--output-dir` and verify `--runtime-projection PATH` as caller-directed paths; assert external default placement, no constructor-project/workspace mutation, and both explicit redirection boundaries in orchestration tests.
 - **[Symlink handling crosses path-domain boundaries]** → Apply physical resolution only to the constructor-project root and its derived project-owned paths. Preserve workspace paths using the existing lexical absolute-path normalization without resolving workspace symlinks, so workspace bind and display paths retain their established spelling; test both path domains independently.
 - **[A standalone Dockerfile lacks current repository scripts]** → Require the selected project to supply every `COPY` input in its context and let Docker report missing project-owned assets; do not silently source files from the installation.
 - **[Large rename obscures functional regressions]** → Stage implementation by project-root plumbing, then host workspace DTO/rendering, then container contract, followed by docs and semantic cleanup.

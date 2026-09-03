@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Construct pinned build inputs without Dockerfile artifact downloads
-The canonical build SHALL resolve `linux-amd64` reviewed artifacts before Docker execution and SHALL supply their verified local snapshot to BuildKit. Dockerfile stages for rustup, uv, rtk, and fd SHALL perform no network request for those artifacts. Existing Docker images SHALL be self-contained and SHALL not depend on retained source blobs.
+The canonical build SHALL resolve `linux-amd64` reviewed artifacts before Docker execution, publish its effective build projection beneath the selected external project namespace rather than the project checkout, and SHALL supply the verified local snapshot to BuildKit. Dockerfile stages for rustup, uv, rtk, and fd SHALL perform no network request for those artifacts. Existing Docker images SHALL be self-contained and SHALL not depend on retained source blobs.
 
 #### Scenario: Building with materialized artifacts
 - **WHEN** the canonical image build starts with all selected artifacts verified
@@ -9,7 +9,7 @@ The canonical build SHALL resolve `linux-amd64` reviewed artifacts before Docker
 - **AND** the corresponding stages SHALL not receive or fetch artifact URLs
 
 #### Scenario: Running an existing image after cache cleanup
-- **WHEN** source blobs used to build an existing image have been removed from the checkout cache
+- **WHEN** source blobs used to build an existing image have been removed from the external project cache
 - **THEN** that image and its containers SHALL remain operational
 
 ### Requirement: Own reviewed Node assembler toolchain expectations

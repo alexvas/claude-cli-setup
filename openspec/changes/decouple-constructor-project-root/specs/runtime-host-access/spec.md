@@ -1,10 +1,16 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: Store machine-local constructor state separately
+**Reason**: Custom-inventory companion resolution is replaced by fixed constructor-project local state.
+**Migration**: Select the constructor project through CWD or `--project-directory`; use its fixed `docker-constructor.local.toml`.
+
+## ADDED Requirements
+
+### Requirement: Store constructor-project machine-local state separately
 The system SHALL resolve the sole closed local TOML companion as `docker-constructor.local.toml` directly beneath the selected constructor project directory and SHALL use it only for `[host-access].address`, `[cache].dir`, `[corporate-trust].enabled`, and `[network.proxy]` corporate-network settings. `[cache].dir` SHALL be an absolute path identifying a dedicated constructor-owned root for all machine-local persistent constructor caches, whose consumers use separate named child directories. The local configuration resolver SHALL reject an empty or non-absolute value; it SHALL lexically normalize an absolute value before applying unsafe-root checks: the root SHALL NOT equal `XDG_CACHE_HOME`, the invoking user's home directory, or the filesystem root, and SHALL NOT be an ancestor of `XDG_CACHE_HOME`. Before the selected root is created, secured, or used by a cache consumer, the cache-storage filesystem layer SHALL inspect any existing selected root with no-follow semantics and reject a symlink. The local companion SHALL NOT override reviewed dependency, update, artifact, host-access policy, or cache TTL fields. Corporate trust and proxy settings SHALL remain independent from host-access policy: they SHALL neither require enabled host access nor derive an application proxy URL from `HOST_ACCESS_ADDRESS` or `HOST_PROXY_PORT`.
 
 #### Scenario: Resolving the project local companion
-- **WHEN** a constructor project directory is selected
+- **WHEN** a constructor project directory is selected from CWD or explicit `--project-directory`
 - **THEN** the local companion SHALL be `docker-constructor.local.toml` in that directory
 - **AND** SHALL NOT be resolved from the tool installation, an ancestor, or a custom inventory basename
 

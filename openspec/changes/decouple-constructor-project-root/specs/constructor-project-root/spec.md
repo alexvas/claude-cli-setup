@@ -19,13 +19,15 @@ Every facade invocation SHALL select exactly one constructor project directory f
 - **AND** SHALL perform no project mutation, network request, artifact materialization, or Docker execution
 
 ### Requirement: Use a fixed project-owned layout
-The selected constructor project SHALL own the fixed paths `docker-constructor.toml`, `docker-constructor.local.toml`, `Dockerfile`, `.env`, `.docker-local/`, and `.docker-generated/` directly beneath its root. Validation, display, update discovery, build, run, doctor, and verification SHALL derive all applicable project-owned inputs, outputs, and default lookup paths from that same root. Caller-directed overrides that remain part of the public contract, including verify `--runtime-projection PATH`, SHALL retain their explicit paths without changing the constructor-project root or any other project-owned path. The CLI SHALL NOT accept `--inventory` or discover an inventory from the tool installation or a parent directory.
+The selected constructor project SHALL own the fixed input paths `docker-constructor.toml`, `docker-constructor.local.toml`, `Dockerfile`, `.env`, and `.docker-local/` directly beneath its root. Validation, display, update discovery, build, run, doctor, and verification SHALL derive those project-owned inputs from that root and SHALL derive implicit generated outputs and default lookup paths from the external namespace identified by the root's normalized absolute physical path. Caller-directed overrides that remain part of the public contract, including verify `--runtime-projection PATH`, SHALL retain their explicit paths without changing the constructor-project root or any other project-owned path. The CLI SHALL NOT accept `--inventory` or discover an inventory from the tool installation or a parent directory.
 
 #### Scenario: Resolving project-owned paths
 - **WHEN** a constructor project at `/envs/agent` is selected
 - **THEN** the reviewed inventory SHALL be `/envs/agent/docker-constructor.toml`
 - **AND** the local companion SHALL be `/envs/agent/docker-constructor.local.toml`
-- **AND** local inputs and generated outputs SHALL resolve beneath `/envs/agent/.docker-local` and `/envs/agent/.docker-generated`
+- **AND** local inputs SHALL resolve beneath `/envs/agent/.docker-local`
+- **AND** generated outputs and default lookup paths SHALL resolve beneath the external namespace identified by canonical constructor-project path `/envs/agent`
+- **AND** no implicit `.docker-generated` or other generated directory SHALL be created beneath `/envs/agent`
 
 #### Scenario: Missing reviewed inventory
 - **WHEN** a command requiring reviewed configuration selects a project without `docker-constructor.toml`
@@ -40,7 +42,7 @@ The selected constructor project SHALL own the fixed paths `docker-constructor.t
 #### Scenario: Verifying an explicit external runtime projection
 - **WHEN** `verify --runtime-projection PATH` supplies a valid projection outside the selected constructor project
 - **THEN** verification SHALL read the projection from exactly `PATH`
-- **AND** SHALL NOT replace it with the project-local default lookup path
+- **AND** SHALL NOT replace it with the default lookup path in the selected constructor project's external namespace
 - **AND** SHALL NOT change the constructor-project root or the location of any other project-owned file
 
 ### Requirement: Build the selected self-contained project Dockerfile

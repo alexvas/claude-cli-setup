@@ -1,11 +1,11 @@
 ## Purpose
 
-Define secure host-side acquisition, transactional BuildKit delivery, and bounded checkout-local retention of reviewed artifacts used to construct Docker images.
+Define secure host-side acquisition, transactional BuildKit delivery, and bounded project-scoped retention outside the project checkout for reviewed artifacts used to construct Docker images.
 
 ## ADDED Requirements
 
 ### Requirement: Materialize reviewed build artifacts on the host
-Before Docker execution, the constructor SHALL materialize every selected `linux-amd64` rustup, uv, rtk, and fd artifact from its exact reviewed URL, verify its reviewed SHA-256 digest while streaming, and atomically publish valid bytes into a private checkout-local content-addressed cache. A missing, unavailable, malformed, or mismatched artifact SHALL prevent Docker execution, and partial or corrupt downloads SHALL be removed immediately.
+Before Docker execution, the constructor SHALL materialize every selected `linux-amd64` rustup, uv, rtk, and fd artifact from its exact reviewed URL, verify its reviewed SHA-256 digest while streaming, and atomically publish valid bytes into the selected private external project namespace's content-addressed cache. A missing, unavailable, malformed, or mismatched artifact SHALL prevent Docker execution, and partial or corrupt downloads SHALL be removed immediately.
 
 #### Scenario: Reusing a verified selected blob
 - **WHEN** the selected digest already exists as a safe regular non-writable cache blob and revalidation matches the reviewed digest
@@ -13,7 +13,7 @@ Before Docker execution, the constructor SHALL materialize every selected `linux
 
 #### Scenario: Materializing a cache miss
 - **WHEN** a selected digest is absent
-- **THEN** the constructor SHALL stream the exact reviewed URL into temporary checkout-local storage
+- **THEN** the constructor SHALL stream the exact reviewed URL into temporary storage contained by the selected external project namespace
 - **AND** SHALL atomically publish it only after the SHA-256 digest matches
 
 #### Scenario: Rejecting an integrity failure
@@ -43,10 +43,10 @@ Each non-dry-run build SHALL create an owner-private immutable per-transaction s
 - **THEN** `dev` SHALL read the selected copies inside the BuildKit filesystem
 - **AND** SHALL not receive a bind mount or direct path to the host snapshot or private cache-control state
 
-#### Scenario: Preserving private host ancestors
-- **WHEN** the host owner imports a snapshot located beneath a `0700` checkout or parent directory owned by that host user
-- **THEN** named-context import SHALL rely on the host owner's existing access
-- **AND** the constructor SHALL NOT broaden permissions on the checkout, its parents, the home directory, or cache roots
+#### Scenario: Preserving project and cache-root boundaries
+- **WHEN** the invoking user imports a snapshot from the owner-private external project namespace while the source project is owned by a different user
+- **THEN** named-context import SHALL rely on that invoking user's existing read access to project inputs and owner access to external state
+- **AND** the constructor SHALL NOT require ownership of or broaden permissions on the project, its parents, the home directory, or cache-root parents
 
 #### Scenario: Rendering a dry-run prospective context
 - **WHEN** a dry-run renders the planned Docker build
@@ -74,11 +74,11 @@ Each non-dry-run build SHALL create an owner-private immutable per-transaction s
 - **THEN** that stage SHALL fail
 - **AND** the artifact SHALL NOT enter the final image
 
-### Requirement: Serialize checkout build transactions
-The constructor SHALL permit at most one active image build transaction per checkout. A competing build SHALL fail or wait under a deterministic bounded locking policy without materializing, committing, or garbage-collecting artifacts concurrently.
+### Requirement: Serialize project build transactions
+The constructor SHALL permit at most one active image build transaction per canonical project identity, using the lock inside that project's external state namespace. A competing build SHALL fail or wait under a deterministic bounded locking policy without materializing, committing, or garbage-collecting artifacts concurrently.
 
 #### Scenario: Starting a competing build
-- **WHEN** another build transaction holds the checkout build lock
+- **WHEN** another build transaction holds the selected constructor project's build lock
 - **THEN** the new build SHALL NOT mutate the artifact cache, snapshot state, or committed live set
 - **AND** SHALL report that the checkout already has an active build
 
@@ -88,7 +88,7 @@ The constructor SHALL permit at most one active image build transaction per chec
 - **AND** SHALL leave verified blobs available as uncommitted cache entries
 
 ### Requirement: Retain one committed build live set
-After and only after a successful Docker build, the constructor SHALL atomically replace the checkout-local committed build manifest with the complete selected build-input digest set. It SHALL then immediately delete every blob removed from the previous committed build set. Shared XDG runtime artifacts SHALL have separate ownership and SHALL NOT be consulted, protected, or deleted by build-cache retention. Existing Docker images SHALL remain independent of source artifact retention, and no image label or historical build generation SHALL be required.
+After and only after a successful Docker build, the constructor SHALL atomically replace the selected external project namespace's committed build manifest with the complete selected build-input digest set. It SHALL then immediately delete every blob removed from the previous committed build set. Shared XDG runtime artifacts SHALL have separate ownership and SHALL NOT be consulted, protected, or deleted by build-cache retention. Existing Docker images SHALL remain independent of source artifact retention, and no image label or historical build generation SHALL be required.
 
 #### Scenario: Committing a successful changed build
 - **WHEN** Docker successfully builds an image with a new selected artifact set
@@ -101,7 +101,7 @@ After and only after a successful Docker build, the constructor SHALL atomically
 - **AND** newly verified blobs SHALL remain uncommitted
 
 ### Requirement: Expire only abandoned verified artifacts by fixed policy
-A verified checkout-local build blob that is not referenced by the committed build set and was never superseded through a successful build commit SHALL be retained as uncommitted for a fixed 30 days (2,592,000 seconds) from its verified publication. Expired uncommitted build blobs and markers SHALL be removed during later build-cache maintenance. The TTL SHALL NOT be configurable through reviewed inventory, local configuration, or command options, and SHALL NOT govern shared XDG runtime artifacts.
+A verified project-scoped build blob that is not referenced by the selected constructor project's committed build set and was never superseded through a successful build commit SHALL be retained as uncommitted for a fixed 30 days (2,592,000 seconds) from its verified publication. Expired uncommitted build blobs and markers SHALL be removed during later build-cache maintenance. The TTL SHALL NOT be configurable through reviewed inventory, local configuration, or command options, and SHALL NOT govern shared XDG runtime artifacts.
 
 #### Scenario: Retrying within the retention period
 - **WHEN** a failed build is retried before its verified uncommitted blob is 30 days old
@@ -112,7 +112,7 @@ A verified checkout-local build blob that is not referenced by the committed bui
 - **THEN** later cache maintenance SHALL remove the blob and its marker
 
 #### Scenario: Protecting a committed build blob from TTL
-- **WHEN** a checkout-local blob appears in the committed build set
+- **WHEN** a blob in the selected external project namespace appears in that project's committed build set
 - **THEN** uncommitted TTL SHALL NOT remove it regardless of file age
 
 #### Scenario: Leaving runtime artifact retention independent

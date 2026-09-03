@@ -1,6 +1,6 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Load launcher configuration from .env
+### Requirement: Load workspace launcher configuration from constructor-project .env
 The system SHALL read launcher defaults from `.env` beneath the selected constructor project directory.
 
 #### Scenario: Loading workspace settings
@@ -9,7 +9,7 @@ The system SHALL read launcher defaults from `.env` beneath the selected constru
 - **AND** SHALL use `WORKSPACE_ROOT` from `.env` unless overridden by `--workspace-root`
 - **AND** SHALL NOT read `BASE_PROJECT_DIR` or an installation-root `.env`
 
-### Requirement: Discover launchable directories from a filesystem tree
+### Requirement: Discover launchable workspaces from a filesystem tree
 The system SHALL allow selecting workspaces from a directory tree.
 
 #### Scenario: Building the tree view
@@ -22,7 +22,7 @@ The system SHALL allow selecting workspaces from a directory tree.
 - **WHEN** no live IDE workspaces and no workspace root are configured
 - **THEN** the launcher SHALL use the current user's home directory as the tree root
 
-### Requirement: Provide an interactive terminal UI
+### Requirement: Provide an interactive workspace terminal UI
 The system SHALL provide a curses-based TUI for selecting one primary workspace and optional extra workspaces.
 
 #### Scenario: Navigating the tree
@@ -47,13 +47,25 @@ The system SHALL provide a curses-based TUI for selecting one primary workspace 
 
 #### Scenario: Marking extra workspaces
 - **WHEN** the user presses `Space`
-- **THEN** the current item SHALL cycle between unselected, extra, and primary according to current selection state
+- **THEN** the current item SHALL cycle between unselected, extra workspace, and primary workspace according to current selection state
 
 #### Scenario: Launching from the TUI
 - **WHEN** the user double-presses `Enter`, presses `F5`, or presses `r`
 - **THEN** the launcher SHALL return the selected primary workspace and extra workspaces for execution
 
 ## REMOVED Requirements
+
+### Requirement: Load launcher configuration from .env
+**Reason**: Replaced by the constructor-project `.env` and workspace-only launcher contract.
+**Migration**: Use `WORKSPACE_ROOT` in the selected constructor project's `.env`.
+
+### Requirement: Discover launchable directories from a filesystem tree
+**Reason**: Runtime source directories are now explicitly workspaces.
+**Migration**: Use workspace-root and workspace-selection terminology.
+
+### Requirement: Provide an interactive terminal UI
+**Reason**: Replaced by the workspace-oriented TUI contract.
+**Migration**: Select one primary workspace and optional extra workspaces.
 
 ### Requirement: Run Docker directly with selected projects
 **Reason**: “Project” now identifies the constructor environment definition; runtime source directories use the unambiguous workspace contract.

@@ -10,6 +10,21 @@
 
 **Migration**: Use the replacement “Require workspace selection only for runtime launch” requirement.
 
+### Requirement: Repair mount ownership on startup
+**Reason**: Ownership repair now consumes only the workspace mount contract.
+
+**Migration**: Configure `WORKSPACE_PATH_1..N`; remove `PROJECT_PATH_*`.
+
+### Requirement: Preserve image-provided home ownership without whole-home rewrites
+**Reason**: Runtime startup now distinguishes image home content from mounted workspaces.
+
+**Migration**: Use workspace bind mounts and targeted workspace repair.
+
+### Requirement: Document the current runtime image
+**Reason**: Documentation now uses constructor-project and workspace terminology.
+
+**Migration**: Replace runtime project-selection terminology with primary/extra workspaces.
+
 ## ADDED Requirements
 
 ### Requirement: Mount host workspaces 1:1
@@ -44,9 +59,9 @@ Workspace paths and 1:1 bind mounts SHALL be runtime launch inputs rather than i
 - **THEN** runtime configuration SHALL fail with an actionable workspace-selection error
 - **AND** build-only configuration SHALL remain unaffected
 
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Repair mount ownership on startup
+### Requirement: Repair mounted workspace ownership on startup
 The system SHALL be able to fix ownership and access permissions of mounted workspace worktrees before dropping privileges. The runtime SHALL explicitly install `util-linux` to provide `mountpoint`. The launcher interface SHALL define `WORKSPACE_PATH_*` as host-directory bind mounts. `CHOWN_WORK_ON_START` repair SHALL consider only configured `WORKSPACE_PATH_*` paths, SHALL require each target to be a container mount point (`mountpoint -q`), and SHALL NOT scan or modify ordinary image-layer directories, fixed runtime home paths, or non-workspace mounts.
 
 #### Scenario: CHOWN_WORK_ON_START enabled with mounted workspace paths
@@ -79,7 +94,7 @@ The system SHALL be able to fix ownership and access permissions of mounted work
 - **THEN** the entrypoint SHALL perform no ownership or access-permission repair
 - **AND** SHALL still execute the requested command as `dev`
 
-### Requirement: Preserve image-provided home ownership without whole-home rewrites
+### Requirement: Preserve image-provided home ownership with workspace mounts
 The runtime image SHALL assemble image-provided artifacts under `/home/dev` with ownership matching the configured `dev` user and group. Runtime assembly SHALL NOT recursively change ownership of the complete `/home/dev` tree.
 
 #### Scenario: Assembling runtime home artifacts
@@ -97,7 +112,7 @@ The runtime image SHALL assemble image-provided artifacts under `/home/dev` with
 - **THEN** the entrypoint ownership and access repair policy SHALL remain available for those workspace bind mounts
 - **AND** removal of build-time whole-home chown SHALL NOT weaken workspace-mount repair
 
-### Requirement: Document the current runtime image
+### Requirement: Document the workspace-oriented runtime image
 The Russian, English, and Chinese README files SHALL present the current Docker development environment around the primary user workflows of building the image, launching it with interactive workspace selection, updating managed components, and performing occasional maintenance. Internal implementation invariants and image-development diagnostics SHALL NOT interrupt those primary workflows.
 
 #### Scenario: Comparing translated documentation
