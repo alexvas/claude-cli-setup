@@ -5,9 +5,9 @@ Protect image-owned managed Pi extensions from mutation while preserving ordinar
 ## ADDED Requirements
 
 ### Requirement: Guard managed extension mutation through the Pi command
-The image SHALL expose `/usr/local/bin/pi` as a wrapper that classifies only the documented command forms in this requirement. It SHALL recognize `list`; `install <source>` where source is canonical `npm:`, `git:`, raw URL, absolute path, or relative path; `remove npm:<package>`; bare `update`; `update --all`; `update --extensions`; `update --models`; `update --self`; `update --self --force`; `update npm:<package>`; and `update --extension npm:<package>`. It SHALL NOT apply mutation-like heuristics, infer aliases, or fail closed merely because another command or argv form is unknown; every unlisted form SHALL be forwarded unchanged to Pi.
+The image SHALL expose `/usr/local/bin/pi` as a wrapper that classifies only the documented command forms in this requirement. The prerequisite-owned, evidence-verified `/opt/pi/bin/pi` SHALL remain unchanged as the real Pi launcher, and the user-visible `PATH` SHALL place `/usr/local/bin` before `/opt/pi/bin` so ordinary `pi` lookup resolves to the wrapper. It SHALL recognize `list`; `install <source>` where source is canonical `npm:`, `git:`, raw URL, absolute path, or relative path; `remove npm:<package>`; bare `update`; `update --all`; `update --extensions`; `update --models`; `update --self`; `update --self --force`; `update npm:<package>`; and `update --extension npm:<package>`. It SHALL NOT apply mutation-like heuristics, infer aliases, or fail closed merely because another command or argv form is unknown; every unlisted form SHALL be forwarded unchanged to Pi.
 
-The wrapper SHALL reject bare `update`, `update --self`, and `update --self --force` because they mutate the Pi agent. It SHALL reject `update --all` and `update --extensions` because they can mutate managed extensions. For recognized `install`, `remove`, `update <npm-source>`, and `update --extension <npm-source>` forms, it SHALL reject only when the normalized npm identity is a managed root. It SHALL forward recognized unmanaged npm sources, recognized `git:`/URL/path installs, `list`, and `update --models`. Every rejection SHALL avoid invoking Pi and explain roots → `sync-lock` → review → rebuild. Every forwarded command SHALL retain its original argv, signals, and exit status.
+The wrapper SHALL reject bare `update`, `update --self`, and `update --self --force` because they mutate the Pi agent. It SHALL reject `update --all` and `update --extensions` because they can mutate managed extensions. For recognized `install`, `remove`, `update <npm-source>`, and `update --extension <npm-source>` forms, it SHALL reject only when the normalized npm identity is a managed root. It SHALL forward recognized unmanaged npm sources, recognized `git:`/URL/path installs, `list`, and `update --models`. Every rejection SHALL avoid invoking Pi and explain roots → `sync-lock` → review → rebuild. Every forwarded command SHALL execute `/opt/pi/bin/pi` by absolute path without PATH lookup, retain its original argv, signals, and exit status, and avoid wrapper recursion. Explicit invocation of `/opt/pi/bin/pi` SHALL remain a direct-launch interface outside the wrapper's command-name boundary.
 
 #### Scenario: Blocking Pi agent updates
 - **WHEN** a user invokes `pi update`, `pi update --self`, or `pi update --self --force`
@@ -19,9 +19,15 @@ The wrapper SHALL reject bare `update`, `update --self`, and `update --self --fo
 - **THEN** the wrapper SHALL reject it without invoking Pi
 - **AND** SHALL print the reviewed-root, `sync-lock`, review, and rebuild guidance
 
+#### Scenario: Resolving and delegating the Pi command
+- **WHEN** the runtime environment resolves the ordinary command name `pi`
+- **THEN** it SHALL select `/usr/local/bin/pi` before `/opt/pi/bin/pi`
+- **AND** an invocation forwarded by the wrapper SHALL execute exactly `/opt/pi/bin/pi` without PATH lookup or recursion
+- **AND** `/opt/pi/bin/pi` SHALL retain the prerequisite-owned launcher contents and evidence contract
+
 #### Scenario: Allowing non-mutating documented commands
 - **WHEN** a user invokes `pi list` or `pi update --models`
-- **THEN** the wrapper SHALL execute Pi with the original unchanged argv
+- **THEN** the wrapper SHALL execute `/opt/pi/bin/pi` with the original unchanged argv
 - **AND** SHALL preserve its signals and exit status
 
 #### Scenario: Blocking a managed-source update
