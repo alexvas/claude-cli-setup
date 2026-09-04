@@ -56,13 +56,13 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 **Deliverables:** exact `linux-amd64` selection for rustup, uv, rtk, and fd; streaming SHA-256 host materialization; verified hit reuse; atomic miss publication; host proxy/CA application and redacted diagnostics.
 
 - [x] 3.1 **RED:** Add selection tests requiring exactly the effective `linux-amd64` rustup, uv, rtk, and fd URL/digest pairs and explicit rejection of unsupported platforms.
-- [ ] 3.2 **RED:** Update materializer tests for an external-project-cache verified hit, streamed cache miss, digest mismatch, transport interruption, atomic publication, immediate temporary-file cleanup, and zero project-directory mutation.
-- [ ] 3.3 **RED:** Update orchestration tests proving materialization or integrity failure prevents Docker invocation, leaves no committed reference, and mutates only the verified namespace identified by the canonical path of the selected constructor project.
+- [x] 3.2 **RED:** Update materializer tests for an external-project-cache verified hit, streamed cache miss, digest mismatch, transport interruption, atomic publication, immediate temporary-file cleanup, and zero project-directory mutation.
+- [x] 3.3 **RED:** Update orchestration tests proving materialization or integrity failure prevents Docker invocation, leaves no committed reference, and mutates only the verified namespace identified by the canonical path of the selected constructor project.
 - [x] 3.4 **RED:** Add corporate-network tests for enabled credential-free proxy, enabled replacement CA, disabled-policy neutrality, invalid-policy early failure, and secret/URL redaction.
-- [ ] 3.5 **GREEN:** Adapt effective build-artifact selection and streaming materialization to the namespace identified by the canonical path of the selected constructor project as required by tasks 3.1–3.3.
+- [x] 3.5 **GREEN:** Adapt effective build-artifact selection and streaming materialization to the namespace identified by the canonical path of the selected constructor project as required by tasks 3.1–3.3.
 - [x] 3.6 **GREEN:** Inject resolved host corporate network policy into the materialization transport as required by task 3.4.
-- [ ] 3.7 **INTROSPECT:** Review the phase diff for checkout path leakage, full-buffer downloads, duplicate HTTP policy, unredacted diagnostics, network after integrity failure, cross-project interaction, and coupling to CLI/rendering modules; remove each issue found.
-- [ ] 3.8 **VALIDATE:** Run provider-independent transport, external-state materialization, orchestration, corporate-network, no-project-mutation, and failure-cleanup tests; record that Docker is never invoked on a materialization failure.
+- [x] 3.7 **INTROSPECT:** Review the phase diff for checkout path leakage, full-buffer downloads, duplicate HTTP policy, unredacted diagnostics, network after integrity failure, cross-project interaction, and coupling to CLI/rendering modules; remove each issue found.
+- [x] 3.8 **VALIDATE:** Run provider-independent transport, external-state materialization, orchestration, corporate-network, no-project-mutation, and failure-cleanup tests; record that Docker is never invoked on a materialization failure.
 
 ## 4. Immutable Named Build Context and Minimal Dockerfile Conversion
 

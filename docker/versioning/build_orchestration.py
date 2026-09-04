@@ -47,6 +47,7 @@ from docker.versioning.cache_storage import prepare_resolved_root, resolve_effec
 from docker.versioning.build_materialization import (
     HostNetworkPolicy,
     MaterializationError,
+    StreamingTransport,
     UrllibStreamingTransport,
     materialize_build_artifacts,
     select_build_artifacts,
@@ -232,6 +233,9 @@ class BuildRequest:
 
     _materialize_artifacts: Callable[..., object] | None = None
     """Injectable host materializer used before projection publication/Docker."""
+
+    _transport_factory: Callable[[HostNetworkPolicy], StreamingTransport] | None = None
+    """Injectable host transport factory (receives the resolved network policy)."""
 
     _named_context_supported: Callable[[], bool] | None = None
     """Injectable BuildKit named-context capability probe."""
@@ -616,7 +620,8 @@ def execute_build(
         project_state = resolve_project_state(
             repo_root, cache_root=prepare_resolved_root(plan.cache_root),
         )
-        transport = UrllibStreamingTransport(plan.host_network_policy)
+        transport_factory = request._transport_factory or UrllibStreamingTransport
+        transport = transport_factory(plan.host_network_policy)
         materialized = materialize(
             projection, checkout_root=repo_root, cache_root=project_state.cache_root,
             project_state=project_state, transport=transport,

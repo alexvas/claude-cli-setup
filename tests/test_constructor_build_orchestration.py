@@ -13,6 +13,7 @@ that drives the Stage 9.3 implementation.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from docker.networking import (
     ProbeResult,
 )
 from docker.versioning.build_snapshot import MaterializedSnapshot
+from docker.versioning.build_materialization import MaterializationError, UrllibStreamingTransport
 from docker.versioning.build_orchestration import (
     BuildRequest,
     BuildResult,
@@ -319,11 +321,17 @@ class TestInjectablesWired(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
+            _materialize_artifacts=_materialize_ok,
+            _transport_factory=UrllibStreamingTransport,
+            _named_context_supported=lambda: True,
         )
         # Just verify the slots are populated
         self.assertIs(runner, req.runner)
         self.assertIs(_diag_reachable, req._diagnose_gateway)
         self.assertIs(_publish_ok, req._publish_projection)
+        self.assertIs(_materialize_ok, req._materialize_artifacts)
+        self.assertIs(UrllibStreamingTransport, req._transport_factory)
+        self.assertTrue(req._named_context_supported())
 
 # ═══════════════════════════════════════════════════════════════════════
 # 9.  Default-build tests (RED)
@@ -1340,6 +1348,166 @@ class TestBuildBoundaryFailures(unittest.TestCase):
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("permission denied", result.message or "")
         self.assertIsNone(result.process_result)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stage 9.3 — materialization boundary
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMaterializationBoundary(unittest.TestCase):
+    """Task 3.3 — materialization or integrity failure prevents Docker,
+    leaves no committed reference, and mutates only the verified namespace."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.cache = self.base / "cache"
+        self.cache.mkdir(mode=0o700)
+        os.chmod(self.cache, 0o700)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        self.inventory = self.repo / "docker-constructor.toml"
+        self.inventory.write_bytes(INVENTORY_PATH.read_bytes())
+        (self.repo / "docker-constructor.local.toml").write_text(
+            f'[cache]\ndir = "{self.cache}"\n'
+        )
+
+    def _request(self, *, publish, runner, materialize=None, transport_factory=None):
+        return BuildRequest(
+            inventory_path=str(self.inventory),
+            repo_root=str(self.repo),
+            confirmed=True,
+            runner=runner,
+            _materialize_artifacts=materialize,
+            _transport_factory=transport_factory,
+            _named_context_supported=lambda: True,
+            _publish_projection=publish,
+        )
+
+    def _tree_snapshot(self, root: Path, *, exclude: Path | None = None):
+        """Record structure, types, modes, contents, and symlink targets.
+
+        ``exclude`` (when given) prunes exactly one subtree so callers can
+        compare "everything except the selected project's namespace".
+        """
+        snapshot = {}
+        if exclude is None or not root.is_relative_to(exclude):
+            snapshot["."] = ("dir", root.lstat().st_mode & 0o777)
+        for path in sorted(root.rglob("*")):
+            if exclude is not None and path.is_relative_to(exclude):
+                continue
+            rel = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                snapshot[rel] = ("link", os.readlink(path))
+            elif path.is_dir():
+                snapshot[rel] = ("dir", path.stat().st_mode & 0o777)
+            else:
+                snapshot[rel] = ("file", path.stat().st_mode & 0o777, path.read_bytes())
+        return snapshot
+
+    def test_materialization_failure_prevents_docker_and_leaves_no_committed_reference(self):
+        class Docker:
+            def run(self, argv):
+                raise AssertionError("Docker must not run after a materialization failure")
+
+        def fail_materialize(*args, **kwargs):
+            raise MaterializationError("integrity check failed for artifact 'uv'")
+
+        def fail_publish(*args, **kwargs):
+            raise AssertionError("projection must not be published after materialization failure")
+
+        result = orchestrate_build(self._request(
+            materialize=fail_materialize, publish=fail_publish, runner=Docker(),
+        ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIsNone(result.publish_result)
+        self.assertIsNone(result.process_result)
+        # No committed reference may exist anywhere in the external cache.
+        self.assertEqual([], list(self.cache.rglob("committed-build.json")))
+        # The project checkout is untouched: only our own fixtures remain.
+        self.assertEqual(
+            {"docker-constructor.toml", "docker-constructor.local.toml"},
+            {p.name for p in self.repo.iterdir()},
+        )
+        self.assertFalse((self.repo / ".docker-cache").exists())
+        self.assertFalse((self.repo / ".docker-generated").exists())
+
+    def test_integrity_failure_uses_real_materialization_and_confines_mutation(self):
+        """A digest-mismatching transport drives the real streaming path: the
+        build fails operationally, Docker/publication never run, no invalid
+        blob, temp file, or committed reference remains, and every change is
+        confined to the selected project's canonical external namespace —
+        proven by full-tree snapshots of the cache and the constructor project
+        taken before and after orchestration."""
+        from docker.versioning.build_cache import prepare_build_cache
+        from docker.versioning.cache_storage import prepare_resolved_root
+        from docker.versioning.project_state import resolve_project_state
+
+        # Compute the selected namespace path without creating it, so the
+        # pre-build cache snapshot can exclude exactly that subtree.
+        selected_namespace = resolve_project_state(
+            self.repo, cache_root=self.cache, create=False,
+        ).namespace
+
+        # Prepare the deterministic cache-root scaffolding and a second project
+        # namespace with meaningful state; both are part of the pre-build
+        # baseline that must remain unchanged.
+        prepare_resolved_root(self.cache)
+        other = self.base / "other-proj"
+        other.mkdir()
+        other_paths = prepare_build_cache(other, cache_root=self.cache)
+        (other_paths.persistent_root / "committed-build.json").write_text('{"blobs": []}')
+        (other_paths.persistent_root / "sentinel.txt").write_text("other-namespace-content")
+
+        project_before = self._tree_snapshot(self.repo)
+        cache_before = self._tree_snapshot(self.cache, exclude=selected_namespace)
+
+        effects = []
+        class Docker:
+            def run(self, argv):
+                effects.append("docker")
+                raise AssertionError("Docker must not run after an integrity failure")
+
+        def fail_publish(projection, *, repo_root=None):
+            effects.append("publish")
+            raise AssertionError("projection must not be published")
+
+        class MismatchingTransport:
+            """Streams bytes that never match any reviewed SHA-256 digest."""
+            def __init__(self, policy):
+                self.policy = policy
+            def stream(self, url):
+                yield b"not-the-reviewed-artifact-bytes"
+
+        # No `_materialize_artifacts` injection: this exercises the real
+        # `materialize_build_artifacts` -> `materialize_artifact` path.
+        result = orchestrate_build(self._request(
+            publish=fail_publish, runner=Docker(),
+            transport_factory=MismatchingTransport,
+        ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("integrity check failed", result.message or "")
+        self.assertEqual([], effects)
+        self.assertIsNone(result.publish_result)
+        self.assertIsNone(result.process_result)
+
+        selected_state = resolve_project_state(self.repo, cache_root=self.cache)
+        # Focused failure assertions: nothing invalid, temporary, or committed
+        # remains for the failed artifact/build.
+        self.assertEqual([], list((selected_state.build_artifacts_root / "blobs").rglob("*.blob")))
+        self.assertEqual([], list(self.cache.rglob(".materialize-*")))
+        self.assertFalse((selected_state.build_artifacts_root / "committed-build.json").exists())
+
+        # The entire cache outside the selected namespace is byte-for-byte
+        # unchanged: no new/deleted paths, modified contents, changed modes, or
+        # changed symlink targets anywhere else (including the other project's
+        # namespace).
+        self.assertEqual(
+            cache_before, self._tree_snapshot(self.cache, exclude=selected_namespace),
+        )
+        # The complete constructor project is unchanged, including every file's
+        # contents and mode.
+        self.assertEqual(project_before, self._tree_snapshot(self.repo))
 
 # ═══════════════════════════════════════════════════════════════════════
 # Stage 9.4 — public API tests

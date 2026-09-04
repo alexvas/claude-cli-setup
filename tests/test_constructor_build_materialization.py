@@ -110,6 +110,44 @@ class TestStreamingMaterializer(unittest.TestCase):
             materialize_artifact(selected, checkout_root=td, cache_root=cache, transport=Observing())
             self.assertTrue(destination.exists())
 
+    def test_materialization_mutates_only_the_external_namespace(self):
+        with tempfile.TemporaryDirectory() as td:
+            checkout = Path(td) / "proj"; checkout.mkdir()
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700); os.chmod(cache, 0o700)
+            path = materialize_artifact(
+                self.selected(), checkout_root=checkout, cache_root=cache,
+                transport=RecordingTransport((b"pay", b"load")),
+            )
+            # The project checkout receives no generated entry at all.
+            self.assertEqual([], [p.name for p in checkout.iterdir()])
+            self.assertFalse((checkout / ".docker-cache").exists())
+            self.assertFalse((checkout / ".docker-generated").exists())
+            # The blob lives inside the external namespace, never the checkout.
+            from docker.versioning.project_state import resolve_project_state
+            state = resolve_project_state(checkout, cache_root=cache)
+            self.assertTrue(path.is_relative_to(state.namespace))
+            self.assertTrue(path.is_relative_to(state.build_artifacts_root))
+            self.assertFalse(path.is_relative_to(checkout))
+
+    def test_external_namespace_verified_hit_reuses_blob_without_download(self):
+        with tempfile.TemporaryDirectory() as td:
+            checkout = Path(td) / "proj"; checkout.mkdir()
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700); os.chmod(cache, 0o700)
+            selected = self.selected()
+            from docker.versioning.build_cache import build_blob_path, prepare_build_cache
+            paths = prepare_build_cache(checkout, cache_root=cache)
+            destination = build_blob_path(paths.blobs_root, selected.identity)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"payload")
+            os.chmod(destination, 0o444)
+            bomb = RecordingTransport(error=AssertionError("network on verified hit"))
+            path = materialize_artifact(
+                selected, checkout_root=checkout, cache_root=cache, transport=bomb,
+            )
+            self.assertEqual(destination, path)
+            self.assertEqual([], bomb.calls)
+            self.assertEqual(b"payload", path.read_bytes())
+
 
 def _fixture_snapshot(*_args, **_kwargs):
     path = fixture_directory("fixture-snapshot-")

@@ -74,3 +74,40 @@ python3 -m unittest -v \
 - Canonical project lock identity across symlink aliases and relative/absolute paths, independent same-basename namespaces, cross-project isolation, abandoned-snapshot recovery, atomic manifest publication, commit-before-delete ordering, fixed-TTL retention, and legacy checkout-state neutrality passed.
 - Failed and interrupted transactions preserve the prior committed live set; uncommitted verified blobs retain their marker until maintenance or expiry.
 - Retention boundary verified with fake clocks: an uncommitted blob survives at exactly 2,592,000 seconds since `verified_at` and is removed only when it is older than 2,592,000 seconds (maintenance at `verified_at + UNCOMMITTED_TTL_SECONDS + 1`).
+
+# Phase 3 Validation Record
+
+## Run
+
+Date: 2026-09-04T05:24:33Z
+
+Command:
+
+```text
+python3 -m unittest -v \
+  tests.test_constructor_build_materialization \
+  tests.test_constructor_build_orchestration \
+  tests.test_constructor_corporate_network_build_red \
+  tests.test_constructor_build_snapshot \
+  tests.test_constructor_build_vector
+```
+
+## Results
+
+- 200 tests passed; two ownership-transfer scenarios were skipped because the host lacks the required `docker-dev` account.
+- Exact `linux-amd64` rustup, uv, rtk, and fd URL/digest selection and explicit rejection of unsupported platforms passed.
+- Streaming materialization passed: external-namespace verified hit reuse with zero downloads, streamed cache miss, digest mismatch, transport interruption, atomic publication, immediate temporary-file cleanup, and zero project-directory mutation (no `.docker-cache`/`.docker-generated`, blob confined to the canonical external namespace).
+- Orchestration end-to-end integrity failure passed: with a digest-mismatching transport driving the real streaming materialization path, the build returns OPERATIONAL, Docker and projection publication are never invoked, no invalid blob, materialization temporary file, or committed reference remains, and full-tree snapshots prove the entire cache outside the selected project's canonical namespace and the complete constructor project (including file contents and modes) are unchanged. A separate injected-materializer-failure test additionally proves the orchestration boundary returns OPERATIONAL with no Docker, no publication, and no committed reference.
+- Corporate-network transport passed: enabled credential-free proxy, enabled replacement CA, disabled-policy neutrality, invalid-policy early failure, and secret/URL redaction.
+
+## INTROSPECT (3.7)
+
+Reviewed the Phase 3 diff for checkout-path leakage, full-buffer downloads, duplicate HTTP policy, unredacted diagnostics, network-after-integrity-failure, cross-project interaction, TOCTOU windows, and CLI/rendering coupling. Findings: no code changes required.
+
+- Materialization and snapshot staging write only beneath the canonical external namespace; the checkout is only read/traversed.
+- Downloads and digest verification stream in 1 MiB chunks; no response is ever fully buffered.
+- `UrllibStreamingTransport` is the sole owner of host HTTP policy (proxy/CA applied once); Docker build-arg networking is a distinct boundary and not duplicated.
+- Transport errors carry only the exception type name; integrity errors carry only the artifact name; CA-bundle and proxy failures are redacted.
+- Digest mismatch raises before atomic publication with no retry; the temporary file is removed in the `finally` path.
+- `build_materialization` imports only cache/identity/state/model modules — no CLI or rendering coupling.
+- The benign `destination.exists()` corrupt-cache check races with a concurrent publisher, but per-project serialization (Phase 7 lock wiring) closes that window; Phase 3 has no concurrent materialization surface.
