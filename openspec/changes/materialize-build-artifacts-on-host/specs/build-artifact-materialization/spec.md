@@ -33,6 +33,24 @@ Each non-dry-run build SHALL create an owner-private immutable per-transaction s
 - **AND** derived-environment files SHALL retain their canonical-evidence-validated executable bits while having no write bit for owner, group, or other
 - **AND** snapshot directories SHALL have no write bit for owner, group, or other
 
+#### Scenario: Cleaning a hard-linked snapshot without mutating cache blobs
+- **GIVEN** a finalized snapshot payload is a hard link to a verified persistent cache blob
+- **WHEN** the snapshot is cleaned after build success, failure, or interruption
+- **THEN** cleanup SHALL NOT chmod, chown, truncate, or otherwise mutate the shared payload inode
+- **AND** SHALL change permissions only on snapshot directories as required for removal
+- **AND** SHALL unlink only the snapshot pathname
+- **AND** the cache blob SHALL remain invoking-user-owned, mode `0444`, digest-valid, and reusable by the next build
+
+#### Scenario: Reusing cached blobs after independent rootless-Docker permission maintenance
+- **GIVEN** a successful build has cleaned its transaction snapshot
+- **AND** verified cache blobs remain in the external constructor-project namespace
+- **WHEN** an operator independently performs recursive ownership and permission maintenance on the constructor project and workspaces between builds, such as assigning them to `docker-dev:docker-dev` and applying `g+rwX`
+- **AND** the original invoking user retains the required read and traversal access
+- **THEN** the next build SHALL reuse digest-valid cache blobs without downloading them again
+- **AND** the cache blobs SHALL remain invoking-user-owned and mode `0444`
+- **AND** project-scoped operator maintenance SHALL NOT modify the external project namespace
+- **AND** the build SHALL NOT report the reusable blobs as unsafe or corrupt
+
 #### Scenario: Verifying an imported derived environment
 - **WHEN** a host-validated derived environment with its assembler canonical evidence and required consumer evidence is imported through the named context
 - **THEN** the consuming Dockerfile stage SHALL first require `DerivedEnvironment` and match the environment’s assembled output identity, canonical tree digest, assembler-evidence digest, and consumer-launcher-evidence digest to their expected values supplied by the post-materialization transaction/build-plan attestation, then verify both evidence sets before final-layout copy

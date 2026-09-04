@@ -75,33 +75,39 @@ class TestStreamingMaterializer(unittest.TestCase):
     def test_streamed_miss_and_verified_hit(self):
         with tempfile.TemporaryDirectory() as td:
             transport = RecordingTransport((b"pay", b"load"))
-            path = materialize_artifact(self.selected(), checkout_root=td, transport=transport)
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
+            path = materialize_artifact(self.selected(), checkout_root=td, cache_root=cache, transport=transport)
             self.assertEqual(b"payload", path.read_bytes())
             self.assertEqual(0o444, path.stat().st_mode & 0o777)
             bomb = RecordingTransport(error=AssertionError("network on hit"))
-            self.assertEqual(path, materialize_artifact(self.selected(), checkout_root=td, transport=bomb))
+            self.assertEqual(path, materialize_artifact(self.selected(), checkout_root=td, cache_root=cache, transport=bomb))
             self.assertEqual([], bomb.calls)
 
     def test_digest_mismatch_and_interruption_clean_temporary_files(self):
         for transport in (RecordingTransport((b"wrong",)), RecordingTransport((b"pay",), MaterializationError("interrupted"))):
             with self.subTest(transport=transport), tempfile.TemporaryDirectory() as td:
+                cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
                 with self.assertRaises(MaterializationError):
-                    materialize_artifact(self.selected(), checkout_root=td, transport=transport)
-                tmp = Path(td) / ".docker-cache/build-artifacts/tmp"
-                self.assertEqual([], list(tmp.iterdir()))
-                self.assertFalse(any((Path(td) / ".docker-cache/build-artifacts/blobs").rglob("*.blob")))
+                    materialize_artifact(self.selected(), checkout_root=td, cache_root=cache, transport=transport)
+                from docker.versioning.project_state import resolve_project_state
+                state = resolve_project_state(td, cache_root=cache)
+                self.assertEqual([], list((state.build_artifacts_root / "tmp").iterdir()))
+                self.assertFalse(any((state.build_artifacts_root / "blobs").rglob("*.blob")))
 
     def test_atomic_publication_destination_absent_until_complete(self):
         with tempfile.TemporaryDirectory() as td:
             selected = self.selected()
-            destination = Path(td) / ".docker-cache/build-artifacts/blobs/sha256" / (selected.identity.hex_digest() + ".blob")
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
+            from docker.versioning.project_state import resolve_project_state
+            state = resolve_project_state(td, cache_root=cache)
+            destination = state.build_artifacts_root / "blobs/sha256" / (selected.identity.hex_digest() + ".blob")
             class Observing:
                 def stream(self, url):
                     self_outer.assertFalse(destination.exists())
                     yield b"payload"
                     self_outer.assertFalse(destination.exists())
             self_outer = self
-            materialize_artifact(selected, checkout_root=td, transport=Observing())
+            materialize_artifact(selected, checkout_root=td, cache_root=cache, transport=Observing())
             self.assertTrue(destination.exists())
 
 

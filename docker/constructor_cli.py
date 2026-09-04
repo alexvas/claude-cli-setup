@@ -152,18 +152,21 @@ def _resolve_inventory_path(request: CommandRequest) -> Path:
 
 
 def _resolve_runtime_projection(
-    explicit: object, repo_root: Path,
+    explicit: object, repo_root: Path, cache_root: Path,
 ) -> Path | None:
     """Resolve the runtime projection path for verification.
 
     *explicit* is the value of ``--runtime-projection`` (a string
-    or ``None``).  When provided, it is used directly.  When absent,
-    the most recent ``*.toml`` from ``.docker-generated/runtime/``
-    is used.  Returns ``None`` when no projection can be found.
+    or ``None``). When absent, the most recent external runtime projection
+    is used. Returns ``None`` only when the namespace or projection is absent;
+    unsafe or mismatched project state raises ``ProjectStateError``.
     """
     if explicit:
         return Path(str(explicit))
-    runtime_dir = repo_root / ".docker-generated" / "runtime"
+    from docker.versioning.project_state import resolve_project_state
+    runtime_dir = resolve_project_state(
+        repo_root, cache_root=cache_root, create=False,
+    ).runtime_root
     if not runtime_dir.is_dir():
         return None
     tomls = sorted(
@@ -920,7 +923,20 @@ def _real_dispatcher(
         # Build projection
         from pathlib import Path as _Path
         _repo_root = _Path(inv_path).resolve().parent
-        build_proj_path = _repo_root / ".docker-generated" / "docker-constructor.build.effective.toml"
+        from docker.versioning.project_state import resolve_project_state
+        from docker.versioning.inventory import resolve_local_corporate_settings
+        from docker.versioning.cache_storage import prepare_resolved_root, resolve_effective_root
+        try:
+            _local_cache = resolve_local_corporate_settings(
+                inv_path, repository_root=_repo_root,
+            )
+            _cache_root = resolve_effective_root(
+                getattr(getattr(_local_cache, "cache", None), "dir", None),
+                xdg_cache_home=_os_builtin.environ.get("XDG_CACHE_HOME"), home=_Path.home(),
+            )
+        except Exception as exc:
+            return CommandResult(exit_kind=ExitKind.CONFIG,
+                                 message=f"Failed to resolve constructor cache root: {exc}")
 
         # Runtime project paths — populated during runtime verification
         # and referenced by evidence collection.
@@ -930,6 +946,13 @@ def _real_dispatcher(
         all_ok = True
 
         if scope in ("build", "all"):
+            try:
+                build_proj_path = resolve_project_state(
+                    _repo_root, cache_root=_cache_root, create=False,
+                ).generated_root / "docker-constructor.build.effective.toml"
+            except Exception as exc:
+                return CommandResult(exit_kind=ExitKind.CONFIG,
+                                     message=f"Failed to resolve constructor project state: {exc}")
             from docker.launcher import ProcessRunner
             runner = _process_runner or ProcessRunner()
             b_result = verify_build(VerifyBuildRequest(
@@ -1030,9 +1053,15 @@ def _real_dispatcher(
 
                 # ── resolve runtime projection ────────────────────
                 explicit_projection = c_args.get("runtime_projection")
-                runtime_proj_path = _resolve_runtime_projection(
-                    explicit_projection, _repo_root
-                )
+                try:
+                    runtime_proj_path = _resolve_runtime_projection(
+                        explicit_projection, _repo_root, _cache_root
+                    )
+                except Exception as exc:
+                    return CommandResult(
+                        exit_kind=ExitKind.CONFIG,
+                        message=f"Failed to resolve constructor project state: {exc}",
+                    )
                 if not explicit_projection:
                     runtime_proj_path = (
                         _discover_runtime_projection_from_container(
@@ -1048,7 +1077,7 @@ def _real_dispatcher(
                             "no runtime projection found; "
                             "pass --runtime-projection, ensure the running "
                             "container has its runtime projection mount, or "
-                            "ensure .docker-generated/runtime/ contains a "
+                            "ensure external project-state runtime/ contains a "
                             ".toml file"
                         ],
                     }
@@ -1133,11 +1162,21 @@ def _real_dispatcher(
             # Output directory — create a timestamped directory.
             _ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
             raw_output_dir = c_args.get("output_dir")
-            evidence_dir = (
-                _Path(raw_output_dir)
-                if isinstance(raw_output_dir, (str, _os_builtin.PathLike))
-                else _repo_root / ".docker-generated" / "evidence" / _ts
-            )
+            if isinstance(raw_output_dir, (str, _os_builtin.PathLike)):
+                evidence_dir = _Path(raw_output_dir)
+            elif bool(c_args.get("dry_run", False)):
+                # Prospective only: do not initialise project state for dry-runs.
+                evidence_dir = resolve_project_state(
+                    _repo_root, cache_root=_cache_root, create=False,
+                ).evidence_root / _ts
+            else:
+                try:
+                    evidence_dir = resolve_project_state(
+                        _repo_root, cache_root=prepare_resolved_root(_cache_root), create=True,
+                    ).evidence_root / _ts
+                except Exception as exc:
+                    return CommandResult(exit_kind=ExitKind.CONFIG,
+                                         message=f"Failed to initialize constructor project state: {exc}")
 
             _runner2 = _process_runner
             if _runner2 is None:

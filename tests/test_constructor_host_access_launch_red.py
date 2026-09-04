@@ -10,7 +10,7 @@ from docker.versioning.rendering import RunRenderInputs, render_run_vector
 
 _BASE = dict(
     image="pi-cli-pi:latest", container_name="pi-1",
-    projection_host_path="/tmp/.docker-generated/runtime/projection.toml",
+    projection_host_path="/tmp/projects/constructor-identity/runtime/projection.toml",
     projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
     pi_home_host="/home/user/.pi", main_project="/work/project",
 )

@@ -6,6 +6,7 @@ a generated TOML inventory file.  No Docker, no network, no subprocess.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from .errors import EffectiveConfigError
 
 if TYPE_CHECKING:
     from .artifact_cache import SelectedArtifact, VerifiedCacheBlob
+    from .project_state import ProjectState
 
 # ---------------------------------------------------------------------------
 # Immutable rendering input models (Stage 6)
@@ -32,6 +34,9 @@ _CONTAINER_PI_HOME = "/home/dev/.pi"
 
 # Fixed read-only container root for runtime artifact mounts.
 _RUNTIME_ARTIFACT_ROOT = "/run/pi-cli/runtime-artifacts"
+
+# No-follow directory-open flags shared by the descriptor-relative publisher.
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
 @dataclass(frozen=True)
@@ -381,6 +386,9 @@ class RunRenderInputs:
     """Optional bypass list emitted under ``NO_PROXY`` and ``no_proxy``
     only when explicitly configured (and only when *proxy_url* is set)."""
 
+    project_state_runtime_root: Optional[str] = None
+    """Verified external project-state runtime child for containment."""
+
 
 # ── platform helpers ────────────────────────────────────────────────
 
@@ -600,9 +608,11 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
             f"got {inputs.projection_container_path!r}"
         )
 
-    # Projection host path must be under .docker-generated/runtime/ and
-    # must not be a forbidden file.
-    _validate_projection_host_path(inputs.projection_host_path)
+    # Projection host path must be under the verified external runtime child
+    # and must not be a forbidden file.
+    _validate_projection_host_path(
+        inputs.projection_host_path, inputs.project_state_runtime_root,
+    )
 
     # Destination mount collisions: every dst must be unique across
     # Pi home, projection, and all project mounts.
@@ -718,9 +728,9 @@ def plan_dry_run_artifact_mounts(
     return tuple(mounts)
 
 
-def _validate_projection_host_path(host_path: str) -> None:
-    """Reject projection host paths that are forbidden or outside
-    the allowed ``.docker-generated/runtime/`` directory."""
+def _validate_projection_host_path(host_path: str, runtime_root: str | None = None) -> None:
+    """Reject projection host paths that are forbidden or outside an
+    external project-state ``runtime`` child."""
     import os
 
     # Must be absolute.
@@ -732,20 +742,20 @@ def _validate_projection_host_path(host_path: str) -> None:
     normalized = os.path.normpath(host_path)
     parts = normalized.split(os.sep)
 
-    # Must have at least: /, .docker-generated, runtime, <file>
-    if len(parts) < 3:
+    if len(parts) < 3 or parts[-2] != "runtime":
         raise ValueError(
-            f"projection_host_path must be under .docker-generated/runtime/, "
-            f"got {host_path!r}"
+            f"projection_host_path must name a runtime child, got {host_path!r}"
         )
-
-    # The parent directory must be named '.docker-generated' and its
-    # child must be 'runtime'.
-    if parts[-3] != ".docker-generated" or parts[-2] != "runtime":
-        raise ValueError(
-            f"projection_host_path must be under .docker-generated/runtime/, "
-            f"got {host_path!r}"
-        )
+    # Reject a deceptive legacy substring even for structural callers.
+    if any(".docker-generated" in part and part != ".docker-generated" for part in parts):
+        raise ValueError("projection_host_path contains an unsafe legacy path segment")
+    # Only orchestration owns an authoritative namespace descriptor. Direct
+    # renderer unit callers remain structural; execution always supplies root.
+    if runtime_root is not None:
+        root = os.path.normpath(runtime_root)
+        if (".docker-generated" in parts or not os.path.isabs(root)
+                or os.path.commonpath((root, normalized)) != root):
+            raise ValueError("projection_host_path escapes verified external project-state")
 
     # Reject effective build projection.
     if "build.effective" in parts[-1]:
@@ -1543,55 +1553,125 @@ def write_effective_build(
     projection,
     *,
     repo_root,
+    project_state: ProjectState | None = None,
 ) -> Path:
-    """Write the effective build projection atomically to the canonical path.
+    """Write the effective build projection atomically into verified state.
 
-    The canonical output is always ``.docker-generated/docker-constructor.build.effective.toml``
-    relative to *repo_root*.  No other destination is accepted.
+    The destination is always the selected constructor project's external
+    ``generated/docker-constructor.build.effective.toml``.  The supplied (or
+    resolved) ``ProjectState`` is re-verified with :func:`validate_project_state`,
+    which recomputes the canonical project identity and namespace name and
+    re-reads ``project.json`` through a retained no-follow namespace
+    descriptor.  ``generated`` is then opened relative to that descriptor and
+    the leaf is created, written, fsynced, and promoted with ``os.replace``
+    through the retained descriptors.  No pathname-based
+    ``resolve``/``mkdir``/``mkstemp``/``replace`` is used, so a symlink
+    swapped in during publication cannot redirect the write outside the
+    verified namespace.
 
-    Symlink escapes are rejected: if ``.docker-generated`` or the leaf file
-    is a symlink that points outside *repo_root*, the write is refused.
-
-    Validates the projection before touching any existing file.
-    Writes to a temporary sibling, flushes, and os.replaces.
+    A *project_state* supplied by the caller must already belong to the
+    canonical *repo_root*; otherwise it is resolved from *repo_root*.
     """
+    from docker.versioning.project_state import (
+        ProjectState,
+        ProjectStateError,
+        resolve_project_state,
+        validate_project_state,
+    )
+
     repo_root = Path(repo_root).resolve()
-
-    # Build unresolved canonical path; reject symlink escapes
-    canonical_parent = repo_root / ".docker-generated"
-    canonical_dest = canonical_parent / "docker-constructor.build.effective.toml"
-
-    _require_not_symlink_escape(canonical_parent, repo_root, label=".docker-generated")
-    # Leaf symlinks are always rejected — os.replace would overwrite the
-    # target, leaving the canonical path as a symlink.
-    if canonical_dest.is_symlink():
+    if project_state is None:
+        project_state = resolve_project_state(repo_root)
+    elif project_state.project_path != repo_root:
         raise EffectiveInventoryOutputError(
-            f"docker-constructor.build.effective.toml is a symlink: {canonical_dest}"
+            f"project state belongs to {project_state.project_path!r}, "
+            f"not the constructor project {repo_root!r}"
         )
 
-    destination = canonical_dest.resolve()
-
-    # Validate before touching disk
+    # Validate the projection in memory before touching any existing file.
     data = serialize_effective_build(projection)
     validate_effective_build(data)
 
-    # Atomic write
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        suffix=".toml",
-        prefix=".build-effective-",
-        dir=str(destination.parent),
-    )
+    destination_name = "docker-constructor.build.effective.toml"
+    generated_fd = tmp_fd = None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            _write_toml(fh, data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, destination)
-    except Exception:
-        os.unlink(tmp_path)
-        raise
-    return destination
+        # Re-verify the supplied state and retain its namespace descriptor.
+        with validate_project_state(project_state) as validated:
+            namespace_fd = validated.namespace_fd
+            try:
+                generated_fd = os.open("generated", _DIR_FLAGS, dir_fd=namespace_fd)
+            except OSError as exc:
+                raise EffectiveInventoryOutputError(
+                    f"generated project state child is unsafe or missing: {exc}"
+                ) from exc
+            generated_stat = os.fstat(generated_fd)
+            if (not stat.S_ISDIR(generated_stat.st_mode)
+                    or generated_stat.st_uid != os.geteuid()
+                    or stat.S_IMODE(generated_stat.st_mode) != 0o700):
+                raise EffectiveInventoryOutputError(
+                    "generated project state child must be invoking-user-owned "
+                    "and mode 0700"
+                )
+
+            # Validate an existing destination leaf without following links.
+            try:
+                dest_stat = os.stat(
+                    destination_name, dir_fd=generated_fd, follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                dest_stat = None
+            if dest_stat is not None:
+                if not stat.S_ISREG(dest_stat.st_mode):
+                    raise EffectiveInventoryOutputError(
+                        f"{destination_name} is not a regular file"
+                    )
+                if dest_stat.st_uid != os.geteuid():
+                    raise EffectiveInventoryOutputError(
+                        f"{destination_name} is not owned by the invoking user"
+                    )
+                if stat.S_IMODE(dest_stat.st_mode) != 0o600:
+                    raise EffectiveInventoryOutputError(
+                        f"{destination_name} has mode "
+                        f"{oct(stat.S_IMODE(dest_stat.st_mode))}, expected 0o600"
+                    )
+
+            # Atomic descriptor-relative publication through a random sibling.
+            temp_name = f".build-effective-{os.urandom(16).hex()}.toml"
+            tmp_fd = os.open(
+                temp_name,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=generated_fd,
+            )
+            os.fchmod(tmp_fd, 0o600)
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8", closefd=False) as fh:
+                    _write_toml(fh, data)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.close(tmp_fd)
+                tmp_fd = None
+                os.replace(
+                    temp_name, destination_name,
+                    src_dir_fd=generated_fd, dst_dir_fd=generated_fd,
+                )
+                os.fsync(generated_fd)
+            except BaseException:
+                try:
+                    os.unlink(temp_name, dir_fd=generated_fd)
+                except OSError:
+                    pass
+                raise
+            finally:
+                if tmp_fd is not None:
+                    os.close(tmp_fd)
+    except ProjectStateError as exc:
+        raise EffectiveInventoryOutputError(str(exc)) from exc
+    finally:
+        if generated_fd is not None:
+            os.close(generated_fd)
+
+    return project_state.generated_root / destination_name
 
 
 def _require_not_symlink_escape(path: Path, repo_root: Path, *, label: str) -> None:

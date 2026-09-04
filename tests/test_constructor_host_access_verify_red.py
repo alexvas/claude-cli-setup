@@ -518,14 +518,12 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             comp = root / "docker-constructor.local.toml"
             # Write minimal files — validation is mocked
             inv.write_text('schema = 1\n')
-            comp.write_text('')
-            gen = root / ".docker-generated"
-            gen.mkdir(parents=True)
-            bp = gen / "docker-constructor.build.effective.toml"
-            bp.write_text('[python]\nversion = "3.12.0"\n')
-            rt_dir = gen / "runtime"
-            rt_dir.mkdir(parents=True)
-            rp = rt_dir / "a1b2c3d4.toml"
+            from docker.versioning.project_state import resolve_project_state
+            cache = root / "constructor-cache"
+            cache.mkdir(mode=0o700)
+            comp.write_text(f"[cache]\ndir = {str(cache)!r}\n")
+            state = resolve_project_state(root, cache_root=cache)
+            rp = state.runtime_root / "a1b2c3d4.toml"
             rp.write_text(
                 '[extensions]\n'
                 '[project_paths]\n'
@@ -610,13 +608,14 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             root = Path(tmp)
             inv = root / "docker-constructor.toml"
             inv.write_text('schema = 1\n')
-            gen = root / ".docker-generated"
-            gen.mkdir(parents=True)
-            bp = gen / "docker-constructor.build.effective.toml"
-            bp.write_text('[python]\nversion = "3.12.0"\n')
-            rt_dir = gen / "runtime"
-            rt_dir.mkdir(parents=True)
-            rp = rt_dir / "a1b2c3d4.toml"
+            from docker.versioning.project_state import resolve_project_state
+            cache = root / "constructor-cache"
+            cache.mkdir(mode=0o700)
+            (root / "docker-constructor.local.toml").write_text(
+                f"[cache]\ndir = {str(cache)!r}\n"
+            )
+            state = resolve_project_state(root, cache_root=cache)
+            rp = state.runtime_root / "a1b2c3d4.toml"
             rp.write_text(
                 '[extensions]\n'
                 '[project_paths]\n'
@@ -692,13 +691,15 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             root = Path(tmp)
             inv = root / "custom.toml"
             inv.write_text('schema = 1\n')
-            gen = root / ".docker-generated"
-            gen.mkdir(parents=True)
-            bp = gen / "docker-constructor.build.effective.toml"
-            bp.write_text('[python]\nversion = "3.12.0"\n')
-            rt_dir = gen / "runtime"
-            rt_dir.mkdir(parents=True)
-            rp = rt_dir / "a1b2c3d4.toml"
+            from docker.versioning.project_state import resolve_project_state
+            cache = root / "constructor-cache"
+            cache.mkdir(mode=0o700)
+            # A custom inventory resolves its own .local companion.
+            (root / "custom.local.toml").write_text(
+                f"[cache]\ndir = {str(cache)!r}\n"
+            )
+            state = resolve_project_state(root, cache_root=cache)
+            rp = state.runtime_root / "a1b2c3d4.toml"
             rp.write_text(
                 '[extensions]\n'
                 '[project_paths]\n'
@@ -950,5 +951,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
             )
             self.assertEqual(3, rc,
                              "malformed companion must exit with OPERATIONAL")
-            self.assertIn("cannot load", (err or "").lower(),
-                          f"error must mention load failure, got: {err!r}")
+            self.assertIn("companion", (err or "").lower(),
+                          f"error must mention the companion, got: {err!r}")
+            self.assertIn("malformed", (err or "").lower(),
+                          f"error must mention malformed TOML, got: {err!r}")

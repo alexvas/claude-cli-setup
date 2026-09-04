@@ -16,6 +16,7 @@ from docker.versioning.build_cache import (
     BLOB_EXTENSION, BuildCacheError, build_blob_path, prepare_build_cache,
 )
 from docker.versioning.digest_identity import DigestIdentity
+from docker.versioning.project_state import ProjectState
 from docker.versioning.model import EffectiveBuildProjection
 
 
@@ -107,10 +108,11 @@ def _verify_hit(path: Path, identity: DigestIdentity) -> bool:
 
 def materialize_artifact(
     selected: SelectedBuildArtifact, *, checkout_root: str | Path,
-    transport: StreamingTransport,
+    transport: StreamingTransport, cache_root: str | Path | None = None,
+    project_state: ProjectState | None = None,
 ) -> Path:
     """Reuse a verified hit or stream, verify, and atomically publish a miss."""
-    paths = prepare_build_cache(checkout_root)
+    paths = prepare_build_cache(checkout_root, cache_root=cache_root, project_state=project_state)
     destination = build_blob_path(paths.blobs_root, selected.identity)
     if _verify_hit(destination, selected.identity):
         return destination
@@ -154,11 +156,13 @@ def materialize_artifact(
 
 def materialize_build_artifacts(
     projection: EffectiveBuildProjection, *, checkout_root: str | Path,
-    transport: StreamingTransport,
+    transport: StreamingTransport, cache_root: str | Path | None = None,
+    project_state: ProjectState | None = None,
 ) -> tuple[Path, ...]:
     results: list[Path] = []
     for selected in select_build_artifacts(projection):
         results.append(materialize_artifact(
             selected, checkout_root=checkout_root, transport=transport,
+            cache_root=cache_root, project_state=project_state,
         ))
     return tuple(results)

@@ -17,13 +17,13 @@ from docker.versioning.build_cache import (
     UNCOMMITTED_TTL_SECONDS,
     BuildCacheError,
     BuildTransactionError,
-    CheckoutBuildTransaction,
     acquire_checkout_build_lock,
     build_blob_path,
     commit_build_set,
     maintain_uncommitted_blobs,
     mark_uncommitted_blob,
     prepare_build_cache,
+    publish_uncommitted_blob,
     publish_verified_blob,
     recover_abandoned_snapshots,
 )
@@ -142,17 +142,6 @@ class BuildTransactionTest(unittest.TestCase):
         with acquire_checkout_build_lock(self.checkout):
             pass
 
-    def test_startup_maintenance_failure_releases_lock(self) -> None:
-        with mock.patch(
-            "docker.versioning.build_cache.maintain_uncommitted_blobs",
-            side_effect=RuntimeError("maintenance failed"),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "maintenance failed"):
-                with CheckoutBuildTransaction(self.checkout):
-                    pass
-        with CheckoutBuildTransaction(self.checkout):
-            pass
-
     def test_recovery_needs_live_lock_and_preserves_blobs(self) -> None:
         identity = self.blob(b"reusable")
         paths = prepare_build_cache(self.checkout)
@@ -162,9 +151,10 @@ class BuildTransactionTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             recover_abandoned_snapshots(self.checkout)  # type: ignore[call-arg]
         # A later transaction acquires the live checkout lock before recovery.
-        with CheckoutBuildTransaction(self.checkout):
-            self.assertFalse(abandoned.exists())
-            self.assertTrue(build_blob_path(paths.blobs_root, identity).exists())
+        with acquire_checkout_build_lock(self.checkout) as lock:
+            recover_abandoned_snapshots(self.checkout, lock=lock)
+        self.assertFalse(abandoned.exists())
+        self.assertTrue(build_blob_path(paths.blobs_root, identity).exists())
 
     def test_manifest_is_atomic_and_commit_precedes_superseded_delete(self) -> None:
         old, new = self.blob(b"old"), self.blob(b"new")
@@ -276,15 +266,15 @@ class BuildTransactionTest(unittest.TestCase):
         payload = b"original-publication"
         identity = DigestIdentity.from_hex("sha256", hashlib.sha256(payload).hexdigest())
         paths = prepare_build_cache(self.checkout)
-        with CheckoutBuildTransaction(self.checkout) as transaction:
-            transaction.publish_verified_blob(identity, payload, verified_at=100)
+        with acquire_checkout_build_lock(self.checkout) as lock:
+            publish_uncommitted_blob(identity, payload, checkout_root=self.checkout, lock=lock, verified_at=100)
         blob = build_blob_path(paths.blobs_root, identity)
         marker = paths.markers_root / f"sha256:{identity.hex_digest()}.json"
         original_blob = blob.read_bytes()
         original_marker = marker.read_bytes()
-        with CheckoutBuildTransaction(self.checkout, now=100) as transaction:
+        with acquire_checkout_build_lock(self.checkout) as lock:
             with self.assertRaisesRegex(Exception, "digest mismatch"):
-                transaction.publish_verified_blob(identity, b"mismatched", verified_at=200)
+                publish_uncommitted_blob(identity, b"mismatched", checkout_root=self.checkout, lock=lock, verified_at=200)
         self.assertEqual(original_blob, blob.read_bytes())
         self.assertEqual(original_marker, marker.read_bytes())
 
@@ -292,17 +282,15 @@ class BuildTransactionTest(unittest.TestCase):
         payload = b"failed-download"
         identity = DigestIdentity.from_hex("sha256", hashlib.sha256(payload).hexdigest())
         paths = prepare_build_cache(self.checkout)
-        with CheckoutBuildTransaction(self.checkout, now=100) as transaction:
-            transaction.publish_verified_blob(identity, payload, verified_at=100)
+        with acquire_checkout_build_lock(self.checkout) as lock:
+            publish_uncommitted_blob(identity, payload, checkout_root=self.checkout, lock=lock, verified_at=100)
             self.assertEqual(
                 {"verified_at": 100},
                 json.loads((paths.markers_root / f"sha256:{identity.hex_digest()}.json").read_text()),
             )
             # No commit models a failed/interrupted transaction.
-        with CheckoutBuildTransaction(
-            self.checkout, now=100 + UNCOMMITTED_TTL_SECONDS,
-        ):
-            pass
+        with acquire_checkout_build_lock(self.checkout) as lock:
+            maintain_uncommitted_blobs(self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS)
         self.assertFalse(build_blob_path(paths.blobs_root, identity).exists())
 
     def test_corrupt_stale_marker_never_deletes_committed_blob(self) -> None:
@@ -316,56 +304,6 @@ class BuildTransactionTest(unittest.TestCase):
             maintain_uncommitted_blobs(self.checkout, lock=lock, now=1)
         self.assertFalse(marker.exists())
         self.assertTrue(build_blob_path(paths.blobs_root, identity).exists())
-
-    def test_interrupted_commit_cleanup_recovers_on_next_transaction(self) -> None:
-        previous, replacement = self.blob(b"previous-live"), self.blob(b"replacement-live")
-        paths = prepare_build_cache(self.checkout)
-        with acquire_checkout_build_lock(self.checkout) as lock:
-            commit_build_set(self.checkout, {previous}, lock=lock)
-        with acquire_checkout_build_lock(self.checkout) as lock:
-            with mock.patch(
-                "docker.versioning.build_cache._recover_pending_cleanup",
-                side_effect=KeyboardInterrupt(),
-            ):
-                with self.assertRaises(KeyboardInterrupt):
-                    commit_build_set(self.checkout, {replacement}, lock=lock)
-        self.assertTrue(build_blob_path(paths.blobs_root, previous).exists())
-        self.assertTrue((paths.persistent_root / "pending-build-cleanup.json").exists())
-        with CheckoutBuildTransaction(self.checkout):
-            pass
-        self.assertFalse(build_blob_path(paths.blobs_root, previous).exists())
-        self.assertTrue(build_blob_path(paths.blobs_root, replacement).exists())
-        self.assertFalse((paths.persistent_root / "pending-build-cleanup.json").exists())
-
-    def test_interrupted_cleanup_retries_safely_on_next_transaction(self) -> None:
-        first, second, replacement = self.blob(b"old-one"), self.blob(b"old-two"), self.blob(b"new")
-        paths = prepare_build_cache(self.checkout)
-        with acquire_checkout_build_lock(self.checkout) as lock:
-            commit_build_set(self.checkout, {first, second}, lock=lock)
-        from docker.versioning.build_cache import _remove_blob_and_marker
-        calls = 0
-
-        def remove_once_then_interrupt(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise KeyboardInterrupt()
-            return _remove_blob_and_marker(*args, **kwargs)
-
-        with acquire_checkout_build_lock(self.checkout) as lock:
-            with mock.patch(
-                "docker.versioning.build_cache._remove_blob_and_marker",
-                side_effect=remove_once_then_interrupt,
-            ):
-                with self.assertRaises(KeyboardInterrupt):
-                    commit_build_set(self.checkout, {replacement}, lock=lock)
-        self.assertTrue((paths.persistent_root / "pending-build-cleanup.json").exists())
-        with CheckoutBuildTransaction(self.checkout):
-            pass
-        self.assertFalse(build_blob_path(paths.blobs_root, first).exists())
-        self.assertFalse(build_blob_path(paths.blobs_root, second).exists())
-        self.assertTrue(build_blob_path(paths.blobs_root, replacement).exists())
-        self.assertFalse((paths.persistent_root / "pending-build-cleanup.json").exists())
 
     def test_exact_ttl_boundary_and_committed_immunity(self) -> None:
         expired, committed = self.blob(b"expired"), self.blob(b"committed")

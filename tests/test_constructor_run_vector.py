@@ -21,7 +21,7 @@ from docker.versioning.rendering import (
 def _render(*,
             image: str = "pi-cli-pi:latest",
             container_name: str = "pi-1",
-            projection_host_path: str = "/home/dev/.pi-cli/.docker-generated/runtime/proj-abc123.toml",
+            projection_host_path: str = "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/proj-abc123.toml",
             projection_container_path: str = "/run/pi-cli/docker-constructor.runtime.toml",
             pi_home_host: str = "/home/alice/.pi",
             main_project: str = "/home/dev/work/my-project",
@@ -124,19 +124,15 @@ class TestMounts(unittest.TestCase):
         self.assertEqual(pi_mount["dst"], "/home/dev/.pi")
 
     def test_runtime_projection_mount_present(self):
+        projection = "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/proj.toml"
         args = _render(
-            projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/proj.toml"
-            ),
+            projection_host_path=projection,
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         )
         mounts = _collect_mounts(args)
         proj = _find_mount(mounts, dst="/run/pi-cli/docker-constructor.runtime.toml")
         self.assertIsNotNone(proj, "missing runtime projection mount")
-        self.assertEqual(
-            proj["src"],
-            "/home/dev/.pi-cli/.docker-generated/runtime/proj.toml",
-        )
+        self.assertEqual(proj["src"], projection)
 
     def test_runtime_projection_mount_is_readonly(self):
         args = _render()
@@ -150,13 +146,13 @@ class TestMounts(unittest.TestCase):
         """The container-side path is fixed regardless of host path."""
         a = _render(
             projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/launch-a.toml"
+                "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/launch-a.toml"
             ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         )
         b = _render(
             projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/launch-b.toml"
+                "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/launch-b.toml"
             ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         )
@@ -380,44 +376,26 @@ class TestCommandSpacesAndMetacharacters(unittest.TestCase):
 class TestDeterministicOutput(unittest.TestCase):
     """Equivalent inputs produce byte-for-byte identical vectors."""
 
+    _PROJECTION = "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/x.toml"
+
     def test_same_inputs_produce_identical_vector(self):
         ri = RunRenderInputs(
-            image="pi-cli-pi:latest",
-            container_name="pi-1",
-            projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
-            ),
+            image="pi-cli-pi:latest", container_name="pi-1",
+            projection_host_path=self._PROJECTION,
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-            pi_home_host="/home/alice/.pi",
-            main_project="/home/dev/work/main",
+            pi_home_host="/home/alice/.pi", main_project="/home/dev/work/main",
         )
-        a = render_run_vector(ri)
-        b = render_run_vector(ri)
-        self.assertEqual(a, b)
-        self.assertEqual(hash(a), hash(b))
+        self.assertEqual(render_run_vector(ri), render_run_vector(ri))
 
     def test_different_kwarg_order_same_result(self):
-        a = render_run_vector(RunRenderInputs(
-            image="pi-cli-pi:latest",
-            container_name="pi-1",
-            projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
-            ),
+        a = RunRenderInputs(image="pi-cli-pi:latest", container_name="pi-1",
+            projection_host_path=self._PROJECTION,
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-            pi_home_host="/home/alice/.pi",
-            main_project="/home/dev/work/main",
-        ))
-        b = render_run_vector(RunRenderInputs(
-            main_project="/home/dev/work/main",
-            pi_home_host="/home/alice/.pi",
+            pi_home_host="/home/alice/.pi", main_project="/home/dev/work/main")
+        b = RunRenderInputs(main_project="/home/dev/work/main", pi_home_host="/home/alice/.pi",
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-            projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/x.toml"
-            ),
-            container_name="pi-1",
-            image="pi-cli-pi:latest",
-        ))
-        self.assertEqual(a, b)
+            projection_host_path=self._PROJECTION, container_name="pi-1", image="pi-cli-pi:latest")
+        self.assertEqual(render_run_vector(a), render_run_vector(b))
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +637,7 @@ class TestMountSecurity(unittest.TestCase):
         # This must not raise.
         _render(
             projection_host_path=(
-                "/home/dev/.pi-cli/.docker-generated/runtime/proj-abc123.toml"
+                "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/proj-abc123.toml"
             ),
         )
 

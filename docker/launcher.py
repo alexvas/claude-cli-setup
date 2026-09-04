@@ -436,7 +436,16 @@ class RunRequest:
     bytes so digest-mismatch paths are network-independent."""
 
     _artifact_cache_root: str | None = None
-    """Test-only resolved runtime-artifact cache injection seam."""
+    """Test-only exact runtime-artifact blob-root injection seam."""
+
+    _artifact_locks_root: str | None = None
+    """Optional test-only runtime-artifact lock-root injection seam."""
+
+    _artifact_tmp_root: str | None = None
+    """Optional test-only runtime-artifact temporary-root injection seam."""
+
+    _constructor_cache_root: str | None = None
+    """Optional test-only external constructor project-state root."""
 
     def __post_init__(self) -> None:
         if not isinstance(self.overrides, MappingProxyType):
@@ -606,7 +615,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # secured constructor cache root; checkout-local generated output is
     # reserved for projections and evidence.
     from docker.versioning.cache_storage import (
-        prepare_default_root, prepare_local_root,
+        prepare_resolved_root, resolve_effective_root,
         runtime_artifacts_blobs_child, runtime_artifacts_locks_child,
         runtime_artifacts_tmp_child,
     )
@@ -616,42 +625,40 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         getattr(local_corporate, "cache", None), "dir", None,
     )
     try:
+        resolved_cache_root = (Path(request._constructor_cache_root)
+            if request._constructor_cache_root is not None else resolve_effective_root(
+                local_cache_dir, xdg_cache_home=xdg_cache_home, home=cache_home,
+            ))
         if request._artifact_cache_root is None:
-            prepared_cache_root = (
-                prepare_local_root(
-                    local_cache_dir,
-                    xdg_cache_home=xdg_cache_home,
-                    home=cache_home,
-                )
-                if local_cache_dir is not None
-                else prepare_default_root(xdg_cache_home, home=cache_home)
-            )
-            runtime_cache_root = str(
-                runtime_artifacts_blobs_child(prepared_cache_root)
-            )
-            runtime_locks_root = str(
-                runtime_artifacts_locks_child(prepared_cache_root)
-            )
-            runtime_tmp_root = str(
-                runtime_artifacts_tmp_child(prepared_cache_root)
-            )
+            runtime_cache_root = str(runtime_artifacts_blobs_child(resolved_cache_root))
+            runtime_locks_root = str(runtime_artifacts_locks_child(resolved_cache_root))
+            runtime_tmp_root = str(runtime_artifacts_tmp_child(resolved_cache_root))
         else:
+            # Keep arbitrary test blob roots opaque; never infer project state
+            # from them. Lock/tmp seams are explicit when isolation matters.
             runtime_cache_root = request._artifact_cache_root
-            runtime_locks_root = str(
-                runtime_artifacts_locks_child(
-                    Path(runtime_cache_root).parent.parent
-                )
-            )
-            runtime_tmp_root = str(
-                runtime_artifacts_tmp_child(
-                    Path(runtime_cache_root).parent.parent
-                )
-            )
+            runtime_locks_root = request._artifact_locks_root or runtime_cache_root
+            runtime_tmp_root = request._artifact_tmp_root or runtime_cache_root
     except Exception as exc:
         return RunResult(
             exit_kind=ExitKind.CONFIG,
             message=f"Failed to prepare runtime artifact cache: {exc}",
         )
+
+    # Dry-run needs only a prospective namespace. Real execution defers state
+    # preparation until all input validation has completed.
+    from docker.versioning.project_state import resolve_project_state
+    constructor_project = Path(request.repo_root or Path(request.inventory_path).resolve().parent)
+    project_state = None
+    if request.dry_run:
+        try:
+            project_state = resolve_project_state(
+                constructor_project, cache_root=resolved_cache_root, create=False,
+            )
+        except Exception as exc:
+            return RunResult(exit_kind=ExitKind.CONFIG,
+                             message=f"Failed to resolve constructor project state: {exc}")
+    projection_parent_dir = str(project_state.runtime_root) if project_state else ""
 
     # ── Step 1c: resolve host-access policy ─────────────────
     try:
@@ -693,6 +700,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # ── Step 3: dry-run ─────────────────────────────────────
     if request.dry_run:
         import dataclasses
+        assert project_state is not None
 
         try:
             # Compute projection hash from the resolved effective
@@ -745,7 +753,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 container_name="pi-N",
                 pi_home_host=request.pi_home_host,
                 projection_host_path=(
-                    "/tmp/.docker-generated/runtime/projection.toml"
+                    str(project_state.runtime_root / "projection.toml")
                 ),
                 projection_container_path=projection_container_path,
                 main_project=request.selection.main_project,
@@ -760,6 +768,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 corporate_trust_bundle=corporate_trust_bundle,
                 proxy_url=proxy_url,
                 proxy_no_proxy=proxy_no_proxy,
+                project_state_runtime_root=str(project_state.runtime_root),
             )
             run_args = render_run_vector(render_inputs)
             display = shlex.join(run_args)
@@ -778,6 +787,15 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         )
 
     # ── Step 3b: materialize unique selected artifacts ─────
+    try:
+        project_state = resolve_project_state(
+            constructor_project,
+            cache_root=prepare_resolved_root(resolved_cache_root), create=True,
+        )
+        projection_parent_dir = str(project_state.runtime_root)
+    except Exception as exc:
+        return RunResult(exit_kind=ExitKind.CONFIG,
+                         message=f"Failed to resolve constructor project state: {exc}")
     # selected_artifacts from resolve_runtime already deduplicates by
     # integrity.  Each entry in the projection retains its independent
     # package/version/metadata identity.
@@ -858,7 +876,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     try:
         handle = factory(
             effective,
-            parent_dir=request.projection_parent_dir,
+            parent_dir=projection_parent_dir,
         )
     except Exception as exc:
         return RunResult(
@@ -903,6 +921,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 corporate_trust_bundle=corporate_trust_bundle,
                 proxy_url=proxy_url,
                 proxy_no_proxy=proxy_no_proxy,
+                project_state_runtime_root=str(project_state.runtime_root),
             )
             run_args = render_run_vector(render_inputs)
 

@@ -17,6 +17,7 @@ import re
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from typing import Any, Callable, Sequence
 from unittest.mock import patch
 
@@ -52,6 +53,15 @@ def _run(
     _create_projection: Any = None,
     _project_selector: Any = None,
 ) -> tuple[int, str, str]:
+    for index, value in enumerate(argv[:-1]):
+        if value == "--main-project" and str(argv[index + 1]).startswith("/tmp/"):
+            Path(argv[index + 1]).mkdir(parents=True, exist_ok=True)
+    if _create_projection is not None:
+        original_create_projection = _create_projection
+        def _create_projection(_projection: Any, *, parent_dir: str) -> Any:
+            handle = original_create_projection(_projection, parent_dir=parent_dir)
+            handle.path = str(Path(parent_dir) / "fake-projection.toml")
+            return handle
     out = io.StringIO()
     err = io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
@@ -2447,10 +2457,12 @@ class TestVerifyBuildWiring(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
         from pathlib import Path
-        # Create a temporary build projection that verify_build can parse.
+        # Create a temporary external build projection that verify_build can parse.
         self._tmpdir = tempfile.TemporaryDirectory()
-        self._proj_dir = Path(self._tmpdir.name) / ".docker-generated"
-        self._proj_dir.mkdir(parents=True)
+        self._cache_root = Path(self._tmpdir.name) / "constructor-cache"
+        self._cache_root.mkdir(mode=0o700)
+        from docker.versioning.project_state import resolve_project_state
+        self._proj_dir = resolve_project_state(self._tmpdir.name, cache_root=self._cache_root).generated_root
         proj_path = self._proj_dir / "docker-constructor.build.effective.toml"
         proj_path.write_text(
             '[python]\nversion = "3.12.0"\n'
@@ -2465,13 +2477,15 @@ class TestVerifyBuildWiring(unittest.TestCase):
             '[openspec]\nversion = "v0.15.0"\n'
             '[oh-my-zsh]\nrevision = "abc1234"\n'
         )
-        # Inventory pointing to the repo root
+        # Inventory pointing to the temporary constructor project.
         self._inv_path = Path(self._tmpdir.name) / "docker-constructor.toml"
-        # Copy the real inventory so validation passes.
         import shutil as _shutil
         _shutil.copyfile(
             Path(__file__).resolve().parent.parent / "docker-constructor.toml",
             self._inv_path,
+        )
+        self._inv_path.with_name("docker-constructor.local.toml").write_text(
+            f'[cache]\ndir = "{self._cache_root}"\n'
         )
 
     def tearDown(self) -> None:
@@ -2584,8 +2598,11 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         import tempfile
         from pathlib import Path
         self._tmpdir = tempfile.TemporaryDirectory()
-        self._proj_dir = Path(self._tmpdir.name) / ".docker-generated"
-        self._proj_dir.mkdir(parents=True)
+        self._cache_root = Path(self._tmpdir.name) / "constructor-cache"
+        self._cache_root.mkdir(mode=0o700)
+        from docker.versioning.project_state import resolve_project_state
+        _state = resolve_project_state(self._tmpdir.name, cache_root=self._cache_root)
+        self._proj_dir = _state.generated_root
         # Build projection for --scope all tests
         bp = self._proj_dir / "docker-constructor.build.effective.toml"
         bp.write_text(
@@ -2602,8 +2619,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             '[oh-my-zsh]\nrevision = "abc1234"\n'
         )
         # Runtime projection in .docker-generated/runtime/ (launcher-produced)
-        self._runtime_dir = self._proj_dir / "runtime"
-        self._runtime_dir.mkdir(parents=True)
+        self._runtime_dir = _state.runtime_root
         rp = self._runtime_dir / "a1b2c3d4.toml"
         rp.write_text(
             '[extensions]\n'
@@ -2622,6 +2638,11 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         _shutil.copyfile(
             Path(__file__).resolve().parent.parent / "docker-constructor.toml",
             self._inv_path,
+        )
+        # Point the verify command at the same external project state via
+        # [cache].dir in the local companion beside the inventory.
+        (Path(self._tmpdir.name) / "docker-constructor.local.toml").write_text(
+            f"[cache]\ndir = {str(self._cache_root)!r}\n"
         )
 
     def tearDown(self) -> None:

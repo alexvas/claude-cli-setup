@@ -494,6 +494,22 @@ def _prepare_explicit_xdg(xdg: Path) -> None:
         os.close(current_fd)
 
 
+def resolve_effective_root(value: str | None, *, xdg_cache_home: str | None, home: Path) -> Path:
+    """Select a local override or default root without filesystem effects."""
+    if value is None:
+        return resolve_default_root(xdg_cache_home, home=home)
+    root = resolve_local_root(value, xdg_cache_home=xdg_cache_home, home=home)
+    if root is None:  # defensive: a configured value cannot resolve to None
+        raise CacheStorageError("configured cache root is missing")
+    return root
+
+
+def prepare_resolved_root(root: Path) -> Path:
+    """Harden a previously resolved dedicated constructor cache root."""
+    _harden_tree(root)
+    return root
+
+
 def prepare_default_root(xdg_cache_home: str | None, *, home: Path) -> Path:
     """Resolve and harden the default constructor cache root.
 

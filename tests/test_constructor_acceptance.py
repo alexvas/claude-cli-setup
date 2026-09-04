@@ -48,8 +48,22 @@ def _run(
     _create_projection: Any = None,
     _project_selector: Any = None,
 ) -> tuple[int, str, str]:
+    # Run commands now resolve external project state from the selected
+    # constructor project; integration fixtures must provide that readable
+    # directory rather than relying on the former lexical checkout paths.
+    for index, value in enumerate(argv[:-1]):
+        if value == "--main-project":
+            Path(argv[index + 1]).mkdir(parents=True, exist_ok=True)
     out = io.StringIO()
     err = io.StringIO()
+    # Older injected projection handles carry a checkout-local fixture path.
+    # Bind them to the external runtime child supplied by orchestration.
+    if _create_projection is not None:
+        original_create_projection = _create_projection
+        def _create_projection(_projection: Any, *, parent_dir: str) -> Any:
+            handle = original_create_projection(_projection, parent_dir=parent_dir)
+            handle.path = str(Path(parent_dir) / "fake-projection.toml")
+            return handle
     with redirect_stdout(out), redirect_stderr(err):
         rc = mod.main(
             list(argv),
@@ -1331,8 +1345,10 @@ class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self._td = Path(self._tmpdir.name)
-        self._proj_dir = self._td / ".docker-generated"
-        self._proj_dir.mkdir()
+        self._cache_root = self._td / "constructor-cache"
+        self._cache_root.mkdir(mode=0o700)
+        from docker.versioning.project_state import resolve_project_state
+        self._proj_dir = resolve_project_state(self._td, cache_root=self._cache_root).generated_root
         proj = self._proj_dir / "docker-constructor.build.effective.toml"
         proj.write_text(
             '[python]\nversion = "3.12.0"\n'
@@ -1354,6 +1370,9 @@ class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
             'provider = "docker"\n'
             'name = "pi-cli-pi"\n'
             'tag = "latest"\n'
+        )
+        self._inv_path.with_name("docker-constructor.local.toml").write_text(
+            f'[cache]\ndir = "{self._cache_root}"\n'
         )
 
     def tearDown(self) -> None:

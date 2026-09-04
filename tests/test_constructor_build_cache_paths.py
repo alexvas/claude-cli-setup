@@ -1,17 +1,6 @@
-"""RED — fixed checkout-local build-cache path contracts.
-
-Phase 1 (``materialize-build-artifacts-on-host``) keeps persistent build
-blobs beneath a fixed ignored checkout path (``.docker-cache``) and
-per-build transaction snapshots beneath checkout-local generated state
-(``.docker-generated``).  These paths are never configurable and never use
-the shared XDG constructor cache.
-
-These tests are expected to FAIL while no build-cache path module exists.
-"""
-
+"""External constructor-project build-cache path contracts."""
 from __future__ import annotations
-
-import inspect
+import hashlib
 import os
 import stat
 import tempfile
@@ -19,226 +8,128 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from docker.versioning.build_cache import (BuildCacheError, build_blob_path, prepare_build_cache,
+    resolve_build_blobs_root, resolve_build_cache_root, resolve_build_generated_root, resolve_build_tmp_root)
+from docker.versioning.digest_identity import DigestIdentity
+from docker.versioning.project_state import ProjectStateError, resolve_project_state
 
-def _build_cache_module():
-    from docker.versioning import build_cache
+class Paths(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.base=Path(self.tmp.name); self.checkout=self.base/'checkout'; self.checkout.mkdir()
+        self.cache=self.base/'cache'; self.cache.mkdir(mode=0o700)
+        self.state=resolve_project_state(self.checkout, cache_root=self.cache)
 
-    return build_cache
+    def test_all_build_paths_are_children_of_resolved_project_state(self):
+        self.assertEqual(resolve_build_cache_root(self.checkout, cache_root=self.cache), self.state.build_artifacts_root)
+        self.assertEqual(resolve_build_blobs_root(self.checkout, cache_root=self.cache), self.state.build_artifacts_root/'blobs')
+        self.assertEqual(resolve_build_tmp_root(self.checkout, cache_root=self.cache), self.state.build_artifacts_root/'tmp')
+        self.assertEqual(resolve_build_generated_root(self.checkout, cache_root=self.cache), self.state.transactions_root)
+        identity=DigestIdentity.from_hex('sha256', hashlib.sha256(b'blob').hexdigest())
+        self.assertTrue(build_blob_path(self.state.build_artifacts_root/'blobs', identity).is_relative_to(self.state.build_artifacts_root))
 
+    def test_preparation_creates_private_external_children_only(self):
+        paths=prepare_build_cache(self.checkout, cache_root=self.cache)
+        self.assertEqual(paths.checkout_root, self.checkout.resolve())
+        self.assertEqual(paths.namespace_root, self.state.namespace)
+        for path in (paths.namespace_root, paths.persistent_root, paths.blobs_root, paths.tmp_root, paths.generated_root, paths.markers_root):
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+            self.assertTrue(path.is_relative_to(self.state.namespace))
+        self.assertFalse((self.checkout/'.docker-cache').exists())
+        self.assertFalse((self.checkout/'.docker-generated').exists())
 
-def _mode(path: Path) -> int:
-    return stat.S_IMODE(os.stat(path).st_mode)
-
-
-class _PathTestCase(unittest.TestCase):
-    def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory(prefix="build-cache-path-")
-        self.addCleanup(tmp.cleanup)
-        self.base = Path(tmp.name)
-        self.checkout = self.base / "checkout"
-        self.checkout.mkdir()
-
-
-class TestFixedCheckoutLocalRoots(_PathTestCase):
-    """Persistent and generated roots are fixed beneath the checkout."""
-
-    def test_persistent_root_is_fixed_ignored_checkout_path(self) -> None:
-        mod = _build_cache_module()
-        self.assertEqual(
-            mod.resolve_build_cache_root(self.checkout),
-            self.checkout / ".docker-cache" / "build-artifacts",
-        )
-
-    def test_blobs_and_tmp_are_beneath_persistent_root(self) -> None:
-        mod = _build_cache_module()
-        persistent = mod.resolve_build_cache_root(self.checkout)
-        self.assertEqual(mod.resolve_build_blobs_root(self.checkout), persistent / "blobs")
-        self.assertEqual(mod.resolve_build_tmp_root(self.checkout), persistent / "tmp")
-
-    def test_generated_root_is_checkout_local(self) -> None:
-        mod = _build_cache_module()
-        self.assertEqual(
-            mod.resolve_build_generated_root(self.checkout),
-            self.checkout / ".docker-generated" / "build-artifacts",
-        )
-
-    def test_resolution_is_lexical_and_deterministic(self) -> None:
-        mod = _build_cache_module()
-        first = mod.resolve_build_cache_root(self.checkout)
-        second = mod.resolve_build_cache_root(self.checkout)
-        self.assertEqual(first, second)
-
-
-class TestProhibitedConfigurableOrSharedRoots(_PathTestCase):
-    """Build cache paths have no configurable or shared-XDG alternative."""
-
-    def test_resolution_has_no_cache_dir_override_parameter(self) -> None:
-        mod = _build_cache_module()
-        for function in (
-            mod.resolve_build_cache_root,
-            mod.resolve_build_blobs_root,
-            mod.resolve_build_tmp_root,
-            mod.resolve_build_generated_root,
-            mod.prepare_build_cache,
-        ):
-            parameters = list(inspect.signature(function).parameters)
-            self.assertEqual(
-                parameters,
-                ["checkout_root"],
-                f"{function.__name__} must accept only checkout_root",
-            )
-
-    def test_shared_xdg_cache_home_is_ignored(self) -> None:
-        mod = _build_cache_module()
-        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.base / "xdg")}):
-            root = mod.resolve_build_cache_root(self.checkout)
-        self.assertEqual(
-            root, self.checkout / ".docker-cache" / "build-artifacts",
-        )
-
-    def test_local_cache_dir_is_ignored(self) -> None:
-        mod = _build_cache_module()
-        local = self.base / "local-cache"
-        local.mkdir()
-        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.base / "xdg")}):
-            # A local override would live under [cache].dir; build paths
-            # have no such input, so resolution cannot drift toward it.
-            root = mod.resolve_build_blobs_root(self.checkout)
-        self.assertTrue(
-            str(root).startswith(str(self.checkout)),
-            "build blobs must stay inside the checkout",
-        )
-
-
-class TestContainment(_PathTestCase):
-    """Derived blob paths never escape the checkout-local blobs root."""
-
-    def test_blob_path_is_beneath_blobs_root(self) -> None:
-        mod = _build_cache_module()
-        identity_module = __import__(
-            "docker.versioning.digest_identity", fromlist=["DigestIdentity"]
-        )
-        import hashlib
-
-        identity = identity_module.DigestIdentity.from_hex(
-            "sha256", hashlib.sha256(b"blob").hexdigest(),
-        )
-        blobs = mod.resolve_build_blobs_root(self.checkout)
-        path = mod.build_blob_path(blobs, identity)
-        self.assertEqual(path.parent, blobs / "sha256")
-        self.assertTrue(str(path).startswith(str(blobs) + os.sep))
-
-    def test_blob_path_never_contains_traversal(self) -> None:
-        mod = _build_cache_module()
-        identity_module = __import__(
-            "docker.versioning.digest_identity", fromlist=["DigestIdentity"]
-        )
-        import hashlib
-
-        identity = identity_module.DigestIdentity.from_hex(
-            "sha256", hashlib.sha256(b"blob").hexdigest(),
-        )
-        path = mod.build_blob_path(self.checkout / "root", identity)
-        self.assertNotIn("..", path.parts)
-
-
-class TestSymlinkAndTypeRejection(_PathTestCase):
-    """Unsafe cache/generated paths are rejected before mutation."""
-
-    def test_symlinked_docker_cache_rejected_before_mutation(self) -> None:
-        mod = _build_cache_module()
-        outside = self.base / "outside-cache"
-        outside.mkdir()
-        (self.checkout / ".docker-cache").symlink_to(outside, target_is_directory=True)
-
-        with self.assertRaises(mod.BuildCacheError):
-            mod.prepare_build_cache(self.checkout)
-
-        # No mutation beneath the symlink target or elsewhere.
+    def test_external_symlink_and_foreign_ownership_are_rejected_before_mutation(self):
+        self.state.build_artifacts_root.rmdir()
+        outside=self.base/'outside'; outside.mkdir()
+        self.state.build_artifacts_root.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(BuildCacheError): prepare_build_cache(self.checkout, cache_root=self.cache)
         self.assertEqual(list(outside.iterdir()), [])
-        self.assertFalse((self.checkout / ".docker-generated" / "build-artifacts").exists())
+        self.state.build_artifacts_root.unlink(); self.state.build_artifacts_root.mkdir(mode=0o700)
+        real_fstat=os.fstat
+        target=str(self.state.build_artifacts_root)
+        def foreign(fd, *args, **kwargs):
+            result=real_fstat(fd, *args, **kwargs)
+            try: name=os.path.normpath(os.readlink(f'/proc/self/fd/{fd}'))
+            except OSError: name=''
+            return mock.Mock(st_mode=result.st_mode, st_uid=os.geteuid()+1) if name == target else result
+        with mock.patch('os.fstat', foreign):
+            with self.assertRaises(BuildCacheError): prepare_build_cache(self.checkout, cache_root=self.cache)
 
-    def test_non_directory_docker_cache_rejected(self) -> None:
-        mod = _build_cache_module()
-        (self.checkout / ".docker-cache").write_text("not a directory")
+    def test_canonical_project_alias_uses_one_namespace_and_identity(self):
+        alias=self.base / 'checkout-alias'; alias.symlink_to(self.checkout, target_is_directory=True)
+        via_alias=resolve_project_state(alias, cache_root=self.cache)
+        self.assertEqual(via_alias.project_path, self.checkout.resolve())
+        self.assertEqual(via_alias.identity, self.state.identity)
+        self.assertEqual(via_alias.namespace, self.state.namespace)
+        self.assertEqual(via_alias.build_artifacts_root, self.state.build_artifacts_root)
+        self.assertEqual(via_alias.transactions_root, self.state.transactions_root)
 
-        with self.assertRaises(mod.BuildCacheError):
-            mod.prepare_build_cache(self.checkout)
+    def test_same_basename_projects_are_collision_isolated(self):
+        other_parent=self.base/'other'; other_parent.mkdir(); other=other_parent/'checkout'; other.mkdir()
+        other_state=resolve_project_state(other, cache_root=self.cache)
+        self.assertNotEqual(other_state.identity, self.state.identity)
+        self.assertNotEqual(other_state.namespace, self.state.namespace)
+        self.assertTrue(other_state.namespace.name.startswith('checkout-'))
 
-        self.assertFalse((self.checkout / ".docker-generated" / "build-artifacts").exists())
+    def test_malformed_or_mismatched_namespace_metadata_is_not_adopted(self):
+        metadata=self.state.namespace/'project.json'
+        for payload in (b'not json\n', b'{"version":1}\n', b'{"canonical_path":"/wrong","sha256":"bad","version":1}\n'):
+            metadata.write_bytes(payload); os.chmod(metadata, 0o600)
+            before=metadata.read_bytes()
+            with self.assertRaises(ProjectStateError): resolve_project_state(self.checkout, cache_root=self.cache)
+            self.assertEqual(metadata.read_bytes(), before)
+        # Restore the verified metadata for cleanup and later assertions.
+        metadata.write_text('{"canonical_path":"%s","sha256":"%s","version":1}\n' % (self.checkout.resolve(), self.state.identity))
+        os.chmod(metadata, 0o600)
 
-    def test_symlinked_blobs_rejected(self) -> None:
-        mod = _build_cache_module()
-        outside = self.base / "outside-blobs"
-        outside.mkdir()
-        blobs = self.checkout / ".docker-cache" / "build-artifacts" / "blobs"
-        blobs.parent.mkdir(parents=True)
-        blobs.symlink_to(outside, target_is_directory=True)
+    def test_unsupported_identity_is_rejected_before_path_derivation(self):
+        with self.assertRaises(ValueError):
+            DigestIdentity.from_hex('not-a-digest', '00' * 32)
 
-        with self.assertRaises(mod.BuildCacheError):
-            mod.prepare_build_cache(self.checkout)
+    def test_equal_identities_deduplicate_to_one_external_blob_path(self):
+        data=b'deduplicated'; first=DigestIdentity.from_hex('sha256', hashlib.sha256(data).hexdigest())
+        second=DigestIdentity.from_hex('sha256', hashlib.sha256(data).hexdigest().upper())
+        paths=prepare_build_cache(self.checkout, cache_root=self.cache)
+        self.assertEqual(build_blob_path(paths.blobs_root, first), build_blob_path(paths.blobs_root, second))
 
-        self.assertEqual(list(outside.iterdir()), [])
+    def test_checkout_root_round_trips_as_project_identity_without_nested_namespace(self):
+        from docker.versioning.build_cache import publish_verified_blob
+        paths=prepare_build_cache(self.checkout, cache_root=self.cache)
+        data=b'round-trip'; identity=DigestIdentity.from_hex('sha256', hashlib.sha256(data).hexdigest())
+        blob=publish_verified_blob(identity, data, checkout_root=paths.checkout_root, cache_root=self.cache)
+        self.assertTrue(blob.is_relative_to(self.state.namespace))
+        self.assertEqual(list((self.cache/'projects').iterdir()), [self.state.namespace])
+        self.assertFalse((self.state.namespace/'projects').exists())
 
-    def test_symlinked_generated_root_rejected(self) -> None:
-        mod = _build_cache_module()
-        outside = self.base / "outside-generated"
-        outside.mkdir()
-        generated_parent = self.checkout / ".docker-generated"
-        generated_parent.mkdir()
-        (generated_parent / "build-artifacts").symlink_to(
-            outside, target_is_directory=True,
+    def test_one_project_yields_exactly_one_namespace_and_no_nested_namespace(self):
+        from docker.versioning.build_cache import publish_verified_blob
+        data=b'exactly-one-namespace'; identity=DigestIdentity.from_hex('sha256', hashlib.sha256(data).hexdigest())
+        publish_verified_blob(identity, data, checkout_root=self.checkout, cache_root=self.cache)
+        projects=self.cache/'projects'
+        # One constructor project creates exactly one namespace under the
+        # selected cache root (never split across two namespaces).
+        self.assertEqual(list(projects.iterdir()), [self.state.namespace])
+        self.assertEqual(self.state.namespace.parent, projects)
+        # No namespace (or nested ``projects`` child) is created for
+        # namespace_root itself.
+        self.assertFalse((self.state.namespace/'projects').exists())
+        self.assertEqual(
+            {p.name for p in self.state.namespace.iterdir()},
+            {'project.json', 'generated', 'runtime', 'evidence', 'build-artifacts', 'transactions'},
         )
 
-        with self.assertRaises(mod.BuildCacheError):
-            mod.prepare_build_cache(self.checkout)
+    def test_legacy_trees_are_never_read_adopted_modified_or_deleted(self):
+        legacy_cache=self.checkout/'.docker-cache'; legacy_generated=self.checkout/'.docker-generated'
+        legacy_cache.mkdir(); legacy_generated.mkdir()
+        cache_sentinel=legacy_cache/'sentinel'; generated_sentinel=legacy_generated/'sentinel'
+        cache_sentinel.write_text('cache'); generated_sentinel.write_text('generated')
+        before=(cache_sentinel.stat().st_ino, generated_sentinel.stat().st_ino)
+        prepare_build_cache(self.checkout, cache_root=self.cache)
+        self.assertEqual((cache_sentinel.read_text(), generated_sentinel.read_text()), ('cache','generated'))
+        self.assertEqual((cache_sentinel.stat().st_ino, generated_sentinel.stat().st_ino), before)
 
-        self.assertEqual(list(outside.iterdir()), [])
-
-
-class TestPrepareCreatesPrivateRoots(_PathTestCase):
-    """Preparation creates constructor-owned private subtrees."""
-
-    def test_prepare_creates_private_roots(self) -> None:
-        mod = _build_cache_module()
-        paths = mod.prepare_build_cache(self.checkout)
-
-        for path in (paths.persistent_root, paths.blobs_root, paths.tmp_root, paths.generated_root):
-            self.assertTrue(path.is_dir(), f"{path} must be a directory")
-            self.assertEqual(_mode(path), 0o700, f"{path} must be 0700")
-
-        self.assertEqual(_mode(self.checkout / ".docker-cache"), 0o700)
-
-    def test_prepare_returns_paths_matching_resolution(self) -> None:
-        mod = _build_cache_module()
-        paths = mod.prepare_build_cache(self.checkout)
-        self.assertEqual(paths.persistent_root, mod.resolve_build_cache_root(self.checkout))
-        self.assertEqual(paths.blobs_root, mod.resolve_build_blobs_root(self.checkout))
-        self.assertEqual(paths.tmp_root, mod.resolve_build_tmp_root(self.checkout))
-        self.assertEqual(paths.generated_root, mod.resolve_build_generated_root(self.checkout))
-
-
-class TestIgnoreRules(unittest.TestCase):
-    """The persistent checkout-local cache is ignored by git."""
-
-    def test_persistent_cache_directory_is_gitignored(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
-        self.assertRegex(
-            gitignore,
-            r"(?m)^\.docker-cache/$\n",
-            ".docker-cache/ must be an ignored checkout-local cache path",
-        )
-
-    def test_generated_directory_remains_gitignored(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
-        self.assertRegex(
-            gitignore,
-            r"(?m)^\.docker-generated/$\n",
-            ".docker-generated/ must remain ignored",
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+class LegacyAndWorkspaceNeutralityTests(unittest.TestCase):
+    def test_renderer_rejects_checkout_local_runtime_projection(self):
+        from docker.versioning.rendering import RunRenderInputs, render_run_vector
+        with self.assertRaisesRegex(ValueError, 'external project-state'):
+            render_run_vector(RunRenderInputs(image='image', container_name='pi-1', pi_home_host='/home/user/.pi', projection_host_path='/work/constructor/.docker-generated/runtime/p.toml', projection_container_path='/run/pi-cli/docker-constructor.runtime.toml', main_project='/work/primary', project_state_runtime_root='/cache/projects/selected/runtime'))

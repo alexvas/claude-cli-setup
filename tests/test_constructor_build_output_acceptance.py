@@ -104,6 +104,7 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
             "PATH": f"{self.fake_dir}{os.pathsep}{env['PATH']}",
             "FAKE_DOCKER_SCENARIO": scenario,
             "FAKE_DOCKER_RELEASE_FILE": str(release_file),
+            "XDG_CACHE_HOME": str(self.root / "xdg"),
         })
         return env, release_file
 
@@ -161,7 +162,10 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
         self.assertEqual("", completed.stderr)
 
     def test_normal_text_hides_published_path_but_verbose_and_json_expose_it(self):
-        expected_path = self.root / ".docker-generated/docker-constructor.build.effective.toml"
+        from docker.versioning.project_state import resolve_project_state
+        expected_path = resolve_project_state(
+            self.root, cache_root=self.root / "xdg" / "docker-constructor",
+        ).generated_root / "docker-constructor.build.effective.toml"
 
         env, _ = self._env("success-silent")
         text = subprocess.run(

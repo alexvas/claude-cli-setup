@@ -602,7 +602,7 @@ class TestLaunchVectorContract(unittest.TestCase):
         container_name: str = "pi-1",
         pi_home_host: str = "/home/alice/.pi",
         projection_host_path: str = (
-            "/home/dev/.pi-cli/.docker-generated/runtime/proj.toml"
+            "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/proj.toml"
         ),
         projection_container_path: str = (
             "/run/pi-cli/docker-constructor.runtime.toml"
@@ -1046,12 +1046,14 @@ class TestRunTransaction(unittest.TestCase):
         self._artifact_cache_root = os.path.join(
             self._tmpdir.name, "runtime-artifacts", "blobs",
         )
+        self._constructor_cache_root = os.path.join(self._tmpdir.name, "constructor-cache")
+        self._artifact_locks_root = os.path.join(self._tmpdir.name, "artifact-locks")
+        self._artifact_tmp_root = os.path.join(self._tmpdir.name, "artifact-tmp")
+        os.mkdir(self._constructor_cache_root, 0o700)
         # ── repo-cache leak guard ───────────────────────────
         self._repo_cache_snapshot = _repo_cache_file_set()
-        # projection_parent_dir must contain the .docker-generated/runtime
-        # segments required by run-renderer validation.
         self._proj_parent = os.path.join(
-            self._tmpdir.name, ".docker-generated", "runtime",
+            self._tmpdir.name, "projects", "constructor-identity", "runtime",
         )
         # Build a fixture TOML that adds a second artifact version for
         # pi-read so override-selection tests can prove a non-default
@@ -1134,6 +1136,9 @@ class TestRunTransaction(unittest.TestCase):
             "_create_projection": RecordingProjectionFactory(),
             "_artifact_fetcher": self._artifact_bytes,
             "_artifact_cache_root": self._artifact_cache_root,
+            "_artifact_locks_root": self._artifact_locks_root,
+            "_artifact_tmp_root": self._artifact_tmp_root,
+            "_constructor_cache_root": self._constructor_cache_root,
         }
         kwargs.update(overrides)
         return RunRequest(**kwargs)  # type: ignore[arg-type]
@@ -1183,7 +1188,7 @@ class TestRunTransaction(unittest.TestCase):
 
     # ── private projection ───────────────────────────────────────
 
-    def test_projection_created_under_docker_generated_runtime(self) -> None:
+    def test_projection_created_under_external_constructor_runtime(self) -> None:
         req = self._request(
             executor=FakeRunExecutor(returncode=0),
             inspector=FakeContainerNameInspector(set()),
@@ -1191,10 +1196,11 @@ class TestRunTransaction(unittest.TestCase):
         result = self._run(req)
         self.assertIsNotNone(result.projection_path)
         self.assertIn(
-            ".docker-generated/runtime",
+            "/projects/",
             result.projection_path,  # type: ignore[arg-type]
-            "projection must be under .docker-generated/runtime/",
+            "projection must be under external constructor project state",
         )
+        self.assertIn("/runtime/", result.projection_path)  # type: ignore[arg-type]
 
     def test_projection_has_content_hash(self) -> None:
         req = self._request(
@@ -1287,8 +1293,8 @@ class TestRunTransaction(unittest.TestCase):
     def test_default_factory_creates_real_projection_and_cleans_up(self) -> None:
         """When no _create_projection is injected, the default
         factory must call the real create_runtime_projection and
-        produce a handle whose path is under the repository-owned
-        runtime directory.  The handle must clean up on exit."""
+        produce a handle beneath external constructor project state.
+        The handle must clean up on exit."""
         req = self._request(
             executor=FakeRunExecutor(returncode=0),
             inspector=FakeContainerNameInspector(set()),
@@ -1297,7 +1303,7 @@ class TestRunTransaction(unittest.TestCase):
         result = self._run(req)
         self.assertEqual(result.exit_kind, ExitKind.SUCCESS)
         self.assertIsNotNone(result.projection_path)
-        expected_prefix = os.path.realpath(self._proj_parent)
+        expected_prefix = os.path.realpath(os.path.join(self._constructor_cache_root, "projects"))
         self.assertTrue(
             os.path.realpath(
                 result.projection_path  # type: ignore[arg-type]
@@ -2421,13 +2427,9 @@ class TestRunTransaction(unittest.TestCase):
             create_runtime_projection,
         )
 
-        # The real factory validates the path is under the
-        # repository-owned runtime directory and the renderer
-        # requires the file live directly inside …/runtime/.
+        # The real factory must publish beneath the resolved external runtime
+        # directory supplied by orchestration.
         import uuid
-        real_parent = _repo_runtime_dir()
-        unique_name = f"proj-{uuid.uuid4().hex}.toml"
-        real_host_path = os.path.join(real_parent, unique_name)
         try:
             recorded: list[tuple[str, str]] = []  # (path, content_hash)
             observed_modes: list[int] = []
@@ -2437,9 +2439,11 @@ class TestRunTransaction(unittest.TestCase):
 
                 def __call__(self, projection: object, *,
                              parent_dir: str) -> Any:
+                    from docker.versioning.effective import Filesystem
                     handle = create_runtime_projection(
                         projection,
-                        host_path=real_host_path,
+                        host_path=os.path.join(parent_dir, f"proj-{uuid.uuid4().hex}.toml"),
+                        _fs=Filesystem(repo_runtime_dir=parent_dir),
                     )
                     recorded.append((handle.path, handle.content_hash))
                     return handle
@@ -2484,9 +2488,9 @@ class TestRunTransaction(unittest.TestCase):
             # Content hash was recorded from the real factory.
             self.assertIsNotNone(recorded[0][1])
         finally:
-            import shutil
-            if os.path.exists(real_host_path):
-                os.unlink(real_host_path)
+            for path, _ in recorded:
+                if os.path.exists(path):
+                    os.unlink(path)
 
 
     # ── artifact deduplication preserves package metadata ─────
@@ -3480,20 +3484,20 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
                 ops.append(f"open:{file}")
             return _orig_open(file, *a, **kw)
 
-        def _trap_rename(src, dst):
+        def _trap_rename(src, dst, *args, **kwargs):
             if _is_cache(src) or _is_cache(dst):
                 ops.append(f"rename:{src}->{dst}")
-            return _orig_rename(src, dst)
+            return _orig_rename(src, dst, *args, **kwargs)
 
-        def _trap_replace(src, dst):
+        def _trap_replace(src, dst, *args, **kwargs):
             if _is_cache(src) or _is_cache(dst):
                 ops.append(f"replace:{src}->{dst}")
-            return _orig_replace(src, dst)
+            return _orig_replace(src, dst, *args, **kwargs)
 
-        def _trap_link(src, dst):
+        def _trap_link(src, dst, *args, **kwargs):
             if _is_cache(src) or _is_cache(dst):
                 ops.append(f"link:{src}->{dst}")
-            return _orig_link(src, dst)
+            return _orig_link(src, dst, *args, **kwargs)
 
         def _trap_mkdir(path, *a, **kw):
             if _is_cache(path):
@@ -3921,7 +3925,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
         )
         self._repo_cache_snapshot = _repo_cache_file_set()
         self._proj_parent = os.path.join(
-            self._tmpdir.name, ".docker-generated", "runtime",
+            self._tmpdir.name, "projects", "constructor-identity", "runtime",
         )
         self._inventory_path = self._make_fixture_toml()
         self._event_log: list[str] = []

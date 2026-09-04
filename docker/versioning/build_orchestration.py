@@ -20,6 +20,7 @@ and ``orchestrate_doctor`` with planning/execution separation.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
@@ -42,6 +43,7 @@ from docker.networking import (
 )
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.build_cache import BuildCacheError
+from docker.versioning.cache_storage import prepare_resolved_root, resolve_effective_root
 from docker.versioning.build_materialization import (
     HostNetworkPolicy,
     MaterializationError,
@@ -406,18 +408,20 @@ class BuildTransactionPlan:
     host_network_policy: HostNetworkPolicy = HostNetworkPolicy()
     """Validated host transport policy, separate from Docker rendering."""
 
+    cache_root: Path | None = None
+    """Resolved invoking-user constructor cache root for execution."""
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Plan / execute (Stage 9.3)
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _publish_projection_default(projection, *, repo_root: Path) -> PublishResult:
-    """Default publisher — wraps ``write_effective_build``."""
+def _publish_projection_default(projection, *, repo_root: Path, project_state) -> PublishResult:
+    """Default publisher — writes only beneath resolved external state."""
     try:
         written = write_effective_build(
-            projection,
-            repo_root=repo_root,
+            projection, repo_root=repo_root, project_state=project_state,
         )
         return PublishResult(published_path=str(written))
     except Exception as exc:
@@ -458,6 +462,16 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
             exit_kind=ExitKind.CONFIG,
             message=str(exc),
         )
+
+    # Resolve the same configured/default cache root used by runtime execution.
+    try:
+        local_cache_dir = getattr(getattr(local, "cache", None), "dir", None)
+        cache_root = resolve_effective_root(
+            local_cache_dir, xdg_cache_home=os.environ.get("XDG_CACHE_HOME"),
+            home=Path.home(),
+        )
+    except Exception as exc:
+        return BuildTransactionPlan(exit_kind=ExitKind.CONFIG, message=str(exc))
 
     # 2. Resolve effective build projection (validates overrides inline)
     try:
@@ -536,6 +550,7 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
                 if local.corporate_trust.enabled and request.repo_root else None
             ),
         ),
+        cache_root=cache_root,
     )
 
 
@@ -592,13 +607,19 @@ def execute_build(
             build_args=build_args,
             display_string=display_string,
         )
-    # 3. Construct the narrow owner-private immutable context.  Snapshot
-    # cleanup is unconditional across publication and Docker outcomes.
+    # Resolve constructor identity once; all implicit build state shares it.
     snapshot: MaterializedSnapshot | None = None
     try:
+        from docker.versioning.project_state import resolve_project_state
+        if plan.cache_root is None:
+            raise SnapshotError("missing resolved constructor cache root")
+        project_state = resolve_project_state(
+            repo_root, cache_root=prepare_resolved_root(plan.cache_root),
+        )
         transport = UrllibStreamingTransport(plan.host_network_policy)
         materialized = materialize(
-            projection, checkout_root=repo_root, transport=transport,
+            projection, checkout_root=repo_root, cache_root=project_state.cache_root,
+            project_state=project_state, transport=transport,
         )
         if not isinstance(materialized, (tuple, list)) or not all(
             isinstance(path, Path) for path in materialized
@@ -607,6 +628,7 @@ def execute_build(
         blobs = tuple(materialized)
         snapshot = create_artifact_snapshot(
             select_build_artifacts(projection), blobs, checkout_root=repo_root,
+            cache_root=project_state.cache_root, project_state=project_state,
         )
         if plan.render_inputs is None:
             raise SnapshotError("missing build rendering inputs")
@@ -629,7 +651,10 @@ def execute_build(
             if publish is not None:
                 publish_result = publish(plan.effective_projection, repo_root=repo_root)
             else:
-                publish_result = _publish_projection_default(plan.effective_projection, repo_root=repo_root)
+                publish_result = _publish_projection_default(
+                    plan.effective_projection, repo_root=repo_root,
+                    project_state=project_state,
+                )
         except Exception as exc:
             return BuildResult(
                 exit_kind=ExitKind.OPERATIONAL,

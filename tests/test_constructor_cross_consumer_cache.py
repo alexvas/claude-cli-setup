@@ -246,6 +246,7 @@ class TestCrossConsumerCacheRoot(unittest.TestCase):
                 from docker import constructor_cli
                 stdout, stderr = io.StringIO(), io.StringIO()
                 with mock.patch.object(constructor_cli, "_REPO_ROOT", checkout), \
+                     mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(xdg)}, clear=False), \
                      redirect_stdout(stdout), redirect_stderr(stderr):
                     code = constructor_cli.main(
                         ["--inventory", str(checkout / "docker-constructor.toml"),
@@ -263,11 +264,13 @@ class TestCrossConsumerCacheRoot(unittest.TestCase):
             self.assertTrue(any((root / "runtime-artifacts" / "blobs").rglob("*.tgz")))
             self.assertTrue((root / "runtime-artifacts" / "locks").is_dir())
             self.assertTrue((root / "runtime-artifacts" / "tmp").is_dir())
-            projection = checkout / ".docker-generated" / "runtime"
+            from docker.versioning.project_state import resolve_project_state
+            state = resolve_project_state(checkout, cache_root=root)
+            projection = state.runtime_root
             self.assertTrue(projection.is_dir())
             self.assertIn(code, (0, 4), stderr.getvalue() + stdout.getvalue())
             evidence_dir = Path(json.loads(stdout.getvalue())["data"]["verification"]["collect_evidence"]["output_dir"])
-            self.assertTrue(evidence_dir.is_relative_to(checkout / ".docker-generated" / "evidence"))
+            self.assertTrue(evidence_dir.is_relative_to(state.evidence_root))
             self.assertTrue(evidence_dir.is_dir())
             self.assertFalse((root / ".docker-generated").exists())
             # A second independent check proves that no legacy mutation or
