@@ -148,3 +148,67 @@ Reviewed the Phase 4 diff for checkout path leakage, exposure of the whole exter
 - `Prospective` carries `path: null` and a display-only token that never enters path handling; executable argv requires `Materialized(platform-native-path)` with a closed attestation, and POSIX/Windows dry-run output is byte-identical.
 - The Dockerfile retains no artifact URL arguments and no corresponding downloads; only digest arguments and in-stage `sha256sum` verification remain. Rustup provenance uses the immutable `archive/1.29.0/` URLs.
 - Named-context capability is probed before materialization; dry-run performs no probe, lock, cache, filesystem, network, or Docker operation.
+
+# Phase 5 Validation Record
+
+## Run
+
+Date: 2026-09-04T09:34:15Z
+
+Commands:
+
+```text
+ty check --output-format concise
+python3 -m unittest -v \
+  tests.test_constructor_buildkit_cache \
+  tests.test_dockerfile_contracts \
+  tests.test_constructor_build_materialization \
+  tests.test_constructor_build_orchestration \
+  tests.test_constructor_phase4_named_context \
+  tests.test_constructor_build_snapshot \
+  tests.test_constructor_build_vector \
+  tests.test_constructor_build_cache_permissions
+python3 -m unittest discover -s tests -p 'test_constructor_build*.py'
+./scripts/validate-phase5
+```
+
+## Results
+
+- Type check: all checks passed.
+- Focused Phase 5 suite (valid-snapshot build vector, tampered/mismatched-snapshot integrity rejection, named-context capability/integrity, immutable snapshot finalization, permission boundaries, Dockerfile contracts, and the new BuildKit cache-boundary module): **222 tests OK, 4 env-dependent skips** (credential-sensitive scenarios requiring a `docker-dev` account and working `sudo`; the test process stays on the invoking user and delegates only narrow privileged operations).
+- Full build discovery (`test_constructor_build*.py`): **366 tests OK, 3 skips** — the 7 new `test_constructor_buildkit_cache` tests are included.
+
+### BuildKit cache-boundary evidence (task 5.1)
+
+`tests.test_constructor_buildkit_cache.py` parses the Dockerfile into a stage dependency graph (FROM base stages plus `COPY --from=<stage>` edges) and proves, without a Docker daemon:
+
+- The named-context `COPY` sources are exactly the snapshot logical names (`rustup-init`, `uv.tar.gz`, `rtk.deb`, `fd.deb`).
+- Each artifact's named-context `COPY` and its digest/version build args (`RTK_*`, `FD_*`, `RUSTUP_SHA256`/`RUST_VERSION`, `UV_SHA256`/`UV_VERSION`) are confined to a single consumer stage (`rtk-prebuilt`, `fd-prebuilt`, `toolchain`).
+- Changing the rtk input (bytes or digest) invalidates only `rtk-prebuilt` and the dependent final assembly `runtime`; `fd-prebuilt`, `toolchain` (rustup/uv), `pi-tools` (Pi), and `openspec-tools` (OpenSpec) remain eligible for BuildKit cache reuse. The fd boundary is symmetric.
+- `rtk-prebuilt` and `fd-prebuilt` depend only on `base`; `runtime` consumes all five independent tool stages.
+- Sensitivity check: injecting `rtk.deb` into `fd-prebuilt` is detected, so the assertions are not vacuous.
+
+### Valid and tampered snapshot evidence (task 5.4, no-Docker portion)
+
+- Valid snapshot: `test_constructor_build_snapshot` (deterministic manifest, stable logical names, `0444`/`0555` finalization, hard-link/copy-fallback publication) and `test_constructor_build_vector` (materialized plan renders a complete `docker build` vector) pass.
+- Tampered snapshot: `test_constructor_build_materialization` (digest mismatch rejection), `test_constructor_build_orchestration` (integrity failure through the real streaming materializer prevents Docker invocation, commits no reference, and confines mutation to the selected namespace), and `test_constructor_phase4_named_context` (in-build `sha256sum -c` integrity) pass. `test_dockerfile_contracts` confirms each converted stage retains in-stage SHA-256 verification with no artifact URL/curl input.
+
+### Host BuildKit acceptance evidence
+
+`./scripts/validate-phase5` passed on a host with a reachable Docker daemon and BuildKit named-context support:
+
+- A valid immutable snapshot completed the `linux/amd64` runtime build. Each installed command executed successfully with `--version`, and its parsed version matched the effective inventory: rtk `0.45.0`, fd `10.4.2`, rustc `1.98.0`, uv `0.12.5`, Pi `0.84.2`, and OpenSpec `1.10.0`.
+- A snapshot whose rtk bytes were changed without changing `RTK_SHA256` was rejected by the in-stage SHA-256 check.
+- With a unique rtk-only payload and matching updated digest, independent plain-progress target builds reported `CACHED` for fd, toolchain/rustup/uv, Pi, and OpenSpec; the changed rtk stage executed and rejected the deliberately invalid Debian package rather than reusing its prior result.
+- The fd-only case passed symmetrically: rtk, toolchain/rustup/uv, Pi, and OpenSpec remained cached, while the changed fd stage executed and rejected the deliberately invalid Debian package.
+- Every Docker command emitted live timestamped output and completed within the configured per-command timeout.
+
+## INTROSPECT (5.3)
+
+Reviewed the converted Dockerfile stages for duplicated verification, accidental payload persistence in the final image, cross-stage invalidation, and unnecessary coupling introduced by the minimal Phase 4 conversion. Findings: no code changes required.
+
+- Each of rustup, uv, rtk, and fd is SHA-256 verified exactly once in the Dockerfile (four `sha256sum` verifications, one per artifact). The host-side materialization digest check plus this in-build check is the required defense-in-depth ("verify their SHA-256 digests again before installation"), not duplication within the Dockerfile.
+- No payload persists into the final image: `rtk-prebuilt` removes `/tmp/rtk.deb` and `/tmp/rtk-extract`, `fd-prebuilt` removes `/tmp/fd.deb` and `/tmp/fd-extract`, `toolchain` removes `/tmp/rustup-init` and `/tmp/uv.tar.gz`/`/tmp/uv-*`; the `runtime` stage copies only the installed binaries (`/usr/local/bin/rtk`, `/usr/local/bin/fd`) and toolchain home directories.
+- No cross-stage invalidation was introduced by the conversion: the four named-context `COPY` instructions and their digest/version args stay inside their own stages, so a changed artifact invalidates only its own stage and `runtime`.
+- No unnecessary coupling was introduced: Phase 4 only replaced per-stage URL downloads with scoped named-context `COPY` operations and added no new `FROM`/`COPY --from=<stage>` edges. The pre-existing `base -> toolchain -> pi-tools` boundary is documented intent and predates the conversion; changing rustup/uv invalidates `pi-tools` by design and is outside the task 5.1 rtk/fd boundary.
+- No artifact URL arguments or curl invocations remain for the four artifacts; build args are `ARG` (never `ENV`), so no artifact identity is persisted as image metadata.

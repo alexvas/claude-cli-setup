@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+"""Run host/BuildKit acceptance validation for OpenSpec task 5.4."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import re
+import selectors
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, os.fspath(ROOT))
+
+from docker.versioning.build_materialization import (  # noqa: E402
+    HostNetworkPolicy,
+    UrllibStreamingTransport,
+    materialize_build_artifacts,
+    select_build_artifacts,
+)
+from docker.versioning.build_snapshot import (  # noqa: E402
+    _LOGICAL_NAMES,
+    cleanup_artifact_snapshot,
+    create_artifact_snapshot,
+)
+from docker.versioning.effective import resolve_build_projection  # noqa: E402
+from docker.versioning.inventory import load_inventory  # noqa: E402
+from docker.versioning.rendering import (  # noqa: E402
+    BuildRenderInputs,
+    Materialized,
+    NoDerivedEnvironment,
+    render_build_vector,
+)
+
+TAG = "docker-constructor-phase5-validation:latest"
+UNCHANGED = {
+    "rtk": ("fd-prebuilt", "toolchain", "pi-tools", "openspec-tools"),
+    "fd": ("rtk-prebuilt", "toolchain", "pi-tools", "openspec-tools"),
+}
+
+
+class ValidationError(RuntimeError):
+    pass
+
+
+def timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(message: str) -> None:
+    print(f"[{timestamp()}] {message}", flush=True)
+
+
+def stop_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
+def run(
+    argv: tuple[str, ...] | list[str], *, expect_success: bool,
+    timeout_seconds: float,
+) -> str:
+    log(f"START timeout={timeout_seconds:g}s command={' '.join(argv)}")
+    started = time.monotonic()
+    process = subprocess.Popen(
+        argv, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, start_new_session=True, bufsize=1,
+    )
+    assert process.stdout is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    lines: list[str] = []
+    next_heartbeat = 30.0
+    try:
+        while process.poll() is None:
+            elapsed = time.monotonic() - started
+            remaining = timeout_seconds - elapsed
+            if remaining <= 0:
+                stop_process_group(process)
+                raise ValidationError(
+                    f"command timed out after {timeout_seconds:g}s"
+                )
+            for key, _events in selector.select(timeout=min(1.0, remaining)):
+                line = key.fileobj.readline()
+                if line:
+                    lines.append(line)
+                    print(f"[{timestamp()} +{elapsed:8.1f}s] {line}", end="", flush=True)
+            elapsed = time.monotonic() - started
+            if elapsed >= next_heartbeat:
+                log(
+                    f"command still running; elapsed={elapsed:.1f}s "
+                    f"remaining={max(0.0, timeout_seconds - elapsed):.1f}s"
+                )
+                next_heartbeat += 30.0
+        # Drain output emitted between the final select and process exit.
+        for line in process.stdout:
+            lines.append(line)
+            elapsed = time.monotonic() - started
+            print(f"[{timestamp()} +{elapsed:8.1f}s] {line}", end="", flush=True)
+    except KeyboardInterrupt:
+        log("INTERRUPTED; terminating command process group")
+        stop_process_group(process)
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+
+    elapsed = time.monotonic() - started
+    log(f"END exit={process.returncode} elapsed={elapsed:.1f}s")
+    output = "".join(lines)
+    if expect_success and process.returncode != 0:
+        raise ValidationError(f"command failed with exit code {process.returncode}")
+    if not expect_success and process.returncode == 0:
+        raise ValidationError("command unexpectedly succeeded")
+    return output
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--timeout-seconds", type=float,
+        default=float(os.environ.get("PHASE5_COMMAND_TIMEOUT_SECONDS", "3600")),
+        help="timeout for each Docker command (default: 3600, or PHASE5_COMMAND_TIMEOUT_SECONDS)",
+    )
+    args = parser.parse_args()
+    if args.timeout_seconds <= 0:
+        parser.error("--timeout-seconds must be greater than zero")
+    return args
+
+
+def require_buildkit() -> None:
+    if shutil.which("docker") is None:
+        raise ValidationError("docker is required")
+    help_result = subprocess.run(("docker", "build", "--help"), text=True,
+                                 capture_output=True)
+    if help_result.returncode != 0 or "--build-context" not in help_result.stdout:
+        raise ValidationError("docker build with BuildKit named-context support is required")
+    info = subprocess.run(("docker", "info"), text=True, capture_output=True)
+    if info.returncode != 0:
+        raise ValidationError("a reachable Docker daemon is required")
+
+
+def vector(projection, snapshot: Path, *, target: str = "runtime") -> tuple[str, ...]:
+    return render_build_vector(BuildRenderInputs(
+        build_context=os.fspath(ROOT), projection=projection, target_stage=target,
+        image_tag=TAG, platform="linux/amd64", progress="plain",
+        named_context=Materialized(os.fspath(snapshot.resolve()), NoDerivedEnvironment()),
+    ))
+
+
+def replace_digest(argv: tuple[str, ...], key: str, digest: str) -> tuple[str, ...]:
+    expected_prefix = f"{key}="
+    result = list(argv)
+    matches = [i for i, value in enumerate(result) if value.startswith(expected_prefix)]
+    if len(matches) != 1:
+        raise ValidationError(f"expected exactly one {key} build argument")
+    result[matches[0]] = expected_prefix + digest
+    return tuple(result)
+
+
+def mutate_snapshot(source: Path, destination: Path, artifact: str) -> str:
+    shutil.copytree(source, destination)
+    payload = destination / _LOGICAL_NAMES[artifact]
+    payload.chmod(0o644)
+    content = bytearray(payload.read_bytes())
+    if not content:
+        raise ValidationError(f"cannot mutate empty {artifact} payload")
+    # Use a fresh invalid archive prefix for every scenario/run so the tampered
+    # rejection cannot pre-populate the changed-input COPY cache key.
+    prefix_length = min(32, len(content))
+    content[:prefix_length] = os.urandom(prefix_length)
+    payload.write_bytes(content)
+    payload.chmod(0o444)
+    return hashlib.sha256(payload.read_bytes()).hexdigest()
+
+
+def cached_stages(output: str) -> set[str]:
+    step_stage: dict[str, str] = {}
+    cached: set[str] = set()
+    for line in output.splitlines():
+        match = re.match(r"^(#\d+) \[([^ ]+)(?: [^]]*)?\](.*)$", line)
+        if match:
+            step_stage[match.group(1)] = match.group(2)
+            if re.search(r"\bCACHED\b", match.group(3)):
+                cached.add(match.group(2))
+        match = re.match(r"^(#\d+) CACHED(?:\s|$)", line)
+        if match and match.group(1) in step_stage:
+            cached.add(step_stage[match.group(1)])
+    return cached
+
+
+def require_cached(output: str, stages: tuple[str, ...], changed: str) -> None:
+    actual = cached_stages(output)
+    missing = set(stages) - actual
+    if missing:
+        raise ValidationError(
+            f"{changed}-only rebuild did not report CACHED for: {', '.join(sorted(missing))}; "
+            f"observed cached stages: {', '.join(sorted(actual)) or '<none>'}"
+        )
+
+
+# Tools installed by the runtime image and their effective-inventory version
+# sources.  Each supports ``--version`` (verified against the built image).
+SMOKE_TOOLS = ("rtk", "fd", "rustc", "uv", "pi", "openspec")
+_VERSION_TOKEN = re.compile(r"\d+\.\d+\.\d+")
+
+
+def smoke_script() -> str:
+    """Bash smoke checks: print each installed tool's ``--version`` banner.
+
+    Runs under ``bash -euo pipefail`` so any missing, non-executable, or
+    failing command aborts the container and fails validation.  Each version
+    is captured by a plain assignment first (not inside a command
+    substitution consumed by ``printf``) so ``set -e`` observes the tool's
+    exit status rather than the always-successful ``printf`` exit status.
+    """
+    lines = ["set -euo pipefail"]
+    for tool in SMOKE_TOOLS:
+        lines.append(f"{tool}_version=\"$({tool} --version)\"")
+        lines.append(f"printf '{tool}=%s\\n' \"${tool}_version\"")
+    return "\n".join(lines)
+
+
+def _version_token(value: str) -> str:
+    """Strip a leading ``v``/``V`` and return the first ``X.Y.Z`` token."""
+    value = value.strip()
+    if value[:1].lower() == "v":
+        value = value[1:]
+    match = _VERSION_TOKEN.search(value)
+    return match.group(0) if match else value
+
+
+def verify_installed_versions(projection, smoke_output: str) -> None:
+    """Compare each installed tool's version against the effective inventory."""
+    expected = {
+        "rtk": projection.rtk.version,
+        "fd": projection.fd.version,
+        "rustc": projection.rust.version,
+        "uv": projection.uv.version,
+        "pi": projection.pi_version,
+        "openspec": projection.openspec_version,
+    }
+    observed: dict[str, str] = {}
+    for line in smoke_output.splitlines():
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if separator and key in expected:
+            observed[key] = value.strip()
+    for tool, inventory in expected.items():
+        if tool not in observed:
+            raise ValidationError(f"smoke check produced no {tool} version output")
+        inventory_token = _version_token(inventory)
+        installed_token = _version_token(observed[tool])
+        if inventory_token != installed_token:
+            raise ValidationError(
+                f"installed {tool} version mismatch: expected "
+                f"{inventory!r}, observed {observed[tool]!r}"
+            )
+    log(
+        "installed tool versions verified: "
+        + ", ".join(f"{tool}={observed[tool]}" for tool in SMOKE_TOOLS)
+    )
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        log(f"Phase 5 validation started; per-command timeout={args.timeout_seconds:g}s")
+        log("Checking Docker daemon and BuildKit named-context support")
+        require_buildkit()
+        projection = resolve_build_projection(
+            load_inventory(ROOT / "docker-constructor.toml").build, {},
+            platform="linux-amd64",
+        )
+        selected = select_build_artifacts(projection)
+        with tempfile.TemporaryDirectory(prefix="constructor-phase5-") as temporary:
+            work = Path(temporary)
+            cache = work / "cache"
+            cache.mkdir(mode=0o700)
+            log("Materializing and SHA-256-verifying reviewed host artifacts")
+            blobs = materialize_build_artifacts(
+                projection, checkout_root=ROOT, cache_root=cache,
+                transport=UrllibStreamingTransport(HostNetworkPolicy()),
+            )
+            log("Creating immutable named-context snapshot")
+            snapshot = create_artifact_snapshot(
+                selected, blobs, checkout_root=ROOT, cache_root=cache,
+            )
+            valid = snapshot.path
+
+            log("STAGE 1/4: valid snapshot runtime build")
+            baseline = vector(projection, valid)
+            run(baseline, expect_success=True, timeout_seconds=args.timeout_seconds)
+            log("STAGE 2/4: smoke-check installed tool versions in the built image")
+            smoke_output = run(
+                ("docker", "run", "--rm", TAG, "bash", "-euo", "pipefail", "-c",
+                 smoke_script()),
+                expect_success=True, timeout_seconds=args.timeout_seconds,
+            )
+            verify_installed_versions(projection, smoke_output)
+
+            log("STAGE 3/4: tampered snapshot integrity rejection")
+            tampered = work / "tampered"
+            mutate_snapshot(valid, tampered, "rtk")
+            tampered_output = run(
+                vector(projection, tampered), expect_success=False,
+                timeout_seconds=args.timeout_seconds,
+            )
+            if "SHA256 mismatch" not in tampered_output:
+                raise ValidationError("tampered snapshot failed without SHA-256 rejection evidence")
+
+            log("STAGE 4/4: rtk/fd plain-progress cache boundaries")
+            for changed, digest_arg in (("rtk", "RTK_SHA256"), ("fd", "FD_SHA256")):
+                log(f"Checking {changed}-only invalidation")
+                changed_snapshot = work / f"changed-{changed}"
+                digest = mutate_snapshot(valid, changed_snapshot, changed)
+
+                # A failed runtime solve may cancel unrelated branches before
+                # BuildKit prints their cache status. Build each unaffected
+                # target independently so every expected cache hit is observed.
+                for unchanged_stage in UNCHANGED[changed]:
+                    log(
+                        f"Checking {unchanged_stage} remains cached after "
+                        f"the {changed}-only context change"
+                    )
+                    unchanged_vector = replace_digest(
+                        vector(projection, changed_snapshot, target=unchanged_stage),
+                        digest_arg, digest,
+                    )
+                    output = run(
+                        unchanged_vector, expect_success=True,
+                        timeout_seconds=args.timeout_seconds,
+                    )
+                    require_cached(output, (unchanged_stage,), changed)
+
+                # The changed stage itself must not be reused. Its deliberately
+                # corrupted but digest-matched package reaches format validation
+                # and fails, proving that BuildKit executed the changed branch.
+                changed_stage = f"{changed}-prebuilt"
+                changed_vector = replace_digest(
+                    vector(projection, changed_snapshot, target=changed_stage),
+                    digest_arg, digest,
+                )
+                changed_output = run(
+                    changed_vector, expect_success=False,
+                    timeout_seconds=args.timeout_seconds,
+                )
+                if "not a Debian format archive" not in changed_output:
+                    raise ValidationError(
+                        f"{changed}-only rebuild did not execute the changed "
+                        f"{changed_stage} package-validation step"
+                    )
+
+            cleanup_artifact_snapshot(snapshot)
+
+        log("Task 5.4 host validation passed")
+        return 0
+    except (OSError, ValidationError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

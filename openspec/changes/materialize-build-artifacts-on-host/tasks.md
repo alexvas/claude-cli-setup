@@ -89,10 +89,10 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 
 **Deliverables:** preserved independent BuildKit invalidation for the converted rustup, uv, rtk, and fd stages; focused valid/tampered-snapshot and cache-boundary build evidence.
 
-- [ ] 5.1 **RED:** Add focused BuildKit cache tests proving a changed rtk input does not invalidate fd, rustup, uv, Pi, or OpenSpec stages and a changed fd input has the symmetric boundary.
-- [ ] 5.2 **GREEN:** Adjust stage/context structure only as required to satisfy the independent invalidation tests in task 5.1.
-- [ ] 5.3 **INTROSPECT:** Review Dockerfile stages for duplicated verification, accidental payload persistence in the final image, cross-stage invalidation, and unnecessary coupling introduced by the minimal Phase 4 conversion; remove each issue found.
-- [ ] 5.4 **VALIDATE:** Run focused `linux-amd64` builds with valid and tampered snapshots plus plain-progress cache-boundary rebuilds; record successful installs, integrity rejection, and expected cached stages.
+- [x] 5.1 **RED:** Add focused BuildKit cache tests proving a changed rtk input does not invalidate fd, rustup, uv, Pi, or OpenSpec stages and a changed fd input has the symmetric boundary.
+- [x] 5.2 **GREEN:** Adjust stage/context structure only as required to satisfy the independent invalidation tests in task 5.1.
+- [x] 5.3 **INTROSPECT:** Review Dockerfile stages for duplicated verification, accidental payload persistence in the final image, cross-stage invalidation, and unnecessary coupling introduced by the minimal Phase 4 conversion; remove each issue found.
+- [x] 5.4 **VALIDATE:** Run focused `linux-amd64` builds with valid and tampered snapshots plus plain-progress cache-boundary rebuilds; record successful installs, integrity rejection, and expected cached stages.
 
 ## 6. Official Locked Pi Installation
 
