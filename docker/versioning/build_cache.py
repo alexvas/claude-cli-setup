@@ -1128,7 +1128,7 @@ def maintain_uncommitted_blobs(
             except BuildCacheError:
                 _remove_blob_and_marker(state, identity)
                 continue
-            if identity not in live and current_time - verified_at >= UNCOMMITTED_TTL_SECONDS:
+            if identity not in live and current_time - verified_at > UNCOMMITTED_TTL_SECONDS:
                 _remove_blob_and_marker(state, identity)
     finally:
         state.close()

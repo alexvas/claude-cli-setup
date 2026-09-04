@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import os
 import subprocess
 import sys
 import tempfile
@@ -90,14 +91,16 @@ class BuildTransactionTest(unittest.TestCase):
         self.assertFalse((prepare_build_cache(self.checkout).generated_root / "other").exists())
 
     def test_hard_linked_lock_is_rejected_without_chmodding_link_target(self) -> None:
-        paths = prepare_build_cache(self.checkout)
+        cache = Path(self.tmp.name) / "cache"
+        cache.mkdir(mode=0o700)
+        paths = prepare_build_cache(self.checkout, cache_root=cache)
         unrelated = self.checkout / "unrelated-owner-file"
         unrelated.write_bytes(b"must retain mode")
         unrelated.chmod(0o644)
         lock_path = paths.persistent_root / "build.lock"
         lock_path.hardlink_to(unrelated)
         with self.assertRaisesRegex(BuildTransactionError, "unsafe checkout build lock"):
-            acquire_checkout_build_lock(self.checkout)
+            acquire_checkout_build_lock(self.checkout, cache_root=cache)
         self.assertEqual(0o644, unrelated.stat().st_mode & 0o777)
         self.assertEqual(2, unrelated.stat().st_nlink)
 
@@ -226,7 +229,7 @@ class BuildTransactionTest(unittest.TestCase):
             self.assertTrue(build_blob_path(paths.blobs_root, identity).exists())
             self.assertTrue((paths.markers_root / f"sha256:{identity.hex_digest()}.json").exists())
             maintain_uncommitted_blobs(
-                self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS,
+                self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS + 1,
             )
         self.assertFalse(build_blob_path(paths.blobs_root, identity).exists())
         self.assertFalse((paths.markers_root / f"sha256:{identity.hex_digest()}.json").exists())
@@ -290,7 +293,7 @@ class BuildTransactionTest(unittest.TestCase):
             )
             # No commit models a failed/interrupted transaction.
         with acquire_checkout_build_lock(self.checkout) as lock:
-            maintain_uncommitted_blobs(self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS)
+            maintain_uncommitted_blobs(self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS + 1)
         self.assertFalse(build_blob_path(paths.blobs_root, identity).exists())
 
     def test_corrupt_stale_marker_never_deletes_committed_blob(self) -> None:
@@ -316,10 +319,18 @@ class BuildTransactionTest(unittest.TestCase):
                 self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS - 1,
             )
             self.assertTrue(build_blob_path(paths.blobs_root, expired).exists())
+            # Exactly 2,592,000 seconds old is NOT expired: the blob survives
+            # at the boundary and only expires once it is older than the TTL.
             maintain_uncommitted_blobs(
                 self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS,
             )
+            self.assertTrue(build_blob_path(paths.blobs_root, expired).exists())
+            self.assertTrue((paths.markers_root / f"sha256:{expired.hex_digest()}.json").exists())
+            maintain_uncommitted_blobs(
+                self.checkout, lock=lock, now=100 + UNCOMMITTED_TTL_SECONDS + 1,
+            )
         self.assertFalse(build_blob_path(paths.blobs_root, expired).exists())
+        self.assertFalse((paths.markers_root / f"sha256:{expired.hex_digest()}.json").exists())
         self.assertTrue(build_blob_path(paths.blobs_root, committed).exists())
 
     def test_invalid_commit_blob_preserves_previous_manifest_and_blobs(self) -> None:
@@ -446,6 +457,198 @@ class BuildTransactionTest(unittest.TestCase):
             maintain_uncommitted_blobs(self.checkout, lock=lock, now=0)
         self.assertFalse(marker.exists())
         self.assertFalse(build_blob_path(paths.blobs_root, identity).exists())
+
+
+class ExternalTransactionIsolationTest(unittest.TestCase):
+    """Revised Phase 2 contract: canonical identity, cross-project isolation,
+    legacy-state neutrality, and global runtime/versioning cache immunity."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.cache = self.base / "cache"
+        self.cache.mkdir(mode=0o700)
+        os.chmod(self.cache, 0o700)
+        self.project = self.base / "a" / "proj"
+        self.project.mkdir(parents=True)
+        self.paths = prepare_build_cache(self.project, cache_root=self.cache)
+
+    def identity(self, payload: bytes) -> DigestIdentity:
+        return DigestIdentity.from_hex("sha256", hashlib.sha256(payload).hexdigest())
+
+    def blob(self, payload: bytes, *, checkout: Path) -> DigestIdentity:
+        identity = self.identity(payload)
+        publish_verified_blob(identity, payload, checkout_root=checkout, cache_root=self.cache)
+        return identity
+
+    def second_project(self, name: str = "proj") -> Path:
+        other = self.base / "b" / name
+        other.mkdir(parents=True)
+        return other
+
+    # ── 2.1 canonical lock identity ─────────────────────────────────────
+
+    def test_canonical_alias_contender_is_rejected_under_one_lock(self) -> None:
+        alias = self.base / "proj-link"
+        alias.symlink_to(self.project, target_is_directory=True)
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache):
+            with self.assertRaisesRegex(BuildTransactionError, "active build"):
+                acquire_checkout_build_lock(alias, cache_root=self.cache)
+        # The alias never created its own namespace or mutated the project.
+        self.assertFalse((self.project / ".docker-cache").exists())
+        self.assertFalse((self.project / ".docker-generated").exists())
+
+    def test_relative_and_absolute_paths_share_one_critical_section(self) -> None:
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(self.base)
+        relative = os.path.relpath(self.project, self.base)
+        with acquire_checkout_build_lock(relative, cache_root=self.cache):
+            with self.assertRaisesRegex(BuildTransactionError, "active build"):
+                acquire_checkout_build_lock(self.project, cache_root=self.cache)
+
+    def test_same_basename_projects_hold_independent_locks(self) -> None:
+        other = self.second_project()
+        other_paths = prepare_build_cache(other, cache_root=self.cache)
+        self.assertNotEqual(other_paths.namespace_root, self.paths.namespace_root)
+        self.assertTrue(other_paths.namespace_root.name.startswith("proj-"))
+        # Both namespaces serialize independently.
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache):
+            with acquire_checkout_build_lock(other, cache_root=self.cache):
+                pass
+        with acquire_checkout_build_lock(other, cache_root=self.cache):
+            with acquire_checkout_build_lock(self.project, cache_root=self.cache):
+                pass
+
+    # ── 2.2 abandoned-snapshot recovery ─────────────────────────────────
+
+    def test_recovery_keeps_verified_blobs_uncommitted(self) -> None:
+        identity = self.blob(b"reusable-after-recovery", checkout=self.project)
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache) as lock:
+            mark_uncommitted_blob(identity, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            snapshot = self.paths.generated_root / "abandoned"
+            snapshot.mkdir()
+            (snapshot / "partial").write_text("partial")
+            recover_abandoned_snapshots(self.project, lock=lock, cache_root=self.cache)
+            self.assertFalse(snapshot.exists())
+            self.assertTrue(build_blob_path(self.paths.blobs_root, identity).exists())
+            self.assertTrue((self.paths.markers_root / f"sha256:{identity.hex_digest()}.json").exists())
+            self.assertFalse((self.paths.persistent_root / "committed-build.json").exists())
+
+    def test_recovery_ignores_legacy_and_other_namespace_snapshots(self) -> None:
+        legacy = self.project / ".docker-cache" / "snapshots" / "legacy-snapshot"
+        legacy.mkdir(parents=True)
+        (legacy / "keep.txt").write_text("legacy")
+        other = self.second_project()
+        other_paths = prepare_build_cache(other, cache_root=self.cache)
+        other_snapshot = other_paths.generated_root / "other-snapshot"
+        other_snapshot.mkdir()
+        (other_snapshot / "keep.txt").write_text("other")
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache) as lock:
+            recover_abandoned_snapshots(self.project, lock=lock, cache_root=self.cache)
+        self.assertEqual((legacy / "keep.txt").read_text(), "legacy")
+        self.assertEqual((other_snapshot / "keep.txt").read_text(), "other")
+        self.assertTrue((self.project / ".docker-cache").is_dir())
+
+    # ── 2.3 committed-build manifest ────────────────────────────────────
+
+    def test_commit_removes_every_superseded_blob_immediately(self) -> None:
+        old_one = self.blob(b"old-one", checkout=self.project)
+        old_two = self.blob(b"old-two", checkout=self.project)
+        new = self.blob(b"new", checkout=self.project)
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache) as lock:
+            mark_uncommitted_blob(old_one, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            mark_uncommitted_blob(old_two, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            commit_build_set(self.project, {old_one, old_two}, lock=lock, cache_root=self.cache)
+            mark_uncommitted_blob(new, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            commit_build_set(self.project, {new}, lock=lock, cache_root=self.cache)
+        manifest = json.loads((self.paths.persistent_root / "committed-build.json").read_text())
+        self.assertEqual(manifest, {"blobs": [f"sha256:{new.hex_digest()}"]})
+        self.assertFalse(build_blob_path(self.paths.blobs_root, old_one).exists())
+        self.assertFalse(build_blob_path(self.paths.blobs_root, old_two).exists())
+        self.assertTrue(build_blob_path(self.paths.blobs_root, new).exists())
+
+    def test_commit_and_gc_leave_other_namespaces_and_global_caches_untouched(self) -> None:
+        other = self.second_project()
+        other_paths = prepare_build_cache(other, cache_root=self.cache)
+        other_blob = self.blob(b"other-committed", checkout=other)
+        with acquire_checkout_build_lock(other, cache_root=self.cache) as lock:
+            mark_uncommitted_blob(other_blob, other, lock=lock, verified_at=0, cache_root=self.cache)
+            commit_build_set(other, {other_blob}, lock=lock, cache_root=self.cache)
+
+        runtime = self.cache / "runtime-artifacts" / "blobs"
+        runtime.mkdir(parents=True)
+        (runtime / "runtime-blob").write_text("runtime")
+        versioning = self.cache / "versioning"
+        versioning.mkdir()
+        (versioning / "discovery.json").write_text("versioning")
+
+        committed = self.blob(b"committed", checkout=self.project)
+        stale = self.blob(b"stale", checkout=self.project)
+        replacement = self.blob(b"replacement", checkout=self.project)
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache) as lock:
+            mark_uncommitted_blob(committed, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            commit_build_set(self.project, {committed}, lock=lock, cache_root=self.cache)
+            mark_uncommitted_blob(stale, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            mark_uncommitted_blob(replacement, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            commit_build_set(self.project, {replacement}, lock=lock, cache_root=self.cache)
+            # At exactly the TTL the uncommitted blob is retained; it is
+            # collected only once it is older than the TTL.
+            maintain_uncommitted_blobs(
+                self.project, lock=lock, now=UNCOMMITTED_TTL_SECONDS, cache_root=self.cache,
+            )
+            self.assertTrue(build_blob_path(self.paths.blobs_root, stale).exists())
+            maintain_uncommitted_blobs(
+                self.project, lock=lock, now=UNCOMMITTED_TTL_SECONDS + 1, cache_root=self.cache,
+            )
+            self.assertFalse(build_blob_path(self.paths.blobs_root, stale).exists())
+
+        # Superseded project blob is gone; the replacement survives.
+        self.assertFalse(build_blob_path(self.paths.blobs_root, committed).exists())
+        self.assertTrue(build_blob_path(self.paths.blobs_root, replacement).exists())
+        # Another project namespace and global runtime/versioning caches are untouched.
+        self.assertTrue(build_blob_path(other_paths.blobs_root, other_blob).exists())
+        self.assertEqual(
+            json.loads((other_paths.persistent_root / "committed-build.json").read_text()),
+            {"blobs": [f"sha256:{other_blob.hex_digest()}"]},
+        )
+        self.assertEqual((runtime / "runtime-blob").read_text(), "runtime")
+        self.assertEqual((versioning / "discovery.json").read_text(), "versioning")
+
+    # ── 2.4 markers / fixed-policy GC ───────────────────────────────────
+
+    def test_legacy_checkout_state_is_neither_adopted_nor_deleted(self) -> None:
+        legacy = self.project / ".docker-cache"
+        legacy_manifest = legacy / "committed-build.json"
+        legacy_manifest.parent.mkdir(parents=True)
+        legacy_manifest.write_text('{"blobs": ["sha256:" + "0" * 64]}')
+        legacy_blob = legacy / "blobs" / "sha256" / ("0" * 64 + ".blob")
+        legacy_blob.parent.mkdir(parents=True)
+        legacy_blob.write_bytes(b"legacy-blob")
+        legacy_snapshot = legacy / "snapshots" / "stale"
+        legacy_snapshot.mkdir(parents=True)
+        (legacy_snapshot / "partial").write_text("partial")
+        before = {
+            legacy_manifest: legacy_manifest.read_bytes(),
+            legacy_blob: legacy_blob.read_bytes(),
+            legacy_snapshot / "partial": (legacy_snapshot / "partial").read_bytes(),
+        }
+
+        identity = self.blob(b"external-transaction", checkout=self.project)
+        with acquire_checkout_build_lock(self.project, cache_root=self.cache) as lock:
+            mark_uncommitted_blob(identity, self.project, lock=lock, verified_at=0, cache_root=self.cache)
+            commit_build_set(self.project, {identity}, lock=lock, cache_root=self.cache)
+            recover_abandoned_snapshots(self.project, lock=lock, cache_root=self.cache)
+            maintain_uncommitted_blobs(self.project, lock=lock, now=0, cache_root=self.cache)
+
+        for path, payload in before.items():
+            self.assertTrue(path.exists(), path)
+            self.assertEqual(path.read_bytes(), payload, path)
+        self.assertEqual(
+            json.loads((self.paths.persistent_root / "committed-build.json").read_text()),
+            {"blobs": [f"sha256:{identity.hex_digest()}"]},
+        )
 
 
 if __name__ == "__main__":

@@ -413,9 +413,14 @@ class ExternalPersistence(unittest.TestCase):
             publish_uncommitted_blob(committed,b'committed',checkout_root=self.root,lock=lock,verified_at=0)
             commit_build_set(self.root,{committed},lock=lock)
             publish_uncommitted_blob(stale,b'stale',checkout_root=self.root,lock=lock,verified_at=0)
+            # Exactly TTL seconds old is retained; only older-than-TTL expires.
             maintain_uncommitted_blobs(self.root,lock=lock,now=UNCOMMITTED_TTL_SECONDS)
+            self.assertTrue(build_blob_path(paths.blobs_root,stale).exists())
+            self.assertTrue((paths.markers_root/f'sha256:{stale.hex_digest()}.json').exists())
+            maintain_uncommitted_blobs(self.root,lock=lock,now=UNCOMMITTED_TTL_SECONDS+1)
         self.assertTrue(build_blob_path(paths.blobs_root,committed).exists())
         self.assertFalse(build_blob_path(paths.blobs_root,stale).exists())
+        self.assertFalse((paths.markers_root/f'sha256:{stale.hex_digest()}.json').exists())
         self.assertEqual(json.loads((state.build_artifacts_root/'committed-build.json').read_text())['blobs'], [f'sha256:{committed.hex_digest()}'])
 
     def test_interrupted_blob_publication_retains_marker_for_cleanup(self):
