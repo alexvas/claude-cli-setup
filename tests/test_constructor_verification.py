@@ -20,6 +20,7 @@ from docker.versioning.model import (
     EffectiveArtifact,
     EffectiveBuildProjection,
     EffectiveNode,
+    EffectivePiRelease,
     EffectiveRust,
     EffectiveTool,
 )
@@ -42,7 +43,6 @@ from docker.versioning.verification import (
     _CONTRACTS,
     _applicable_contracts,
     _extract_expected_value,
-    _extract_node_version,
 )
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -58,7 +58,11 @@ def _canonical_projection() -> EffectiveBuildProjection:
     """
     return EffectiveBuildProjection(
         platform="linux-amd64",
-        node=EffectiveNode(image="node:22.11.0-bookworm-slim"),
+        node=EffectiveNode(
+            image="node:22.11.0-bookworm-slim",
+            node_version="22.11.0",
+            npm_version="10.9.0",
+        ),
         rust=EffectiveRust(
             version="1.83.0",
             profile="minimal",
@@ -96,6 +100,11 @@ def _canonical_projection() -> EffectiveBuildProjection:
             ),
         ),
         pi_version="v1.4.236",
+        pi_release=EffectivePiRelease(
+            package="@earendil-works/pi-coding-agent",
+            release_repository="earendil-works/pi",
+            release_tag_prefix="v",
+        ),
         openspec_version="v0.15.0",
         oh_my_zsh_revision="eea3ac1a6802f0d8a778447413b9b52a14decb40",
     )
@@ -560,6 +569,7 @@ class TestAlteredProjection(unittest.TestCase):
             node=EffectiveNode(
                 image="node:18.19.0-bookworm-slim"
                       "@sha256:abc123def4567890011223344556677889900aabbcc",
+                node_version="18.19.0", npm_version="10.2.4",
             ),
             rust=EffectiveRust(
                 version="1.75.0",
@@ -576,6 +586,7 @@ class TestAlteredProjection(unittest.TestCase):
             rtk=base.rtk,
             fd=base.fd,
             pi_version=base.pi_version,
+            pi_release=base.pi_release,
             openspec_version=base.openspec_version,
             oh_my_zsh_revision="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         )
@@ -640,12 +651,14 @@ class TestAlteredProjection(unittest.TestCase):
                          obs_by_key["oh-my-zsh.revision"].expected_value)
 
     def test_altered_projection_digest_qualified_node(self) -> None:
-        """Node image with @sha256: digest in the tag still yields the
-        correct major.minor.patch version."""
+        """Node version is the reviewed ``node_version`` field, never the tag."""
         self.assertEqual(
             "18.19.0",
-            _extract_node_version(
-                "node:18.19.0-bookworm-slim@sha256:abc123def456"),
+            _extract_expected_value(
+                "node.version",
+                {"node": {"image": "node:18.19.0-bookworm-slim@sha256:abc123def456",
+                          "node_version": "18.19.0", "npm_version": "10.2.4"}},
+            ),
         )
 
     def test_altered_projection_is_valid(self) -> None:
@@ -681,6 +694,7 @@ class TestConditionalComponents(unittest.TestCase):
             rtk=base.rtk,
             fd=base.fd,
             pi_version=base.pi_version,
+            pi_release=base.pi_release,
             openspec_version=base.openspec_version,
             oh_my_zsh_revision=base.oh_my_zsh_revision,
         )
@@ -942,31 +956,30 @@ class TestObservationContracts(unittest.TestCase):
 
     # ── 1.1: Exact Node tag in inventory/effective projection ──────
 
-    def test_extract_node_version_from_exact_semver_tag(self) -> None:
-        """``_extract_node_version`` must recover the full X.Y.Z from
-        a pinned exact-semver Node image tag."""
-        # The pinned inventory tag is ``24.18.0-trixie-slim``.
+    def test_extract_node_version_uses_reviewed_field_not_tag(self) -> None:
+        """``node.version`` is derived from the reviewed ``node_version``
+        field, never inferred from the image tag."""
         self.assertEqual(
             "24.18.0",
-            _extract_node_version("node:24.18.0-trixie-slim"),
-        )
-        self.assertEqual(
-            "24.18.0",
-            _extract_node_version(
-                "docker.io/library/node:24.18.0-trixie-slim"
-                "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde"
-                "6fe7d08ab13b7f50573",
+            _extract_expected_value(
+                "node.version",
+                {"node": {"image": "docker.io/library/node:24.18.0-trixie-slim"
+                          "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde"
+                          "6fe7d08ab13b7f50573",
+                          "node_version": "24.18.0", "npm_version": "11.16.0"}},
             ),
         )
 
-    def test_floating_node_tag_is_not_exact_semver(self) -> None:
-        """A floating major-only tag like ``24-trixie-slim`` must
-        NOT be treated as an exact-verifiable semver."""
-        with self.assertRaises(ValueError) as ctx:
-            _extract_node_version("node:24-trixie-slim")
-        msg = str(ctx.exception).lower()
-        self.assertIn("not an exact semver", msg,
-                       "ValueError must explain the tag is not exact-verifiable")
+    def test_node_version_field_ignores_floating_tag(self) -> None:
+        """A floating major-only tag still yields the reviewed node_version."""
+        self.assertEqual(
+            "24.18.0",
+            _extract_expected_value(
+                "node.version",
+                {"node": {"image": "node:24-trixie-slim",
+                          "node_version": "24.18.0", "npm_version": "11.16.0"}},
+            ),
+        )
 
     def test_inventory_pipeline_resolves_exact_node_image(self) -> None:
         """The actual ``docker-constructor.toml`` loaded through the
@@ -1020,6 +1033,7 @@ class TestObservationContracts(unittest.TestCase):
                 image="docker.io/library/node:24.18.0-trixie-slim"
                       "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be12642"
                       "6176fde6fe7d08ab13b7f50573",
+                node_version="24.18.0", npm_version="11.16.0",
             ),
             rust=proj.rust,
             uv=proj.uv,
@@ -1028,6 +1042,7 @@ class TestObservationContracts(unittest.TestCase):
             rtk=proj.rtk,
             fd=proj.fd,
             pi_version=proj.pi_version,
+            pi_release=proj.pi_release,
             openspec_version=proj.openspec_version,
             oh_my_zsh_revision=proj.oh_my_zsh_revision,
         )
@@ -1047,10 +1062,9 @@ class TestObservationContracts(unittest.TestCase):
             f"observed={node_obs.observed_value!r}",
         )
 
-    def test_floating_node_tag_rejected_as_not_exact_verifiable(self) -> None:
-        """When the effective projection uses a floating major-only
-        Node tag (e.g. ``24-trixie-slim``), verification must reject
-        it — not silently reduce to a major-version comparison."""
+    def test_floating_node_tag_uses_reviewed_node_version(self) -> None:
+        """A floating major-only tag still verifies against the reviewed
+        ``node_version`` field — the version is never inferred from the tag."""
         proj = _canonical_projection()
         proj = EffectiveBuildProjection(
             platform=proj.platform,
@@ -1058,6 +1072,7 @@ class TestObservationContracts(unittest.TestCase):
                 image="docker.io/library/node:24-trixie-slim"
                       "@sha256:ae91dcc111a68c9d2d81ff2a17bda61be12642"
                       "6176fde6fe7d08ab13b7f50573",
+                node_version="24.18.0", npm_version="11.16.0",
             ),
             rust=proj.rust,
             uv=proj.uv,
@@ -1066,12 +1081,11 @@ class TestObservationContracts(unittest.TestCase):
             rtk=proj.rtk,
             fd=proj.fd,
             pi_version=proj.pi_version,
+            pi_release=proj.pi_release,
             openspec_version=proj.openspec_version,
             oh_my_zsh_revision=proj.oh_my_zsh_revision,
         )
         tf = _write_projection_fixture(proj)
-        # Even when node --version matches the full semver, the
-        # floating tag makes the expectation non-exact.
         matching = dict(_MATCHING)
         matching["node"] = "v24.18.0\n"
         runner = ToolVersionRunner(matching)
@@ -1079,21 +1093,13 @@ class TestObservationContracts(unittest.TestCase):
             image="pi-cli-pi:latest",
             effective_projection_path=tf, runner=runner,
         ))
-        # RED: the current extraction returns "24" which won't
-        # match "24.18.0", but the failure message should clearly
-        # say the tag is not exact-verifiable, not just "mismatch".
         node_obs = {o.key: o for o in result.observations}["node.version"]
-        self.assertFalse(
+        self.assertTrue(
             node_obs.ok,
-            "floating tag '24-trixie-slim' must be rejected — "
-            "a major-only comparison is not exact-verifiable",
+            f"reviewed node_version must pass regardless of tag: "
+            f"expected={node_obs.expected_value!r} "
+            f"observed={node_obs.observed_value!r}",
         )
-        # The failure must identify the root cause: the tag is not
-        # an exact semver, not just a version difference.
-        observed = node_obs.observed_value or ""
-        self.assertIn("not exact", (observed + (node_obs.expected_value or "")).lower(),
-                       "floating tag rejection must mention 'not exact' "
-                       "or similar, not just report a version mismatch")
 
     # ── 1.3: rustfmt independent version RED ─────────────────────
 
@@ -1122,6 +1128,7 @@ class TestObservationContracts(unittest.TestCase):
             rtk=proj.rtk,
             fd=proj.fd,
             pi_version=proj.pi_version,
+            pi_release=proj.pi_release,
             openspec_version=proj.openspec_version,
             oh_my_zsh_revision=proj.oh_my_zsh_revision,
         )
@@ -1173,6 +1180,7 @@ class TestObservationContracts(unittest.TestCase):
             rtk=proj.rtk,
             fd=proj.fd,
             pi_version=proj.pi_version,
+            pi_release=proj.pi_release,
             openspec_version=proj.openspec_version,
             oh_my_zsh_revision=proj.oh_my_zsh_revision,
         )
@@ -1409,6 +1417,7 @@ class TestObservationContracts(unittest.TestCase):
             rtk=proj.rtk,
             fd=proj.fd,
             pi_version=proj.pi_version,
+            pi_release=proj.pi_release,
             openspec_version=proj.openspec_version,
             oh_my_zsh_revision=proj.oh_my_zsh_revision,
         )

@@ -50,6 +50,8 @@ from .model import (
     OpenSpecToolsStage,
     OverridePolicy,
     PiExtensionEntry,
+    PiReleaseSource,
+    PiToolEntry,
     PiToolsStage,
     PrebuiltToolEntry,
     PyPiSource,
@@ -496,7 +498,7 @@ _register(("build",), "stages")
 _register(("build", "stages",), "base", "toolchain", "rtk-prebuilt", "fd-prebuilt",
           "pi-tools", "openspec-tools", "runtime")
 _register(("build", "stages", "base"), "node")
-_register(("build", "stages", "base", "node"), "tag", "digest", "source", "update")
+_register(("build", "stages", "base", "node"), "tag", "digest", "node_version", "npm_version", "source", "update")
 _register(("build", "stages", "base", "node", "source"), "type", "registry", "repository")
 _register(("build", "stages", "base", "node", "update"), "provider", "stable_only", "track")
 
@@ -530,11 +532,16 @@ for _prebuilt_stage, _tool_name in [("rtk-prebuilt", "rtk"), ("fd-prebuilt", "fd
     _register(("build", "stages", _prebuilt_stage, _tool_name, "update"), "provider", "stable_only", "tag_prefix", "required_platforms")
     _register(("build", "stages", _prebuilt_stage, _tool_name, "artifacts", "__ANY__"), "url", "sha256")
 
-for _npm_stage, _npm_name in [("pi-tools", "pi"), ("openspec-tools", "openspec")]:
+for _npm_stage, _npm_name in [("openspec-tools", "openspec")]:
     _register(("build", "stages", _npm_stage), _npm_name)
     _register(("build", "stages", _npm_stage, _npm_name), "version", "source", "update")
     _register(("build", "stages", _npm_stage, _npm_name, "source"), "type", "package")
     _register(("build", "stages", _npm_stage, _npm_name, "update"), "provider", "stable_only")
+
+_register(("build", "stages", "pi-tools"), "pi")
+_register(("build", "stages", "pi-tools", "pi"), "version", "source", "update")
+_register(("build", "stages", "pi-tools", "pi", "source"), "type", "package", "release_repository", "release_tag_prefix")
+_register(("build", "stages", "pi-tools", "pi", "update"), "provider", "stable_only")
 
 _register(("build", "stages", "runtime"), "oh-my-zsh")
 _register(("build", "stages", "runtime", "oh-my-zsh"), "revision", "source", "update")
@@ -635,6 +642,25 @@ def _load_source(r: _PathReader, path: tuple[str, ...]) -> Any:
         repository = require_nonempty_string(r.root, path + ("source", "repository"))
         tag = require_nonempty_string(r.root, path + ("source", "tag"))
         return GitHubReleaseSource(repository=repository, tag=tag)
+
+    elif stype == "pi-release":
+        package = require_nonempty_string(r.root, path + ("source", "package"))
+        release_repository = require_nonempty_string(
+            r.root, path + ("source", "release_repository")
+        )
+        release_tag_prefix = require_string(
+            r.root, path + ("source", "release_tag_prefix")
+        )
+        if release_tag_prefix.startswith("/"):
+            raise InventoryError(
+                f"{dot}.source.release_tag_prefix: must not start with '/', "
+                f"got {release_tag_prefix!r}"
+            )
+        return PiReleaseSource(
+            package=package,
+            release_repository=release_repository,
+            release_tag_prefix=release_tag_prefix,
+        )
 
     elif stype == "npm":
         package = require_nonempty_string(r.root, path + ("source", "package"))
@@ -760,6 +786,7 @@ def _load_update(r: _PathReader, path: tuple[str, ...]) -> Any:
 _SOURCE_UPDATE_MAP = {
     "github-release": "github-release",
     "npm": "npm",
+    "pi-release": "npm",
     "pypi": "pypi",
     "uv-python": "uv-python",
     "rust-channel": "rust-channel",
@@ -796,7 +823,7 @@ _ENTRY_SOURCE_CLASSES = {
     "build.stages.toolchain.ty": (PyPiSource, PyPiUpdate),
     "build.stages.rtk-prebuilt.rtk": (GitHubReleaseSource, GitHubReleaseUpdate),
     "build.stages.fd-prebuilt.fd": (GitHubReleaseSource, GitHubReleaseUpdate),
-    "build.stages.pi-tools.pi": (NpmSource, NpmUpdate),
+    "build.stages.pi-tools.pi": (PiReleaseSource, NpmUpdate),
     "build.stages.openspec-tools.openspec": (NpmSource, NpmUpdate),
     "build.stages.runtime.oh-my-zsh": (GitSource, GitRefUpdate),
 }
@@ -1323,7 +1350,11 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     _check_unknown_keys(r.tbl(("build", "stages", "base", "node",)), ("build", "stages", "base", "node",))
     tag = r.str(("build", "stages", "base", "node", "tag"))
     digest = r.str(("build", "stages", "base", "node", "digest"))
+    node_version = r.str(("build", "stages", "base", "node", "node_version"))
+    npm_version = r.str(("build", "stages", "base", "node", "npm_version"))
     _validate_node_digest(digest, "build.stages.base.node.digest")
+    _validate_npm_version(node_version, "build.stages.base.node.node_version")
+    _validate_npm_version(npm_version, "build.stages.base.node.npm_version")
     node_source = _load_source(r, ("build", "stages", "base", "node"))
     node_update = _load_update(r, ("build", "stages", "base", "node"))
     _check_compat(node_source.type, node_update.provider, "build.stages.base.node")
@@ -1465,7 +1496,7 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     # --- npm tools ---
     _check_unknown_keys(r.tbl(("build", "stages", "pi-tools",)), ("build", "stages", "pi-tools",))
     _check_unknown_keys(r.tbl(("build", "stages", "openspec-tools",)), ("build", "stages", "openspec-tools",))
-    pi_tool = _load_npm_tool(r, ("build", "stages", "pi-tools", "pi"))
+    pi_tool = _load_pi_tool(r, ("build", "stages", "pi-tools", "pi"))
     openspec_tool = _load_npm_tool(r, ("build", "stages", "openspec-tools", "openspec"))
 
     # --- runtime ---
@@ -1597,7 +1628,10 @@ def validate_inventory(raw: Mapping[str, object]) -> Inventory:
     # ── construct stages ──────────────────────────────────────────
     stages = Stages(
         base=BaseStage(
-            node=NodeEntry(tag=tag, digest=digest, source=node_source, update=node_update)
+            node=NodeEntry(
+                tag=tag, digest=digest, node_version=node_version,
+                npm_version=npm_version, source=node_source, update=node_update,
+            )
         ),
         toolchain=ToolchainStage(
             rust=RustEntry(
@@ -1734,3 +1768,21 @@ def _load_npm_tool(r: _PathReader, path: tuple[str, ...]) -> NpmToolEntry:
     _check_unknown_keys(r.tbl(path + ("source",)), path + ("source",))
     _check_unknown_keys(r.tbl(path + ("update",)), path + ("update",))
     return NpmToolEntry(version=version, source=src, update=upd)
+
+
+def _load_pi_tool(r: _PathReader, path: tuple[str, ...]) -> PiToolEntry:
+    _check_unknown_keys(r.tbl(path), path)
+    version = r.str(path + ("version",))
+    _validate_npm_version(version, _dot(path) + ".version")
+    src = _load_source(r, path)
+    upd = _load_update(r, path)
+    _check_compat(src.type, upd.provider, _dot(path))
+    _check_entry_source_update(src, upd, _dot(path))
+    _check_unknown_keys(r.tbl(path + ("source",)), path + ("source",))
+    _check_unknown_keys(r.tbl(path + ("update",)), path + ("update",))
+    if not isinstance(src, PiReleaseSource):
+        raise InventoryError(
+            f"{_dot(path)}.source.type: expected 'pi-release' for Pi, "
+            f"got {src.type!r}"
+        )
+    return PiToolEntry(version=version, source=src, update=upd)

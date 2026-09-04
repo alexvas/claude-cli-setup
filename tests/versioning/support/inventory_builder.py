@@ -39,6 +39,8 @@ schema = 1
 
 [build.stages.base.node]
 tag = "24-trixie-slim"
+{g("base.node.node_version", 'node_version = "24.18.0"')}
+{g("base.node.npm_version", 'npm_version = "11.16.0"')}
 {g("base.node", 'digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"')}
 
 [build.stages.base.node.source]
@@ -134,7 +136,7 @@ sha256 = "0e44eb5fca93f09bc6f5430b90acdf44c8e069d0a903700aeb4820629337b67b"
 {g("build.stages.pi-tools.pi", 'version = "0.80.10"')}
 
 [build.stages.pi-tools.pi.source]
-{g("build.stages.pi-tools.pi.source", 'type = "npm"\npackage = "@earendil-works/pi-coding-agent"')}
+{g("build.stages.pi-tools.pi.source", 'type = "pi-release"\npackage = "@earendil-works/pi-coding-agent"\nrelease_repository = "earendil-works/pi"\nrelease_tag_prefix = "v"')}
 
 [build.stages.pi-tools.pi.update]
 {g("build.stages.pi-tools.pi.update", 'provider = "npm"\nstable_only = true')}

@@ -22,6 +22,10 @@ schema = 1
 # --- base.node ---
 [build.stages.base.node]
 tag = "24.18.0-trixie-slim"
+# Reviewed exact tool versions bundled with the digest-pinned image.  These
+# are never inferred from the image tag.
+node_version = "24.18.0"
+npm_version = "11.16.0"
 # Digest of node:24.18.0-trixie-slim resolved from Docker Hub manifest.
 digest = "sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573"
 
@@ -163,11 +167,13 @@ required_platforms = ["linux-amd64"]
 
 # --- pi-tools.pi ---
 [build.stages.pi-tools.pi]
-version = "0.84.2"
+version = "0.84.4"
 
 [build.stages.pi-tools.pi.source]
 package = "@earendil-works/pi-coding-agent"
-type = "npm"
+type = "pi-release"
+release_repository = "earendil-works/pi"
+release_tag_prefix = "v"
 
 [build.stages.pi-tools.pi.update]
 provider = "npm"

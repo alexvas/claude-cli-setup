@@ -223,6 +223,14 @@ class ValidatedAssemblyInput:
     integrity_less: tuple[IntegrityLessNode, ...]
     """Explicit integrity-less registry-node records, sorted by lock path."""
 
+    package_bytes: bytes | None = None
+    """Exact ``pi-coding-agent-install-package.json`` bytes when the caller
+    reviewed a separate install-package manifest, else ``None``."""
+
+    package_digest: str | None = None
+    """SHA-256 hex of the exact package bytes, or ``None`` when no package
+    manifest was reviewed."""
+
 
 @dataclass(frozen=True)
 class LockfileV3:

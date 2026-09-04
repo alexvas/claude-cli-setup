@@ -33,6 +33,8 @@ def _canonical_build_toml(
         parts.append("""\
 [build.stages.base.node]
 tag = "24-trixie-slim"
+node_version = "24.18.0"
+npm_version = "11.16.0"
 digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [build.stages.base.node.source]
@@ -151,8 +153,10 @@ required_platforms = ["linux-amd64"]
 version = "0.80.10"
 
 [build.stages.pi-tools.pi.source]
-type = "npm"
+type = "pi-release"
 package = "@earendil-works/pi-coding-agent"
+release_repository = "earendil-works/pi"
+release_tag_prefix = "v"
 
 [build.stages.pi-tools.pi.update]
 provider = "npm"
@@ -545,8 +549,10 @@ class TestMigrationContract(unittest.TestCase):
     def test_pi_package_and_version_preserved(self):
         pi = self.pre_inv.stages.pi_tools.pi
         self.assertIsInstance(pi.version, str)
-        self.assertEqual(pi.source.type, "npm")
+        self.assertEqual(pi.source.type, "pi-release")
         self.assertEqual(pi.source.package, "@earendil-works/pi-coding-agent")
+        self.assertEqual(pi.source.release_repository, "earendil-works/pi")
+        self.assertEqual(pi.source.release_tag_prefix, "v")
 
     def test_openspec_package_and_version_preserved(self):
         openspec = self.pre_inv.stages.openspec_tools.openspec

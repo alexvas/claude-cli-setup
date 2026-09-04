@@ -23,10 +23,10 @@ which toolchain is active or default.
 +------------------+-----------------------------+-----------------------------+-----------------------------+
 | Key              | Command suffix              | Expected source             | Normalization               |
 +==================+=============================+=============================+=============================+
-| ``node.version`` | ``node                       | ``[node].image`` → tag      | Strip leading ``v``/``V``   |
-|                  | --version``                  | version (e.g.               | from both sides, then       |
-|                  |                              | ``node:22.11.0-bookworm``   | strip trailing newline.     |
-|                  |                              | → ``"22.11.0"``)            |                             |
+| ``node.version`` | ``node                       | ``[node].node_version``     | Strip leading ``v``/``V``   |
+|                  | --version``                  | (reviewed exact semver,    | from both sides, then       |
+|                  |                              | never inferred from the    | strip trailing newline.     |
+|                  |                              | image tag).                |                             |
 +------------------+-----------------------------+-----------------------------+-----------------------------+
 | ``rust.version`` | ``rustc                      | ``[rust].version``          | Extract the first           |
 |                  | --version``                  | (e.g. ``"1.83.0"``)         | ``X.Y.Z`` token from        |
@@ -223,29 +223,6 @@ _CONTRACTS: tuple[ObservationContract, ...] = (
 # ── Expected-value extraction ────────────────────────────────────────
 
 
-def _extract_node_version(image: str) -> str:
-    """Extract ``X.Y.Z`` from a Node image reference.
-
-    Raises ``ValueError`` when the tag does not contain an exact
-    semver — floating tags like ``24-trixie-slim`` are rejected.
-
-    >>> _extract_node_version("node:22.11.0-bookworm-slim")
-    '22.11.0'
-    >>> _extract_node_version("node:18.19.0-bookworm-slim@sha256:abc")
-    '18.19.0'
-    """
-    ref = image.split("@")[0]
-    tag = ref.split(":")[-1]
-    candidate = tag.split("-")[0]
-    if not _VERSION_TOKEN.fullmatch(candidate):
-        raise ValueError(
-            f"Node image tag {tag!r} is not an exact semver "
-            f"(not exact-verifiable); build verification "
-            f"requires a tag like 24.18.0-trixie-slim"
-        )
-    return candidate
-
-
 def _extract_expected_value(key: str, projection: dict) -> str:
     """Derive the normalized expected value for *key* from *projection*.
 
@@ -254,7 +231,8 @@ def _extract_expected_value(key: str, projection: dict) -> str:
     the parsed effective build projection TOML).
     """
     if key == "node.version":
-        return _extract_node_version(projection["node"]["image"])
+        # Reviewed exact node_version field — never inferred from the tag.
+        return projection["node"]["node_version"]
     elif key == "rust.version":
         return projection["rust"]["version"]
     elif key == "rust.cargo":

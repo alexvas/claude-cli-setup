@@ -72,6 +72,17 @@ class NpmSource:
 
 
 @dataclass(frozen=True)
+class PiReleaseSource:
+    """Reviewed Pi release contract: npm package identity plus the exact
+    GitHub release repository and tag prefix used to derive immutable
+    release-asset URLs (``SHA256SUMS`` and the two installation files)."""
+    package: str
+    release_repository: str
+    release_tag_prefix: str
+    type: str = "pi-release"
+
+
+@dataclass(frozen=True)
 class PyPiSource:
     package: str
     type: str = "pypi"
@@ -183,6 +194,8 @@ class StaticUrlUpdate:
 class NodeEntry:
     tag: str
     digest: str
+    node_version: str
+    npm_version: str
     source: DockerRegistrySource
     update: DockerRegistryUpdate
 
@@ -234,6 +247,13 @@ class PrebuiltToolEntry:
 class NpmToolEntry:
     version: str
     source: NpmSource
+    update: NpmUpdate
+
+
+@dataclass(frozen=True)
+class PiToolEntry:
+    version: str
+    source: PiReleaseSource
     update: NpmUpdate
 
 
@@ -402,8 +422,19 @@ class EffectiveArtifact:
 
 @dataclass(frozen=True)
 class EffectiveNode:
-    """Resolved base image reference."""
+    """Resolved base image reference plus caller-owned reviewed tool
+    versions (never inferred from the image tag)."""
     image: str
+    node_version: str
+    npm_version: str
+
+
+@dataclass(frozen=True)
+class EffectivePiRelease:
+    """Resolved Pi release-source selection for host assembly."""
+    package: str
+    release_repository: str
+    release_tag_prefix: str
 
 
 @dataclass(frozen=True)
@@ -434,6 +465,7 @@ class EffectiveBuildProjection:
     rtk: EffectiveTool
     fd: EffectiveTool
     pi_version: str
+    pi_release: EffectivePiRelease
     openspec_version: str
     oh_my_zsh_revision: str
 
@@ -596,7 +628,7 @@ class FdPrebuiltStage:
 
 @dataclass(frozen=True)
 class PiToolsStage:
-    pi: NpmToolEntry
+    pi: PiToolEntry
 
 
 @dataclass(frozen=True)

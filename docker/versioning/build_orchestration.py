@@ -25,8 +25,9 @@ import subprocess
 from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, TypedDict
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, TypedDict, cast
 
+from docker.npm_environment.errors import LockedNpmError
 from docker.networking import (
     DockerMode,
     GatewayDiagnosis,
@@ -53,8 +54,8 @@ from docker.versioning.build_materialization import (
     select_build_artifacts,
 )
 from docker.versioning.build_snapshot import (
-    MaterializedSnapshot, SnapshotError, cleanup_artifact_snapshot,
-    create_artifact_snapshot,
+    DerivedEnvironmentSource, MaterializedSnapshot, SnapshotError,
+    cleanup_artifact_snapshot, create_artifact_snapshot,
 )
 from docker.versioning.effective import (
     EffectiveBuildProjection,
@@ -70,15 +71,22 @@ from docker.versioning.model import HostAccessPolicy, Inventory
 from docker.versioning.rendering import (
     BuildRenderInputs,
     CacheControls,
+    DerivedEnvironment,
     _docker_platform,
     Materialized,
-    NoDerivedEnvironment,
     Prospective,
     render_build_vector,
     render_command_display,
     render_prospective_build_display,
     write_effective_build,
 )
+from docker.versioning.pi_assembly import (
+    PiAssemblyError,
+    PiAssemblyRequest,
+    PiMaterialization,
+    materialize_pi,
+)
+from docker.versioning.pi_consumer import PiConsumerError
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -239,6 +247,12 @@ class BuildRequest:
 
     _named_context_supported: Callable[[], bool] | None = None
     """Injectable BuildKit named-context capability probe."""
+
+    _materialize_pi: Callable[..., object] | None = None
+    """Injectable host Pi materializer (preflight + assembly + launcher)."""
+
+    _assembler_executor: object | None = None
+    """Injectable assembler ``RunExecutor`` (defaults to DockerRunExecutor)."""
 
     def __post_init__(self) -> None:
         """Normalize ``overrides`` to an immutable mapping.
@@ -567,6 +581,73 @@ def _default_named_context_supported() -> bool:
     return completed.returncode == 0 and "--build-context" in completed.stdout
 
 
+# Pi/assembler/consumer exceptions normalized to ``SnapshotError`` at the Pi
+# materialization boundary so ``execute_build`` never depends on
+# implementation-specific exception types.
+_PI_MATERIALIZATION_ERRORS = (
+    PiAssemblyError,
+    PiConsumerError,
+    LockedNpmError,
+    OSError,
+    ValueError,
+)
+
+
+def _materialize_pi_for_build(
+    request: BuildRequest,
+    plan: BuildTransactionPlan,
+    projection: EffectiveBuildProjection,
+    transport: StreamingTransport,
+    cache_root: Path,
+) -> PiMaterialization:
+    """Materialize the reviewed Pi environment before snapshot creation.
+
+    Uses the injected Pi materializer when present, otherwise the production
+    ``materialize_pi`` pipeline with a real ``DockerRunExecutor``.  Every
+    Pi/assembler/consumer exception is normalized to ``SnapshotError`` so
+    ``execute_build`` treats it as a single materialization-boundary failure.
+    """
+    try:
+        if request._materialize_pi is not None:
+            return cast(PiMaterialization, request._materialize_pi(
+                projection,
+                transport=transport,
+                cache_root=cache_root,
+                executor=request._assembler_executor,
+                uid=request.uid,
+                gid=request.gid,
+                proxy_url=plan.host_network_policy.proxy_url,
+                proxy_no_proxy=(
+                    plan.render_inputs.proxy_no_proxy
+                    if plan.render_inputs is not None else None
+                ),
+                corporate_trust_bundle=(
+                    str(plan.host_network_policy.ca_bundle)
+                    if plan.host_network_policy.ca_bundle is not None else None
+                ),
+            ))
+        from docker.npm_environment.execution import DockerRunExecutor
+        return materialize_pi(PiAssemblyRequest(
+            projection=projection,
+            transport=transport,
+            cache_root=cache_root,
+            executor=request._assembler_executor or DockerRunExecutor(),
+            uid=request.uid,
+            gid=request.gid,
+            proxy_url=plan.host_network_policy.proxy_url,
+            proxy_no_proxy=(
+                plan.render_inputs.proxy_no_proxy
+                if plan.render_inputs is not None else None
+            ),
+            corporate_trust_bundle=(
+                str(plan.host_network_policy.ca_bundle)
+                if plan.host_network_policy.ca_bundle is not None else None
+            ),
+        ))
+    except _PI_MATERIALIZATION_ERRORS as exc:
+        raise SnapshotError(f"Pi materialization failed: {exc}") from exc
+
+
 def execute_build(
     plan: BuildTransactionPlan,
     request: BuildRequest,
@@ -631,14 +712,37 @@ def execute_build(
         ):
             raise SnapshotError("artifact materializer returned invalid blob paths")
         blobs = tuple(materialized)
-        snapshot = create_artifact_snapshot(
-            select_build_artifacts(projection), blobs, checkout_root=repo_root,
-            cache_root=project_state.cache_root, project_state=project_state,
+        # Materialize the reviewed Pi environment (acquisition → preflight →
+        # Docker-backed assembly → consumer launcher) before snapshot creation.
+        pi_materialization = _materialize_pi_for_build(
+            request, plan, projection, transport, project_state.cache_root,
         )
         if plan.render_inputs is None:
             raise SnapshotError("missing build rendering inputs")
+        attestation = DerivedEnvironment(
+            assembled_output_identity=pi_materialization.output_identity,
+            canonical_tree_digest=pi_materialization.tree_digest,
+            assembler_evidence_digest=pi_materialization.assembler_evidence_digest,
+            consumer_launcher_evidence_digest=pi_materialization.launcher_evidence_digest,
+        )
+        derived = DerivedEnvironmentSource(
+            environment_root=pi_materialization.result.environment_root,
+            launcher_contents=pi_materialization.launcher_plan.contents,
+            launcher_mode=pi_materialization.launcher_plan.mode,
+            assembler_evidence=pi_materialization.result.evidence_path.read_bytes(),
+            launcher_evidence=pi_materialization.launcher_evidence.data,
+            assembler_evidence_digest=attestation.assembler_evidence_digest,
+            launcher_evidence_digest=attestation.consumer_launcher_evidence_digest,
+            assembled_output_identity=attestation.assembled_output_identity,
+            canonical_tree_digest=attestation.canonical_tree_digest,
+        )
+        snapshot = create_artifact_snapshot(
+            select_build_artifacts(projection), blobs, checkout_root=repo_root,
+            cache_root=project_state.cache_root, project_state=project_state,
+            derived=derived,
+        )
         render_inputs = dataclass_replace(plan.render_inputs, named_context=Materialized(
-            str(snapshot.path), NoDerivedEnvironment(),
+            str(snapshot.path), attestation,
         ))
         build_args = render_build_vector(render_inputs)
         display_string = render_command_display(build_args)

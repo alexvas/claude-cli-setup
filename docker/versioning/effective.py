@@ -25,6 +25,7 @@ from .model import (
     EffectiveBuildProjection,
     EffectiveNode,
     EffectivePiExtensionEntry,
+    EffectivePiRelease,
     EffectiveRuntimeProjection,
     EffectiveRust,
     EffectiveTool,
@@ -189,7 +190,11 @@ def resolve_build_projection(
 
     return EffectiveBuildProjection(
         platform=platform,
-        node=EffectiveNode(image=node_image),
+        node=EffectiveNode(
+            image=node_image,
+            node_version=node_entry.node_version,
+            npm_version=node_entry.npm_version,
+        ),
         rust=EffectiveRust(
             version=rust.version,
             profile=rust.profile,
@@ -211,6 +216,11 @@ def resolve_build_projection(
             artifact=_resolve_artifact(fd.artifacts, platform, "fd"),
         ),
         pi_version=build.stages.pi_tools.pi.version,
+        pi_release=EffectivePiRelease(
+            package=build.stages.pi_tools.pi.source.package,
+            release_repository=build.stages.pi_tools.pi.source.release_repository,
+            release_tag_prefix=build.stages.pi_tools.pi.source.release_tag_prefix,
+        ),
         openspec_version=build.stages.openspec_tools.openspec.version,
         oh_my_zsh_revision=build.stages.runtime.oh_my_zsh.revision,
     )

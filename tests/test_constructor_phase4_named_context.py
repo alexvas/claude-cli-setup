@@ -23,6 +23,7 @@ from docker.versioning.rendering import (
 )
 from docker.versioning.effective import resolve_build_projection
 from docker.versioning.inventory import load_inventory
+from tests.build_test_support import fake_pi_materialization
 from tests.privilege_helpers import differing_uid_read_status
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,6 +130,7 @@ class TestPhase4Capability(unittest.TestCase):
             inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), confirmed=True,
             _named_context_supported=lambda: False,
             _materialize_artifacts=lambda *_a, **_kw: effects.append("download"),
+            _materialize_pi=fake_pi_materialization,
         ))
         self.assertEqual([], effects)
         self.assertIn("named-context", result.message or "")
@@ -145,6 +147,7 @@ class TestPhase4Cleanup(unittest.TestCase):
             inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), confirmed=True,
             _named_context_supported=lambda: True,
             _materialize_artifacts=lambda *_a, **_kw: tuple(root / f"{name}.blob" for name in ("rustup", "uv", "rtk", "fd")),
+            _materialize_pi=fake_pi_materialization,
             _publish_projection=publish, runner=runner,
         )
 

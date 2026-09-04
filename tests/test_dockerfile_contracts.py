@@ -201,6 +201,8 @@ class TestDockerfileBuildContract(unittest.TestCase):
             "RUSTUP_SHA256", "UV_VERSION", "UV_SHA256",
             "PYTHON_VERSION", "TY_VERSION", "RTK_VERSION", "RTK_SHA256",
             "FD_VERSION", "FD_SHA256", "PI_VERSION", "OPENSPEC_VERSION",
+            "PI_ASSEMBLED_OUTPUT_IDENTITY", "PI_TREE_DIGEST",
+            "PI_ASSEMBLER_EVIDENCE_DIGEST", "PI_LAUNCHER_EVIDENCE_DIGEST",
             "OH_MY_ZSH_VERSION", "PI_CORPORATE_PROXY_URL", "PI_CORPORATE_NO_PROXY",
             "CORPORATE_TRUST_ENABLED", "PI_CORPORATE_CA_PATH", "DEV_UID", "DEV_GID",
         }
@@ -215,16 +217,51 @@ class TestDockerfileBuildContract(unittest.TestCase):
         # checksum perform the installation while a version change still busts
         # the corresponding stage.
         identity_arguments = {"RTK_VERSION", "FD_VERSION"}
-        for name in rendered - helper_arguments - identity_arguments:
+        # Pi attestation values are consumed by the image-side verify script via
+        # ARG-provided environment, not via ``${...}`` interpolation.
+        pi_verification_arguments = {
+            "PI_VERSION", "PI_ASSEMBLED_OUTPUT_IDENTITY", "PI_TREE_DIGEST",
+            "PI_ASSEMBLER_EVIDENCE_DIGEST", "PI_LAUNCHER_EVIDENCE_DIGEST",
+        }
+        for name in rendered - helper_arguments - identity_arguments - pi_verification_arguments:
             with self.subTest(argument=name):
                 self.assertRegex(DOCKERFILE, rf"\$\{{?{name}\}}?", f"unused ARG {name}")
         for name in helper_arguments:
             with self.subTest(helper_argument=name):
                 self.assertIn(name, helper)
+        verify_pi = (ROOT / "docker/verify-pi.mjs").read_text(encoding="utf-8")
+        for name in pi_verification_arguments:
+            with self.subTest(pi_verification_argument=name):
+                self.assertIn(name, verify_pi)
 
     def test_constructor_target_stage_exists(self) -> None:
         stages = set(re.findall(r"^FROM\s+.+?\s+AS\s+(\S+)", DOCKERFILE, re.I | re.M))
         self.assertIn("runtime", stages)
+
+    def test_pi_named_context_copies_use_isolated_paths(self) -> None:
+        pi_copies = [
+            instruction
+            for instruction in _instructions("COPY")
+            if "constructor-artifacts" in instruction
+            and "derived-environments/pi/" in instruction
+        ]
+        self.assertEqual(3, len(pi_copies))
+        self.assertIn(
+            "COPY --from=constructor-artifacts derived-environments/pi/opt/pi /opt/pi",
+            DOCKERFILE,
+        )
+        self.assertIn(
+            "COPY --from=constructor-artifacts --chmod=0444 "
+            "derived-environments/pi/pi-assembler-evidence.json "
+            "/tmp/pi-assembler-evidence.json",
+            DOCKERFILE,
+        )
+        self.assertIn(
+            "COPY --from=constructor-artifacts --chmod=0444 "
+            "derived-environments/pi/pi-launcher-evidence.json "
+            "/tmp/pi-launcher-evidence.json",
+            DOCKERFILE,
+        )
 
     def test_runtime_startup_files_and_entrypoint_agree(self) -> None:
         self.assertIn("COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh", DOCKERFILE)

@@ -177,7 +177,14 @@ class TestIndependentArtifactStageInvalidation(unittest.TestCase):
     def test_named_context_filenames_match_snapshot_logical_names(self) -> None:
         by_stage = _named_context_sources_by_stage(self.stages)
         all_sources = {source for sources in by_stage.values() for source in sources}
-        self.assertEqual(set(_LOGICAL_NAMES.values()), all_sources)
+        expected = set(_LOGICAL_NAMES.values()) | {
+            # Derived Pi environment, launcher tree, and both evidence sets,
+            # all confined to one isolated directory in the named context.
+            "derived-environments/pi/opt/pi",
+            "derived-environments/pi/pi-assembler-evidence.json",
+            "derived-environments/pi/pi-launcher-evidence.json",
+        }
+        self.assertEqual(expected, all_sources)
 
     def test_each_artifact_named_context_copy_is_confined_to_one_stage(self) -> None:
         by_stage = _named_context_sources_by_stage(self.stages)

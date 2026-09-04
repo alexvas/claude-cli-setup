@@ -144,7 +144,8 @@ class TestAssemblerInputIdentity(unittest.TestCase):
         # No output-tree, evidence, or assembled-output fields are allowed.
         fields = {f.name for f in dataclasses.fields(AssemblerInputIdentity)}
         self.assertEqual(
-            fields, {"roots", "lockfile_digest", "assembler", "digest"}
+            fields,
+            {"roots", "lockfile_digest", "assembler", "digest", "package_digest"},
         )
 
     def test_canonical_roots_sorted_regardless_of_input_order(self):

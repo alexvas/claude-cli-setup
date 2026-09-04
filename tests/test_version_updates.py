@@ -26,6 +26,8 @@ from docker.versioning.model import (
     NpmUpdate,
     OhMyZshEntry,
     PiExtensionEntry,
+    PiReleaseSource,
+    PiToolEntry,
     PrebuiltToolEntry,
     PythonEntry,
     PyPiSource,
@@ -80,6 +82,7 @@ def _minimal_inventory():
             base=BaseStage(node=NodeEntry(
                 tag="24-trixie-slim",
                 digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                node_version="24.18.0", npm_version="11.16.0",
                 source=DockerRegistrySource(registry="docker.io", repository="library/node"),
                 update=DockerRegistryUpdate(stable_only=True, track="tag-digest"),
             )),
@@ -123,9 +126,13 @@ def _minimal_inventory():
                 source=GitHubReleaseSource(repository="sharkdp/fd", tag="v1.0.0"),
                 update=GitHubReleaseUpdate(stable_only=True, required_platforms=("linux-amd64",)),
             )),
-            pi_tools=PiToolsStage(pi=NpmToolEntry(
+            pi_tools=PiToolsStage(pi=PiToolEntry(
                 version="1.0.0",
-                source=NpmSource(package="@scope/pkg"),
+                source=PiReleaseSource(
+                    package="@scope/pkg",
+                    release_repository="scope/pi",
+                    release_tag_prefix="v",
+                ),
                 update=NpmUpdate(stable_only=True),
             )),
             openspec_tools=OpenSpecToolsStage(openspec=NpmToolEntry(
@@ -199,6 +206,7 @@ class TestTargetTraversal(unittest.TestCase):
             stages=Stages(
                 base=BaseStage(node=NodeEntry(
                     tag="t", digest="sha256:" + "a" * 64,
+                    node_version="24.18.0", npm_version="11.16.0",
                     source=DockerRegistrySource(registry="r", repository="p"),
                     update=DockerRegistryUpdate(stable_only=True, track="tag-digest"),
                 )),
@@ -210,7 +218,7 @@ class TestTargetTraversal(unittest.TestCase):
                 ),
                 rtk_prebuilt=RtkPrebuiltStage(rtk=PrebuiltToolEntry(version="v1.0.0", artifacts={}, source=GitHubReleaseSource(repository="r", tag="v1.0.0"), update=GitHubReleaseUpdate(stable_only=True))),
                 fd_prebuilt=FdPrebuiltStage(fd=PrebuiltToolEntry(version="v1.0.0", artifacts={}, source=GitHubReleaseSource(repository="r", tag="v1.0.0"), update=GitHubReleaseUpdate(stable_only=True))),
-                pi_tools=PiToolsStage(pi=NpmToolEntry(version="1.0.0", source=NpmSource(package="p"), update=NpmUpdate(stable_only=True))),
+                pi_tools=PiToolsStage(pi=PiToolEntry(version="1.0.0", source=PiReleaseSource(package="p", release_repository="r/r", release_tag_prefix="v"), update=NpmUpdate(stable_only=True))),
                 openspec_tools=OpenSpecToolsStage(openspec=NpmToolEntry(version="1.0.0", source=NpmSource(package="p"), update=NpmUpdate(stable_only=True))),
                 runtime=RuntimeStage(oh_my_zsh=OhMyZshEntry(revision="a" * 40, source=GitSource(repository="r"), update=GitRefUpdate(ref="r"))),
             ),

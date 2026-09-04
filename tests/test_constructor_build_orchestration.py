@@ -22,7 +22,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
-from tests.build_test_support import INVENTORY_PATH, fixture_directory
+from tests.build_test_support import INVENTORY_PATH, fake_pi_materialization, fixture_directory, no_network_transport_factory
 
 from docker.networking import (
     DockerMode,
@@ -30,8 +30,11 @@ from docker.networking import (
     PersistenceResult,
     ProbeResult,
 )
-from docker.versioning.build_snapshot import MaterializedSnapshot
+from docker.versioning.build_snapshot import MaterializedSnapshot, SnapshotError
 from docker.versioning.build_materialization import MaterializationError, UrllibStreamingTransport
+from docker.npm_environment.errors import LockedNpmError
+from docker.versioning.pi_assembly import PiAssemblyError
+from docker.versioning.pi_consumer import PiConsumerError
 from docker.versioning.build_orchestration import (
     BuildRequest,
     BuildResult,
@@ -207,6 +210,7 @@ class TestBuildRequestDto(unittest.TestCase):
             gid=1000,
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             dry_run=True,
             runner=FakeBuildExecutor(),
@@ -322,6 +326,7 @@ class TestInjectablesWired(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _transport_factory=UrllibStreamingTransport,
             _named_context_supported=lambda: True,
         )
@@ -532,6 +537,7 @@ class TestProjectionPublication(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=record_publish,
@@ -794,6 +800,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             uid=-1,
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
@@ -879,6 +886,7 @@ class TestBuildGatewayIsolation(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=diagnose,
             _publish_projection=_publish_ok,
@@ -956,6 +964,7 @@ class TestConfirmation(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -982,6 +991,7 @@ class TestConfirmation(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=lambda **kw: (_ for _ in ()).throw(
                 AssertionError("build must not diagnose gateway")),
@@ -1145,6 +1155,7 @@ class TestDirectExecution(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1163,6 +1174,7 @@ class TestDirectExecution(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1188,6 +1200,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1207,6 +1220,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1224,6 +1238,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             runner=runner,
             _diagnose_gateway=_diag_reachable,
@@ -1255,6 +1270,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=broken_diagnose,
             _publish_projection=_publish_ok,
@@ -1275,6 +1291,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
@@ -1296,6 +1313,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
@@ -1319,6 +1337,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1339,6 +1358,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             inventory_path=str(INVENTORY_PATH),
             confirmed=True,
             _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
             _named_context_supported=lambda: True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
@@ -1379,6 +1399,7 @@ class TestMaterializationBoundary(unittest.TestCase):
             confirmed=True,
             runner=runner,
             _materialize_artifacts=materialize,
+            _materialize_pi=fake_pi_materialization,
             _transport_factory=transport_factory,
             _named_context_supported=lambda: True,
             _publish_projection=publish,
@@ -1508,6 +1529,212 @@ class TestMaterializationBoundary(unittest.TestCase):
         # The complete constructor project is unchanged, including every file's
         # contents and mode.
         self.assertEqual(project_before, self._tree_snapshot(self.repo))
+
+
+class TestPiMaterializationBoundary(unittest.TestCase):
+    """Pi/assembler/consumer failures become OPERATIONAL materialization
+    failures — no Docker run, no projection publication, no snapshot, and no
+    committed build reference."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.cache = self.base / "cache"
+        self.cache.mkdir(mode=0o700)
+        os.chmod(self.cache, 0o700)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        self.inventory = self.repo / "docker-constructor.toml"
+        self.inventory.write_bytes(INVENTORY_PATH.read_bytes())
+        (self.repo / "docker-constructor.local.toml").write_text(
+            f'[cache]\ndir = "{self.cache}"\n'
+        )
+        # Spies proving snapshot creation never runs for a Pi failure and that
+        # cleanup is still invoked with the (never-assigned) snapshot.
+        self.snapshot_calls: list[tuple] = []
+        self.cleanup_calls: list[object] = []
+        patcher1 = patch(
+            "docker.versioning.build_orchestration.create_artifact_snapshot",
+            side_effect=self._record_snapshot,
+        )
+        patcher2 = patch(
+            "docker.versioning.build_orchestration.cleanup_artifact_snapshot",
+            side_effect=self._record_cleanup,
+        )
+        patcher1.start()
+        patcher2.start()
+        self.addCleanup(patcher1.stop)
+        self.addCleanup(patcher2.stop)
+
+    def _record_snapshot(self, *args, **kwargs):
+        self.snapshot_calls.append((args, kwargs))
+        raise AssertionError(
+            "create_artifact_snapshot must not run for a Pi materialization failure"
+        )
+
+    def _record_cleanup(self, snapshot):
+        self.cleanup_calls.append(snapshot)
+
+    def _request(self, *, publish, runner, materialize_pi, transport_factory=None):
+        return BuildRequest(
+            inventory_path=str(self.inventory),
+            repo_root=str(self.repo),
+            confirmed=True,
+            runner=runner,
+            _materialize_artifacts=_materialize_ok,
+            _materialize_pi=materialize_pi,
+            _transport_factory=transport_factory,
+            _named_context_supported=lambda: True,
+            _publish_projection=publish,
+        )
+
+    def _run_and_assert(self, *, materialize_pi, message_substr,
+                        transport_factory=None):
+        publish_calls: list[object] = []
+
+        def publish(projection, *, repo_root=None):
+            publish_calls.append(projection)
+            return PublishResult(published_path="/tmp/effective.toml")
+
+        runner = FakeBuildExecutor()
+        result = orchestrate_build(self._request(
+            publish=publish, runner=runner, materialize_pi=materialize_pi,
+            transport_factory=transport_factory,
+        ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn(message_substr, result.message or "")
+        self.assertIsNone(result.publish_result)
+        self.assertIsNone(result.process_result)
+        # Docker and projection publication never ran.
+        self.assertEqual([], runner.calls)
+        self.assertEqual([], publish_calls)
+        # No snapshot was created, and cleanup ran with the never-assigned
+        # snapshot (None).
+        self.assertEqual([], self.snapshot_calls)
+        self.assertEqual([None], self.cleanup_calls)
+        # No committed build reference was created.
+        self.assertEqual([], list(self.cache.rglob("committed-build.json")))
+        self.assertFalse((self.repo / ".docker-cache").exists())
+        self.assertFalse((self.repo / ".docker-generated").exists())
+
+    def test_release_acquisition_failure_is_operational(self):
+        """A real ``materialize_pi`` acquisition/checksum failure (bad release
+        transport bytes) surfaces as OPERATIONAL without Docker/publication."""
+        class BadPiReleaseTransport:
+            def __init__(self, policy):
+                self.policy = policy
+
+            def stream(self, url):
+                yield b"not-valid-sha256sums-content"
+
+        self._run_and_assert(
+            materialize_pi=None,
+            transport_factory=BadPiReleaseTransport,
+            message_substr="Pi release acquisition failed",
+        )
+
+    def test_preflight_failure_is_operational(self):
+        def fail_preflight(*args, **kwargs):
+            raise LockedNpmError(
+                "lock_malformed", "install lock has no 'packages' object"
+            )
+
+        self._run_and_assert(
+            materialize_pi=fail_preflight,
+            message_substr="install lock has no 'packages' object",
+        )
+
+    def test_assembler_execution_failure_is_operational(self):
+        def fail_assembly(*args, **kwargs):
+            raise LockedNpmError("npm_exit_nonzero", "assembler exited 1: npm ERR!")
+
+        self._run_and_assert(
+            materialize_pi=fail_assembly,
+            message_substr="assembler exited 1",
+        )
+
+    def test_consumer_launcher_failure_is_operational(self):
+        def fail_consumer(*args, **kwargs):
+            raise PiConsumerError(
+                "launcher target /tmp/pi/bin/../node_modules/pi escapes the Pi environment"
+            )
+
+        self._run_and_assert(
+            materialize_pi=fail_consumer,
+            message_substr="escapes the Pi environment",
+        )
+
+
+class TestPiSnapshotAdmissionFailure(unittest.TestCase):
+    """A derived environment whose attestation fails snapshot admission
+    becomes OPERATIONAL before Docker execution or projection publication."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.cache = self.base / "cache"
+        self.cache.mkdir(mode=0o700)
+        os.chmod(self.cache, 0o700)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        self.inventory = self.repo / "docker-constructor.toml"
+        self.inventory.write_bytes(INVENTORY_PATH.read_bytes())
+        (self.repo / "docker-constructor.local.toml").write_text(
+            f'[cache]\ndir = "{self.cache}"\n'
+        )
+        # Snapshot admission fails (the derived environment is rejected);
+        # ``cleanup_artifact_snapshot`` is recorded so the boundary can assert
+        # it ran with the never-assigned snapshot.
+        self.cleanup_calls: list[object] = []
+        self._create_patcher = patch(
+            "docker.versioning.build_orchestration.create_artifact_snapshot",
+            side_effect=SnapshotError(
+                "snapshot admission rejected the derived environment"
+            ),
+        )
+        self._cleanup_patcher = patch(
+            "docker.versioning.build_orchestration.cleanup_artifact_snapshot",
+            side_effect=self.cleanup_calls.append,
+        )
+        self._create_patcher.start()
+        self._cleanup_patcher.start()
+        self.addCleanup(self._create_patcher.stop)
+        self.addCleanup(self._cleanup_patcher.stop)
+
+    def _request(self, *, publish, runner):
+        return BuildRequest(
+            inventory_path=str(self.inventory),
+            repo_root=str(self.repo),
+            confirmed=True,
+            runner=runner,
+            _materialize_artifacts=_materialize_ok,
+            _materialize_pi=fake_pi_materialization,
+            _transport_factory=no_network_transport_factory,
+            _named_context_supported=lambda: True,
+            _publish_projection=publish,
+        )
+
+    def test_snapshot_admission_failure_is_operational(self):
+        publish_calls: list[object] = []
+
+        def publish(projection, *, repo_root=None):
+            publish_calls.append(projection)
+            return PublishResult(published_path="/tmp/effective.toml")
+
+        runner = FakeBuildExecutor()
+        result = orchestrate_build(self._request(publish=publish, runner=runner))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertIn("snapshot admission rejected", result.message or "")
+        self.assertIsNone(result.publish_result)
+        self.assertIsNone(result.process_result)
+        self.assertEqual([], runner.calls)
+        self.assertEqual([], publish_calls)
+        # Cleanup ran with the never-assigned snapshot; no committed reference.
+        self.assertEqual([None], self.cleanup_calls)
+        self.assertEqual([], list(self.cache.rglob("committed-build.json")))
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Stage 9.4 — public API tests

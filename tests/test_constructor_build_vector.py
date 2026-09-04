@@ -19,6 +19,7 @@ from docker.versioning.model import (
     EffectiveArtifact,
     EffectiveBuildProjection,
     EffectiveNode,
+    EffectivePiRelease,
     EffectiveRust,
     EffectiveTool,
 )
@@ -78,7 +79,9 @@ def _projection(*,
         )
     return EffectiveBuildProjection(
         platform=platform,
-        node=EffectiveNode(image=node_image),
+        node=EffectiveNode(
+            image=node_image, node_version="24.18.0", npm_version="11.16.0",
+        ),
         rust=EffectiveRust(
             version=rust_version,
             profile=rust_profile,
@@ -91,6 +94,11 @@ def _projection(*,
         rtk=EffectiveTool(version=rtk_version, artifact=rtk_artifact),
         fd=EffectiveTool(version=fd_version, artifact=fd_artifact),
         pi_version=pi_version,
+        pi_release=EffectivePiRelease(
+            package="@earendil-works/pi-coding-agent",
+            release_repository="earendil-works/pi",
+            release_tag_prefix="v",
+        ),
         openspec_version=openspec_version,
         oh_my_zsh_revision=oh_my_zsh_revision,
     )

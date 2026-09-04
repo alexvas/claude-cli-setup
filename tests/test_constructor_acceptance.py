@@ -24,7 +24,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from tests.build_test_support import INVENTORY_PATH, fixture_directory
+from tests.build_test_support import INVENTORY_PATH, fake_pi_materialization, fixture_directory, no_network_transport_factory
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -508,7 +508,9 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
             _named_context_supported=lambda: True,
+            _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
+            _materialize_pi=fake_pi_materialization,
         )
         result = orchestrate_build(req)
 
@@ -543,7 +545,9 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
             _named_context_supported=lambda: True,
+            _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
+            _materialize_pi=fake_pi_materialization,
         )
         result = orchestrate_build(req)
 
@@ -575,7 +579,9 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
             _named_context_supported=lambda: True,
+            _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
+            _materialize_pi=fake_pi_materialization,
         )
         result = orchestrate_build(req)
 
@@ -604,7 +610,9 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _diagnose_gateway=self._make_fake_diagnose(),
             _publish_projection=self._make_fake_publish(),
             _named_context_supported=lambda: True,
+            _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
+            _materialize_pi=fake_pi_materialization,
         )
         result = orchestrate_build(req)
 
@@ -615,6 +623,21 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
         # Dry run: never touched the runner.
         self.assertIsNone(result.process_result)
         self.assertEqual((), runner.called)
+
+    def test_no_network_transport_rejects_any_outbound_request(self) -> None:
+        """The acceptance transport factory must fail fast, never fetch.
+
+        Every build path above injects a fake Pi materializer, but the
+        transport factory is additionally pinned to a no-network transport so
+        a future regression that drops the injection fails immediately instead
+        of reaching the live GitHub release endpoint.
+        """
+        transport = no_network_transport_factory()
+        with self.assertRaises(AssertionError) as ctx:
+            list(transport.stream(
+                "https://github.com/earendil-works/pi/releases/download/v0.84.4/SHA256SUMS"
+            ))
+        self.assertIn("unexpected outbound network request", str(ctx.exception))
 
 # ════════════════════════════════════════════════════════════════════════
 # 14.1  Failed run

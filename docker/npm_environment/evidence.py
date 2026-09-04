@@ -457,7 +457,7 @@ def _parse_assembler_input_identity(
 ) -> AssemblerInputIdentity:
     d = _require_dict(d, context)
     _check_keys(
-        d, frozenset({"roots", "lockfile_digest", "assembler", "digest"}),
+        d, frozenset({"roots", "lockfile_digest", "assembler", "digest", "package_digest"}),
         context,
     )
     roots = tuple(
@@ -467,10 +467,14 @@ def _parse_assembler_input_identity(
     lockfile_digest = _str(d, "lockfile_digest", context)
     assembler = _parse_assembler_identity(d.get("assembler"), f"{context}.assembler")
     digest = _str(d, "digest", context)
+    package_digest = d.get("package_digest")
+    if package_digest is not None and not isinstance(package_digest, str):
+        raise _malformed(context, "'package_digest' must be a string or null")
     recomputed = input_identity_digest(
         roots=roots,
         lockfile_digest=lockfile_digest,
         assembler_digest=assembler.digest,
+        package_digest=package_digest,
     )
     if recomputed != digest:
         raise _malformed(context, "input identity digest does not match components")
@@ -479,6 +483,7 @@ def _parse_assembler_input_identity(
         lockfile_digest=lockfile_digest,
         assembler=assembler,
         digest=digest,
+        package_digest=package_digest,
     )
 
 

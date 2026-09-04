@@ -199,7 +199,7 @@ RUN bash /home/dev/setup-mcp-yarn.sh
 # -----------------------------------------------------------------------------
 # Independently versioned Node tool prefixes
 # -----------------------------------------------------------------------------
-FROM toolchain AS pi-tools
+FROM base AS pi-tools
 
 # Corporate network build arguments supplied via --build-arg; never persisted
 # as ENV.
@@ -208,13 +208,24 @@ ARG PI_CORPORATE_NO_PROXY
 ARG CORPORATE_TRUST_ENABLED
 ARG PI_CORPORATE_CA_PATH
 
+# Post-materialization attestation values, matched to the named-context inputs
+# before the Pi tree and both evidence sets are copied and verified here.
 ARG PI_VERSION
+ARG PI_ASSEMBLED_OUTPUT_IDENTITY
+ARG PI_TREE_DIGEST
+ARG PI_ASSEMBLER_EVIDENCE_DIGEST
+ARG PI_LAUNCHER_EVIDENCE_DIGEST
+
 USER root
-RUN mkdir -p /opt/pi && chown -R dev:dev /opt/pi
-USER dev
-RUN --mount=type=cache,id=npm-pi-${DEV_UID}-${DEV_GID},target=/home/dev/.npm,uid=${DEV_UID},gid=${DEV_GID} \
-    . /tmp/corp-network-env.sh \
-    && npm_config_cache=/home/dev/.npm npm install --global --prefix /opt/pi --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}"
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts derived-environments/pi/opt/pi /opt/pi
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts --chmod=0444 derived-environments/pi/pi-assembler-evidence.json /tmp/pi-assembler-evidence.json
+# hadolint ignore=DL3022
+COPY --from=constructor-artifacts --chmod=0444 derived-environments/pi/pi-launcher-evidence.json /tmp/pi-launcher-evidence.json
+COPY docker/verify-pi.mjs /tmp/verify-pi.mjs
+RUN node /tmp/verify-pi.mjs \
+    && rm -f /tmp/verify-pi.mjs /tmp/pi-assembler-evidence.json /tmp/pi-launcher-evidence.json
 
 FROM base AS openspec-tools
 

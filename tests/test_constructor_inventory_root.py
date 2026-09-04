@@ -29,6 +29,8 @@ schema = 1
 
 [build.stages.base.node]
 tag = "24-trixie-slim"
+node_version = "24.18.0"
+npm_version = "11.16.0"
 digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 [build.stages.base.node.source]
@@ -148,8 +150,10 @@ url = "https://github.com/sharkdp/fd/releases/download/v10.4.2/fd_10.4.2_amd64.d
 version = "0.80.10"
 
 [build.stages.pi-tools.pi.source]
-type = "npm"
+type = "pi-release"
 package = "@earendil-works/pi-coding-agent"
+release_repository = "earendil-works/pi"
+release_tag_prefix = "v"
 
 [build.stages.pi-tools.pi.update]
 provider = "npm"

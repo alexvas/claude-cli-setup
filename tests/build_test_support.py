@@ -7,6 +7,18 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from tests.pi_fixtures import (
+    fake_pi_materialization,
+    no_network_transport_factory,
+)
+
+__all__ = [
+    "INVENTORY_PATH",
+    "fake_pi_materialization",
+    "fixture_directory",
+    "no_network_transport_factory",
+]
+
 
 _TEMPORARY_DIRECTORY = tempfile.TemporaryDirectory()
 _FIXTURE_DIRECTORY = tempfile.TemporaryDirectory()
@@ -19,5 +31,7 @@ def fixture_directory(prefix: str) -> Path:
     path = Path(_FIXTURE_DIRECTORY.name) / f"{prefix}{uuid.uuid4().hex}"
     path.mkdir()
     return path
+
+
 INVENTORY_PATH = Path(_TEMPORARY_DIRECTORY.name) / "docker-constructor.toml"
 shutil.copyfile(Path(__file__).resolve().parents[1] / "docker-constructor.toml", INVENTORY_PATH)

@@ -115,7 +115,12 @@ class AssemblerInputIdentity:
     """The assembler identity the inputs are assembled with."""
 
     digest: str
-    """Canonical SHA-256 over roots, lockfile digest, and assembler digest."""
+    """Canonical SHA-256 over roots, lockfile digest, assembler digest, and
+    (when reviewed) the install-package digest."""
+
+    package_digest: str | None = None
+    """SHA-256 of the exact ``pi-coding-agent-install-package.json`` bytes,
+    or ``None`` when no install-package manifest was reviewed."""
 
 
 def input_identity_digest(
@@ -123,14 +128,16 @@ def input_identity_digest(
     roots: tuple[RootSpec, ...],
     lockfile_digest: str,
     assembler_digest: str,
+    package_digest: str | None = None,
 ) -> str:
     """Return the canonical input-identity digest from its components.
 
     This is the pure, preflight-free form of the digest: it re-derives the
     canonical payload from the name-sorted exact roots, the exact lockfile
-    digest, and the already-verified assembler digest.  Evidence verification
-    uses it to re-check a serialized input identity without holding the
-    original lockfile bytes.
+    digest, the already-verified assembler digest, and the exact
+    install-package digest (or ``null`` when no package was reviewed).
+    Evidence verification uses it to re-check a serialized input identity
+    without holding the original lockfile bytes.
     """
     ordered_roots = tuple(sorted(roots))
     payload = _canonical_json(
@@ -138,6 +145,7 @@ def input_identity_digest(
             "roots": [{"name": r.name, "version": r.version} for r in ordered_roots],
             "lockfile_digest": lockfile_digest,
             "assembler_digest": assembler_digest,
+            "package_digest": package_digest,
         }
     ).encode("utf-8")
     return _sha256_hex(payload)
@@ -180,11 +188,22 @@ def compute_assembler_input_identity(
             "the validated lockfile bytes do not match the validated "
             "lockfile digest; preflight must bind the exact bytes",
         )
+    package_digest = (
+        _sha256_hex(validated.package_bytes)
+        if validated.package_bytes is not None else None
+    )
+    if package_digest != validated.package_digest:
+        raise LockedNpmError(
+            "package_bytes_mismatch",
+            "the validated install-package bytes do not match the validated "
+            "package digest; preflight must bind the exact bytes",
+        )
 
     # Re-run preflight from the exact bytes and claimed roots/tools, then
     # require the fresh result to equal the supplied value field-for-field.
-    # This re-validates the closure, omissions, integrity-less records, and
-    # reviewed-root metadata instead of trusting the supplied dataclass.
+    # This re-validates the closure, omissions, integrity-less records,
+    # reviewed-root metadata, and install-package binding instead of trusting
+    # the supplied dataclass.
     from .preflight import preflight
 
     revalidated = preflight(
@@ -193,6 +212,7 @@ def compute_assembler_input_identity(
         platform=validated.platform,
         node_version=validated.node_version,
         npm_version=validated.npm_version,
+        package_bytes=validated.package_bytes,
     )
     if revalidated != validated:
         raise LockedNpmError(
@@ -228,5 +248,7 @@ def compute_assembler_input_identity(
             roots=roots,
             lockfile_digest=lockfile_digest,
             assembler_digest=assembler.digest,
+            package_digest=validated.package_digest,
         ),
+        package_digest=validated.package_digest,
     )

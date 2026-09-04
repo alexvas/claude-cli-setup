@@ -517,6 +517,32 @@ def _emit_corporate_trust_build_args(
     args.extend(("--build-arg", f"{_CORPORATE_CA_PATH_ARG}={_SYSTEM_CA_BUNDLE}"))
 
 
+# The four post-materialization derived-environment attestation values passed
+# to the Dockerfile so it can verify the copied Pi tree, launcher, and both
+# evidence sets against the host-attested bindings.
+_PI_ATTESTATION_ARGS: tuple[tuple[str, str], ...] = (
+    ("PI_ASSEMBLED_OUTPUT_IDENTITY", "assembled_output_identity"),
+    ("PI_TREE_DIGEST", "canonical_tree_digest"),
+    ("PI_ASSEMBLER_EVIDENCE_DIGEST", "assembler_evidence_digest"),
+    ("PI_LAUNCHER_EVIDENCE_DIGEST", "consumer_launcher_evidence_digest"),
+)
+
+
+def _emit_pi_attestation_args(args: list[str], inputs: BuildRenderInputs) -> None:
+    """Append the four derived-environment attestation build arguments.
+
+    Emitted only for a materialized ``DerivedEnvironment`` context; a
+    ``NoDerivedEnvironment`` or prospective context emits none.
+    """
+    context = inputs.named_context
+    if not isinstance(context, Materialized):
+        return
+    if not isinstance(context.attestation, DerivedEnvironment):
+        return
+    for arg_name, field in _PI_ATTESTATION_ARGS:
+        args.extend(("--build-arg", f"{arg_name}={getattr(context.attestation, field)}"))
+
+
 # ── validation ──────────────────────────────────────────────────────
 
 
@@ -525,6 +551,8 @@ def _validate_build_projection(proj: EffectiveBuildProjection) -> None:
     # Every scalar version/revision field must be non-empty.
     for label, value in (
         ("NODE_BASE_IMAGE", proj.node.image),
+        ("NODE_VERSION", proj.node.node_version),
+        ("NPM_VERSION", proj.node.npm_version),
         ("RUST_VERSION", proj.rust.version),
         ("RUST_PROFILE", proj.rust.profile),
         ("UV_VERSION", proj.uv.version),
@@ -533,6 +561,9 @@ def _validate_build_projection(proj: EffectiveBuildProjection) -> None:
         ("RTK_VERSION", proj.rtk.version),
         ("FD_VERSION", proj.fd.version),
         ("PI_VERSION", proj.pi_version),
+        ("PI_PACKAGE", proj.pi_release.package),
+        ("PI_RELEASE_REPOSITORY", proj.pi_release.release_repository),
+        ("PI_RELEASE_TAG_PREFIX", proj.pi_release.release_tag_prefix),
         ("OPENSPEC_VERSION", proj.openspec_version),
         ("OH_MY_ZSH_VERSION", proj.oh_my_zsh_revision),
     ):
@@ -870,6 +901,9 @@ def render_build_vector(inputs: BuildRenderInputs) -> tuple[str, ...]:
 
     # Build arguments — deterministic order matching the Dockerfile ARGs.
     _emit_build_args(args, inputs.projection)
+
+    # Pi derived-environment attestation — materialized builds only.
+    _emit_pi_attestation_args(args, inputs)
 
     # Optional proxy build arguments (absent when no proxy is configured).
     _emit_proxy_build_args(args, inputs)
@@ -1436,6 +1470,8 @@ def serialize_effective_build(projection) -> dict[str, object]:
         "platform": p.platform,
         "node": {
             "image": p.node.image,
+            "node_version": p.node.node_version,
+            "npm_version": p.node.npm_version,
         },
         "rust": _serialize_rust(p.rust),
         "uv": _serialize_tool(p.uv),
@@ -1449,6 +1485,9 @@ def serialize_effective_build(projection) -> dict[str, object]:
         "fd": _serialize_tool(p.fd),
         "pi": {
             "version": p.pi_version,
+            "package": p.pi_release.package,
+            "release_repository": p.pi_release.release_repository,
+            "release_tag_prefix": p.pi_release.release_tag_prefix,
         },
         "openspec": {
             "version": p.openspec_version,
@@ -1505,6 +1544,10 @@ def validate_effective_build(data: dict[str, object]):
     node = data["node"]
     if not isinstance(node, dict) or "image" not in node:
         raise ValueError("node section missing 'image'")
+    for nkey in ("node_version", "npm_version"):
+        nval = node.get(nkey)
+        if not isinstance(nval, str) or not nval:
+            raise ValueError(f"node section missing {nkey!r}")
 
     rust = data["rust"]
     if not isinstance(rust, dict):
@@ -1533,10 +1576,18 @@ def validate_effective_build(data: dict[str, object]):
             if akey not in art:
                 raise ValueError(f"{section_name}.artifact missing {akey!r}")
 
-    for section_name in ("python", "ty", "pi", "openspec"):
+    for section_name in ("python", "ty", "openspec"):
         sec = data[section_name]
         if not isinstance(sec, dict) or "version" not in sec:
             raise ValueError(f"{section_name} section missing 'version'")
+
+    pi = data["pi"]
+    if not isinstance(pi, dict) or "version" not in pi:
+        raise ValueError("pi section missing 'version'")
+    for pkey in ("package", "release_repository", "release_tag_prefix"):
+        pval = pi.get(pkey)
+        if not isinstance(pval, str) or not pval:
+            raise ValueError(f"pi section missing {pkey!r}")
 
     oh = data["oh-my-zsh"]
     if not isinstance(oh, dict) or "revision" not in oh:

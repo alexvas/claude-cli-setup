@@ -10,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 from pathlib import Path
 
-from tests.build_test_support import INVENTORY_PATH, fixture_directory
+from tests.build_test_support import INVENTORY_PATH, fake_pi_materialization, fixture_directory, no_network_transport_factory
 
 from docker.networking import BuildOutputPolicy, ProcessResult
 from docker.versioning.build_snapshot import MaterializedSnapshot
@@ -54,6 +54,8 @@ def _request(policy: BuildOutputPolicy, runner: RecordingExecutor, *, progress: 
         inventory_path=str(INVENTORY_PATH), confirmed=True, progress=progress,
         output_policy=policy, runner=runner,
         _materialize_artifacts=_fixture_materialize,
+        _materialize_pi=fake_pi_materialization,
+        _transport_factory=no_network_transport_factory,
         _named_context_supported=lambda: True,
         _publish_projection=lambda *_args, **_kwargs: __import__(
             "docker.versioning.build_orchestration", fromlist=["PublishResult"]

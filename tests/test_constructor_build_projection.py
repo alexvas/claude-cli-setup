@@ -527,13 +527,15 @@ def _copy_build(build: BuildInventory) -> BuildInventory:
     # dataclasses.asdict produces a recursive dict; rebuild manually
     from docker.versioning.model import Stages, BaseStage, NodeEntry, ToolchainStage, \
         RustEntry, UvEntry, PythonEntry, TyEntry, RtkPrebuiltStage, PrebuiltToolEntry, \
-        FdPrebuiltStage, PiToolsStage, NpmToolEntry, OpenSpecToolsStage, RuntimeStage, \
-        OhMyZshEntry
+        FdPrebuiltStage, PiToolsStage, PiToolEntry, NpmToolEntry, OpenSpecToolsStage, \
+        RuntimeStage, OhMyZshEntry
     s = build.stages
     return BuildInventory(stages=Stages(
         base=BaseStage(node=NodeEntry(
             tag=s.base.node.tag,
             digest=s.base.node.digest,
+            node_version=s.base.node.node_version,
+            npm_version=s.base.node.npm_version,
             source=s.base.node.source,
             update=s.base.node.update,
         )),
@@ -578,7 +580,7 @@ def _copy_build(build: BuildInventory) -> BuildInventory:
             artifacts=s.fd_prebuilt.fd.artifacts,
             update=s.fd_prebuilt.fd.update,
         )),
-        pi_tools=PiToolsStage(pi=NpmToolEntry(
+        pi_tools=PiToolsStage(pi=PiToolEntry(
             version=s.pi_tools.pi.version,
             source=s.pi_tools.pi.source,
             update=s.pi_tools.pi.update,

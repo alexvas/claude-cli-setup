@@ -81,7 +81,7 @@ _NETWORK_MARKERS = (
 
 _EXPECTED_NETWORKED_STAGES = {
     "base", "toolchain",
-    "pi-tools", "openspec-tools", "runtime",
+    "openspec-tools", "runtime",
 }
 
 
