@@ -5,7 +5,6 @@ import hashlib
 import ntpath
 import os
 import posixpath
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +23,7 @@ from docker.versioning.rendering import (
 )
 from docker.versioning.effective import resolve_build_projection
 from docker.versioning.inventory import load_inventory
+from tests.privilege_helpers import differing_uid_read_status
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,17 +56,11 @@ class TestPhase4Lifecycle(unittest.TestCase):
             cleanup_artifact_snapshot(snapshot); self.assertFalse(snapshot.path.exists())
 
     def test_differing_uid_cannot_traverse_private_snapshot(self):
-        if os.geteuid() != 0:
-            self.skipTest("requires credential switching (run as root to test differing UID)")
-        # Kept explicit rather than weakening the assertion under an
-        # unprivileged test runner. Root-capable CI executes `nobody` here.
+        # Narrowly delegated to sudo runuser: the Python process stays on the
+        # invoking user and only the ``test -r`` probe runs as the differing UID.
         with tempfile.TemporaryDirectory() as outer:
             root = Path(outer); root.chmod(0o700)
-            completed = subprocess.run(
-                ["runuser", "-u", "nobody", "--", "test", "-r", os.fspath(root)],
-                capture_output=True, text=True,
-            )
-            self.assertNotEqual(0, completed.returncode)
+            self.assertNotEqual(0, differing_uid_read_status(root))
 
 
 

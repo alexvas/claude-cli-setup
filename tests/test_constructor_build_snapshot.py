@@ -15,6 +15,7 @@ from docker.versioning.build_snapshot import (
     create_artifact_snapshot,
 )
 from docker.versioning.digest_identity import DigestIdentity
+from tests.privilege_helpers import docker_dev_ids, sudo_chown, sudo_maintain_tree
 
 
 class TestArtifactSnapshot(unittest.TestCase):
@@ -167,11 +168,9 @@ class TestArtifactSnapshot(unittest.TestCase):
         # before any link or copy; it is never adopted, chmodded, or repaired.
         # os.link is only ever attempted for invoking-user-owned sources, so no
         # EPERM patch is required: validation rejects the foreign blob first.
-        import pwd
-        try:
-            entry = pwd.getpwnam("docker-dev")
-        except KeyError:
-            self.skipTest("requires a 'docker-dev' account for the foreign-owner scenario")
+        # Only the ownership transfer to docker-dev is delegated to sudo; the
+        # snapshot validation itself runs as the invoking user.
+        uid, gid = docker_dev_ids()
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); pairs = self._selected(root)
             from docker.versioning.project_state import resolve_project_state
@@ -179,10 +178,7 @@ class TestArtifactSnapshot(unittest.TestCase):
             state = resolve_project_state(root, cache_root=cache)
             foreign = pairs[0][1]
             foreign.chmod(0o444)
-            try:
-                os.chown(foreign, entry.pw_uid, entry.pw_gid)
-            except PermissionError:
-                self.skipTest("requires CAP_CHOWN/root to transfer ownership to docker-dev")
+            sudo_chown(foreign, uid, gid)
             content = foreign.read_bytes()
             before = (foreign.stat().st_uid, foreign.stat().st_mode & 0o777,
                       foreign.stat().st_ino, content, hashlib.sha256(content).hexdigest())
@@ -312,7 +308,6 @@ class TwoBuildOwnershipMaintenanceRegression(unittest.TestCase):
         )
 
     def test_two_builds_reuse_blobs_after_project_ownership_maintenance(self):
-        import pwd
         artifacts = [
             (self._artifact(name, payload), payload)
             for name, payload in (
@@ -353,26 +348,12 @@ class TwoBuildOwnershipMaintenanceRegression(unittest.TestCase):
                       for blob in blobs1}
 
             # External host event between invocations: recursive docker-dev
-            # ownership transfer plus group read/write/traverse permission.
-            try:
-                entry = pwd.getpwnam("docker-dev")
-            except KeyError:
-                self.skipTest("requires a 'docker-dev' account for the ownership-maintenance scenario")
-            uid, gid = entry.pw_uid, entry.pw_gid
+            # ownership transfer plus group read/write/traverse permission,
+            # delegated to sudo. Only the project/workspace trees are
+            # maintained; the cache and its blobs stay invoking-user-owned.
+            uid, gid = docker_dev_ids()
             for root in (project, primary, extra):
-                for dirpath, dirnames, filenames in os.walk(root):
-                    for name in dirnames:
-                        os.chmod(os.path.join(dirpath, name), 0o775)
-                    for name in filenames:
-                        os.chmod(os.path.join(dirpath, name), 0o664)
-                    try:
-                        os.chown(dirpath, uid, gid)
-                    except PermissionError:
-                        self.skipTest("requires CAP_CHOWN/root to transfer ownership to docker-dev")
-                    for name in dirnames:
-                        os.chown(os.path.join(dirpath, name), uid, gid)
-                    for name in filenames:
-                        os.chown(os.path.join(dirpath, name), uid, gid)
+                sudo_maintain_tree(root, uid, gid)
 
             # Second build as the original invoking user: a download-free cache
             # hit whose blobs are byte-, inode-, mode-, and owner-identical.

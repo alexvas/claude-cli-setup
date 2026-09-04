@@ -1,6 +1,6 @@
 """Permission, ownership, immutability, and no-repair coverage for external state."""
 from __future__ import annotations
-import hashlib, os, pwd, stat, tempfile, types, unittest
+import hashlib, os, stat, tempfile, types, unittest
 from pathlib import Path
 from unittest import mock
 from docker.versioning.build_cache import (BuildCacheError, acquire_checkout_build_lock,
@@ -8,6 +8,7 @@ from docker.versioning.build_cache import (BuildCacheError, acquire_checkout_bui
     publish_verified_blob, _verify_published_blob)
 from docker.versioning.digest_identity import DigestIdentity
 from docker.versioning.project_state import resolve_project_state
+from tests.privilege_helpers import docker_dev_ids, sudo_chown_tree
 
 _REAL_INVENTORY = (Path(__file__).resolve().parents[1] / "docker-constructor.toml").read_text()
 
@@ -40,14 +41,14 @@ def _no_containers_inspector():
 
 
 def _external_projection_factory(projection, *, parent_dir):
-    path = Path(parent_dir) / "runtime-projection.toml"
-    path.write_text("generated-by-permission-test = true\n")
+    projection_path = Path(parent_dir) / "runtime-projection.toml"
+    projection_path.write_text("generated-by-permission-test = true\n")
     class _Handle:
-        path = str(path)
+        path = str(projection_path)
         content_hash = "permission-test"
         def __enter__(self): return self
         def __exit__(self, *args):
-            try: path.unlink()
+            try: projection_path.unlink()
             except FileNotFoundError: pass
             return False
     return _Handle()
@@ -242,14 +243,14 @@ class ConstructorProjectForeignOwnership(unittest.TestCase):
         self.cache = self.base / 'cache'; self.cache.mkdir(mode=0o700)
 
     def _docker_dev_ids(self):
-        try:
-            entry = pwd.getpwnam('docker-dev')
-        except KeyError:
-            self.skipTest("requires a 'docker-dev' account for the ownership-transfer scenario")
-        return entry.pw_uid, entry.pw_gid
+        return docker_dev_ids()
 
     def test_foreign_owned_constructor_project_keeps_external_state_private(self):
         uid, gid = self._docker_dev_ids()
+        # Capture the original invoking-user identity before ownership transfer
+        # so cleanup can restore it after the test, even on assertion failure.
+        invoking_uid = os.geteuid()
+        invoking_gid = os.getegid()
         inventory = self.project / 'docker-constructor.toml'
         inventory.write_text(_REAL_INVENTORY)
         # Grant the invoking user read + traverse before ownership transfer.
@@ -259,15 +260,13 @@ class ConstructorProjectForeignOwnership(unittest.TestCase):
                 os.chmod(os.path.join(root, name), 0o755)
             for name in files:
                 os.chmod(os.path.join(root, name), 0o644)
-        try:
-            for root, dirs, files in os.walk(self.project, topdown=False):
-                for name in dirs:
-                    os.chown(os.path.join(root, name), uid, gid)
-                for name in files:
-                    os.chown(os.path.join(root, name), uid, gid)
-                os.chown(root, uid, gid)
-        except PermissionError:
-            self.skipTest("requires CAP_CHOWN/root to transfer ownership to docker-dev")
+        # Namespace creation and import run below as the invoking user; only
+        # the project ownership transfer is delegated to sudo. Register the
+        # ownership-restoring cleanup before the transfer so it still runs if a
+        # later assertion fails (addCleanup is LIFO, so this runs before the
+        # TemporaryDirectory cleanup).
+        self.addCleanup(sudo_chown_tree, self.project, invoking_uid, invoking_gid)
+        sudo_chown_tree(self.project, uid, gid)
 
         watched = (self.work, self.project, self.primary, self.extra)
         before = {p: (p.stat().st_uid, p.stat().st_gid, stat.S_IMODE(p.stat().st_mode))

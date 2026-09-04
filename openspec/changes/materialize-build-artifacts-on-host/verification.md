@@ -111,3 +111,40 @@ Reviewed the Phase 3 diff for checkout-path leakage, full-buffer downloads, dupl
 - Digest mismatch raises before atomic publication with no retry; the temporary file is removed in the `finally` path.
 - `build_materialization` imports only cache/identity/state/model modules — no CLI or rendering coupling.
 - The benign `destination.exists()` corrupt-cache check races with a concurrent publisher, but per-project serialization (Phase 7 lock wiring) closes that window; Phase 3 has no concurrent materialization surface.
+
+# Phase 4 Validation Record
+
+## Run
+
+Date: 2026-09-04T08:10:51Z
+
+Command:
+
+```text
+./scripts/validate-phase4
+```
+
+The validator keeps the Python test process on the original invoking user for the whole suite. Credential-sensitive scenarios delegate only their narrow privileged operations (ownership transfer, recursive chown/chmod maintenance, differing-UID execution) to `sudo` via the shared test helpers, enabled by `PRIVILEGED_HELPERS=1`. The validator fails if `sudo` or an existing `docker-dev` account is unavailable, and treats any remaining skip as incomplete validation rather than success.
+
+## Results
+
+- Invoking-user suite: 268 tests passed with no skips; the four credential-sensitive scenarios exercised the invoking user throughout and delegated only the narrow privileged steps to `sudo` (two-build regression: both builds and cache blobs stayed invoking-user-owned with only the intermediate project/workspace maintenance delegated; foreign-owned-project: namespace creation and import ran as the invoking user with only the ownership transfer delegated; foreign-owner hard-link rejection: only the blob ownership transfer was delegated; differing-UID traversal: only the `test -r` probe was delegated to `sudo runuser`).
+- No scenario re-runs the whole Python process as root, and none of these tests describe invoking-user ownership while executing as root.
+- External snapshot tests passed: deterministic canonical manifest bytes, stable logical filenames (`rustup-init`, `uv.tar.gz`, `rtk.deb`, `fd.deb`, `manifest.json`), selected-prebuilt-artifact-only exposure, hard-link creation with cache-name unlink survival, copy fallback with post-copy digest verification, `0444` selected-prebuilt-artifact finalization with every directory write bit removed, and permission-aware cleanup that never chmods, chowns, truncates, or otherwise mutates payload inodes shared through hard links.
+- Foreign-owned-project import and remapped in-build UID passed: owner-private external-namespace population, differing-UID traversal denial, and readable non-writable in-build copies (`--chown=dev:dev` with `--chmod=0444`/`0555`) verified; the project/workspace `docker-dev` ownership-maintenance regression runs both builds as the invoking user with only the intermediate maintenance delegated to `sudo`.
+- Typed-plan tests passed: real builds hold `Materialized(platform-native-path, NoDerivedEnvironment)`; dry-runs hold `{name: constructor-artifacts, state: prospective, path: null, attestation: {state: prospective}}`; executable rendering rejects every unresolved prospective context before producing argv.
+- Capability-failure and command-display tests passed: missing named-context support fails before download, snapshot publication, or Docker execution; dry-run text shows `--build-context constructor-artifacts=<prospective:not-materialized>` beneath `Planned build (not executable)` with byte-identical POSIX/Windows output, retained digest inputs, absent artifact URL inputs, and zero filesystem/cache/network/Docker side effects.
+- Build-vector, no-project-mutation, and Dockerfile contract tests passed: named-context Dockerfile consumption for rustup, uv, rtk, and fd retains independent stages and in-stage SHA-256 verification with no corresponding curl or URL input; the Rustup reviewed SHA-256 `4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10` is paired with the immutable official `archive/1.29.0/` artifact and checksum URLs rather than mutable `dist/` aliases.
+
+## INTROSPECT (4.11)
+
+Reviewed the Phase 4 diff for checkout path leakage, exposure of the whole external cache, mutable snapshots, unstable manifest ordering, primary-context leakage, permission or ownership changes propagated through hard links (including cleanup-time chmod/chown of snapshot payloads), OS-specific prospective paths, command/display divergence, retained artifact URLs, and unnecessary artifact network access. Findings: no code changes required.
+
+- Snapshot staging lives beneath the canonical external namespace's generated tree; the checkout is only read/traversed and never written.
+- The named context exposes only the finalized snapshot directory (four stable logical payloads plus `manifest.json`); the external cache root and unrelated/uncommitted blobs are never exposed.
+- Finalization removes every file write bit (`0444`) and every directory write bit (`0555`); cleanup restores write/traversal permission only on snapshot directories and unlinks snapshot pathnames, never chmodding/chowning/truncating hard-linked payload inodes.
+- Manifest bytes are canonical: entries sorted by logical name, `sort_keys=True`, and no URLs or cache paths are recorded.
+- `constructor-artifacts` is a dedicated named context, distinct from the primary build context; no artifact enters the primary context.
+- `Prospective` carries `path: null` and a display-only token that never enters path handling; executable argv requires `Materialized(platform-native-path)` with a closed attestation, and POSIX/Windows dry-run output is byte-identical.
+- The Dockerfile retains no artifact URL arguments and no corresponding downloads; only digest arguments and in-stage `sha256sum` verification remain. Rustup provenance uses the immutable `archive/1.29.0/` URLs.
+- Named-context capability is probed before materialization; dry-run performs no probe, lock, cache, filesystem, network, or Docker operation.

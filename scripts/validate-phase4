@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Run the complete OpenSpec materialize-build-artifacts-on-host task 4.12
+# validation. The Python test process stays on the original invoking user;
+# only the narrow credential-sensitive operations (ownership transfer,
+# recursive maintenance, differing-UID execution) are delegated to sudo via
+# the test helpers, which the privileged helper mode below enables.
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly VALIDATION_MODULES=(
+  tests.test_constructor_build_snapshot
+  tests.test_constructor_phase4_named_context
+  tests.test_constructor_build_vector
+  tests.test_dockerfile_contracts
+  tests.test_constructor_display
+  tests.test_constructor_build_materialization
+  tests.test_constructor_build_orchestration
+  tests.test_constructor_build_cache_permissions
+  tests.test_constructor_inventory_build
+)
+
+# Preconditions. The validator never creates, deletes, or modifies host user
+# accounts: it requires an existing docker-dev account and a working sudo so
+# the credential-sensitive tests can delegate privilege narrowly instead of
+# re-running the whole Python process as root.
+if ! getent passwd docker-dev >/dev/null; then
+  printf 'error: task 4.12 requires an existing docker-dev account; the validator never creates or modifies host users\n' >&2
+  exit 2
+fi
+if ! command -v sudo >/dev/null 2>&1; then
+  printf 'error: sudo is required to delegate the credential-sensitive task 4.12 operations\n' >&2
+  exit 2
+fi
+if ! sudo -v; then
+  printf 'error: sudo credentials are unavailable; cannot delegate ownership transfer or differing-UID execution\n' >&2
+  exit 2
+fi
+
+# Keep implicit constructor state on the same filesystem as Python's temporary
+# directories. This makes the hard-link test deterministic and avoids touching
+# the invoking user's real constructor cache.
+VALIDATION_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/constructor-phase4.XXXXXX")"
+readonly VALIDATION_ROOT
+cleanup() {
+  rm -rf -- "${VALIDATION_ROOT}"
+}
+trap cleanup EXIT INT TERM HUP
+mkdir -m 700 -- "${VALIDATION_ROOT}/cache"
+export TMPDIR="${VALIDATION_ROOT}"
+export XDG_CACHE_HOME="${VALIDATION_ROOT}/cache"
+# Privileged helper mode: credential-sensitive tests run as the invoking user
+# and invoke sudo only for the narrow operations listed above. In this mode a
+# missing or failing privilege boundary raises instead of skipping.
+export PRIVILEGED_HELPERS=1
+
+cd -- "${REPO_ROOT}"
+
+LOG="${VALIDATION_ROOT}/phase4.log"
+printf 'Running task 4.12 suite as invoking user (%s)...\n' "$(id -un)"
+if ! python3 -m unittest -v "${VALIDATION_MODULES[@]}" 2>&1 | tee -- "${LOG}"; then
+  printf 'error: task 4.12 suite failed\n' >&2
+  exit 1
+fi
+
+# Any remaining skip means a credential-sensitive scenario did not actually
+# run, so the validation is incomplete rather than successful.
+if grep -q "skipped" "${LOG}"; then
+  printf 'error: validation incomplete — one or more tests were skipped (requires a working sudo and docker-dev account)\n' >&2
+  grep "skipped" "${LOG}" >&2 || true
+  exit 3
+fi
+
+printf 'Task 4.12 validation passed with the test process on the invoking user and only narrowly scoped sudo delegation.\n'
