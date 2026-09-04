@@ -33,6 +33,18 @@ executable link. `engine-strict` remains disabled; only `engines.node`
 declarations attached to reviewed roots are authoritative compatibility
 constraints and are enforced before effects.
 
+npm's own request and retry behaviour is bounded by reviewed finite limits
+rendered only into the assembler container environment: a 300000 ms request
+timeout (`npm_config_fetch_timeout`), 3 retries (`npm_config_fetch_retries`),
+a 10000 ms minimum retry delay (`npm_config_fetch_retry_mintimeout`), and a
+60000 ms maximum retry delay (`npm_config_fetch_retry_maxtimeout`). A
+reviewed total assembly duration of 1800 seconds is included in the
+canonical policy identity. Enforcement of this constructor-owned outer
+deadline is implemented in Phase 3 of bound-pi-assembly-execution. These
+limits are fixed reviewed policy (no user-facing override) and are folded
+into the canonical policy digest, so changing any of them changes assembler
+identity and invalidates outputs assembled under the prior policy.
+
 ## Trust model
 
 The assembler runs from a pinned immutable Node image reference — a bare

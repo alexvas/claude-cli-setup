@@ -25,6 +25,31 @@ NPM_CI_FLAGS = ("--ignore-scripts", "--no-bin-links", "--no-audit", "--no-fund")
 
 NPM_CI_COMMAND = ("npm", "ci") + NPM_CI_FLAGS
 
+# ── Reviewed finite npm network and execution limits ───────────────────
+#
+# These are fixed reviewed policy constants, never user-configurable and
+# never read from the ambient environment.  They bound npm's own request
+# and retry behaviour (rendered into the assembler container environment)
+# and the reviewed total Docker-backed assembly duration reserved for
+# enforcement by the execution boundary in Phase 3.  All npm timeouts are
+# milliseconds; the total duration is whole seconds.
+
+#: Maximum duration of one npm registry request (5 minutes).
+NPM_REQUEST_TIMEOUT_MS = 300_000
+
+#: Number of additional fetches after the first attempt (3 retries).
+NPM_RETRY_COUNT = 3
+
+#: Minimum backoff delay before a fetch retry (10 seconds).
+NPM_RETRY_MIN_TIMEOUT_MS = 10_000
+
+#: Maximum backoff delay before a fetch retry (60 seconds).
+NPM_RETRY_MAX_TIMEOUT_MS = 60_000
+
+#: Reviewed total assembly duration identity-bound in Phase 1 and enforced
+#: by the constructor-owned execution deadline in Phase 3.
+ASSEMBLY_TOTAL_TIMEOUT_SECONDS = 1_800
+
 #: Structured assembler-script exit codes.
 EXIT_NODE_VERSION_MISMATCH = 65
 EXIT_NPM_VERSION_MISMATCH = 66
@@ -83,9 +108,44 @@ def npm_policy_flags() -> tuple[str, ...]:
     return NPM_CI_FLAGS
 
 
+def npm_policy() -> dict:
+    """Return the canonical reviewed npm policy payload.
+
+    The payload binds the four fixed script-free invocation flags with the
+    reviewed finite limits.  The four npm request/retry limits are rendered
+    into the assembler environment and enforced by npm today; the reviewed
+    total assembly duration is currently included only in the canonical
+    policy identity, and its runtime enforcement belongs to Phase 3.
+    """
+    return {
+        "flags": list(NPM_CI_FLAGS),
+        "request_timeout_ms": NPM_REQUEST_TIMEOUT_MS,
+        "retry_count": NPM_RETRY_COUNT,
+        "retry_min_timeout_ms": NPM_RETRY_MIN_TIMEOUT_MS,
+        "retry_max_timeout_ms": NPM_RETRY_MAX_TIMEOUT_MS,
+        "total_timeout_seconds": ASSEMBLY_TOTAL_TIMEOUT_SECONDS,
+    }
+
+
 def npm_policy_digest() -> str:
-    """Return the SHA-256 hex digest of the canonical npm policy flags."""
+    """Return the SHA-256 hex digest of the canonical npm policy."""
     payload = json.dumps(
-        list(NPM_CI_FLAGS), sort_keys=True, separators=(",", ":")
+        npm_policy(), sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def npm_policy_env() -> tuple[tuple[str, str], ...]:
+    """Return the npm request/retry environment for the assembler only.
+
+    These are the four npm ``fetch-*`` settings rendered into the standalone
+    assembler container environment and enforced by npm.  The reviewed total
+    assembly duration is deliberately absent here: it is not an npm network
+    setting, and its runtime enforcement belongs to Phase 3.
+    """
+    return (
+        ("npm_config_fetch_timeout", str(NPM_REQUEST_TIMEOUT_MS)),
+        ("npm_config_fetch_retries", str(NPM_RETRY_COUNT)),
+        ("npm_config_fetch_retry_mintimeout", str(NPM_RETRY_MIN_TIMEOUT_MS)),
+        ("npm_config_fetch_retry_maxtimeout", str(NPM_RETRY_MAX_TIMEOUT_MS)),
+    )

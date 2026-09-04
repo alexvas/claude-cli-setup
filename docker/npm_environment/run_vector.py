@@ -17,6 +17,7 @@ from .assembler import (
     ASSEMBLER_SCRIPT,
     assembler_script_digest,
     npm_policy_digest,
+    npm_policy_env,
 )
 from .errors import LockedNpmError
 from .identity import (
@@ -156,6 +157,7 @@ def render_run_vector(
         ("npm_config_cache", ASSEMBLER_CACHE),
         ("REVIEWED_NODE_VERSION", validated.node_version),
         ("REVIEWED_NPM_VERSION", validated.npm_version),
+        *npm_policy_env(),
     ]
     mounts: list[Mount] = [
         Mount(str(staging), ASSEMBLER_WORKDIR, "rw"),

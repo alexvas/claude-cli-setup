@@ -26,6 +26,7 @@ from docker.npm_environment import (
     assembler_script_digest,
     compute_assembler_identity,
     npm_policy_digest,
+    npm_policy_env,
     preflight,
     render_docker_argv,
     render_run_vector,
@@ -189,10 +190,14 @@ class TestRunVectorShape(unittest.TestCase):
         self.assertEqual(
             set(env),
             {"HOME", "npm_config_cache", "REVIEWED_NODE_VERSION",
-             "REVIEWED_NPM_VERSION"},
+             "REVIEWED_NPM_VERSION"}
+            | {name for name, _value in npm_policy_env()},
         )
         self.assertEqual(env["REVIEWED_NODE_VERSION"], _NODE)
         self.assertEqual(env["REVIEWED_NPM_VERSION"], _NPM)
+        # The four reviewed npm fetch limits are rendered deterministically.
+        for name, value in npm_policy_env():
+            self.assertEqual(env[name], value, name)
 
     def test_read_only_inputs(self):
         mounts = _vector().mounts

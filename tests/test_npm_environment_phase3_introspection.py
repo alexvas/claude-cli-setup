@@ -25,6 +25,7 @@ from docker.npm_environment import (
     assembler_script_digest,
     compute_assembler_identity,
     npm_policy_digest,
+    npm_policy_env,
     preflight,
     render_docker_argv,
     render_run_vector,
@@ -112,8 +113,10 @@ class TestDisplayedMatchesExecutable(unittest.TestCase):
         vector = _vector()
         keys = [k for k, _v in vector.env]
         self.assertEqual(
-            keys, ["HOME", "npm_config_cache", "REVIEWED_NODE_VERSION",
-                   "REVIEWED_NPM_VERSION"]
+            keys,
+            ["HOME", "npm_config_cache", "REVIEWED_NODE_VERSION",
+             "REVIEWED_NPM_VERSION"]
+            + [name for name, _value in npm_policy_env()],
         )
 
     def test_script_digest_is_sha256_of_script_bytes(self):

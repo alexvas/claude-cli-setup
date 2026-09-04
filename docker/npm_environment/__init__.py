@@ -16,11 +16,18 @@ atomic publication.
 from __future__ import annotations
 
 from .assembler import (
+    ASSEMBLY_TOTAL_TIMEOUT_SECONDS,
     MANIFEST_DEPENDENCY_KEYS,
     NPM_CI_FLAGS,
+    NPM_REQUEST_TIMEOUT_MS,
+    NPM_RETRY_COUNT,
+    NPM_RETRY_MAX_TIMEOUT_MS,
+    NPM_RETRY_MIN_TIMEOUT_MS,
     assembler_script_bytes,
     assembler_script_digest,
+    npm_policy,
     npm_policy_digest,
+    npm_policy_env,
     npm_policy_flags,
 )
 from .errors import LockedNpmError
@@ -138,6 +145,7 @@ from .tree import (
 from .validation import make_tree_read_only, validate_assembled_tree
 
 __all__ = [
+    "ASSEMBLY_TOTAL_TIMEOUT_SECONDS",
     "AssemblyRun",
     "AssembledOutputIdentity",
     "AssemblerEvidence",
@@ -158,6 +166,10 @@ __all__ = [
     "MANIFEST_DEPENDENCY_KEYS",
     "Mount",
     "NPM_CI_FLAGS",
+    "NPM_REQUEST_TIMEOUT_MS",
+    "NPM_RETRY_COUNT",
+    "NPM_RETRY_MAX_TIMEOUT_MS",
+    "NPM_RETRY_MIN_TIMEOUT_MS",
     "NpmRange",
     "NpmRangeError",
     "OmittedOptional",
@@ -196,7 +208,9 @@ __all__ = [
     "index_path",
     "input_identity_digest",
     "make_tree_read_only",
+    "npm_policy",
     "npm_policy_digest",
+    "npm_policy_env",
     "npm_policy_flags",
     "output_path",
     "parse_evidence",

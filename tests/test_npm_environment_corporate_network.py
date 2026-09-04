@@ -44,6 +44,7 @@ from docker.npm_environment import (
     build_tree_manifest,
     compute_assembler_identity,
     npm_policy_digest,
+    npm_policy_env,
     preflight,
     redact_docker_argv,
     redact_run_vector,
@@ -231,7 +232,8 @@ class TestEnabledDisabledProjection(unittest.TestCase):
         self.assertEqual(
             set(env),
             {"HOME", "npm_config_cache", "REVIEWED_NODE_VERSION",
-             "REVIEWED_NPM_VERSION"},
+             "REVIEWED_NPM_VERSION"}
+            | {name for name, _value in npm_policy_env()},
         )
 
     def test_enabled_trust_mounted_readonly_at_fixed_path(self):
@@ -274,7 +276,11 @@ class TestOnlyResolvedPolicyReceived(_AssemblerTestBase):
         env = _env_dict(argv)
         base = {"HOME", "npm_config_cache", "REVIEWED_NODE_VERSION",
                 "REVIEWED_NPM_VERSION"}
-        self.assertEqual(set(env), base | set(PROXY_URL_ENV_NAMES) | set(PROXY_BYPASS_ENV_NAMES))
+        self.assertEqual(
+            set(env),
+            base | set(PROXY_URL_ENV_NAMES) | set(PROXY_BYPASS_ENV_NAMES)
+            | {name for name, _value in npm_policy_env()},
+        )
         for name in PROXY_URL_ENV_NAMES:
             self.assertEqual(env[name], _PROXY)
         for name in PROXY_BYPASS_ENV_NAMES:

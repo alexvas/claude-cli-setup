@@ -16,12 +16,12 @@ A phase MAY depend only on phases with lower numbers listed in its `Depends on` 
 
 **Deliverables:** one fixed reviewed policy for npm request timeout, retry count, minimum retry delay, maximum retry delay, and total Docker-backed assembly duration; canonical policy serialization; assembler-identity binding; no user-facing timeout configuration.
 
-- [ ] 1.1 **RED:** Add focused policy tests requiring explicit finite npm request timeout, retry count, minimum retry delay, maximum retry delay, and total assembly duration constants; verify the tests fail against the current unbounded policy.
-- [ ] 1.2 **RED:** Add identity tests proving each limit is represented canonically, changing any one limit changes assembler policy identity, and an output from the prior policy cannot validate under the changed policy.
-- [ ] 1.3 **RED:** Add rendering tests requiring the reviewed npm network limits to reach only the standalone assembler process, while command displays, evidence, and output trees remain free of local network configuration and no user-facing override is accepted.
-- [ ] 1.4 **GREEN:** Define the reviewed finite limits, include them in canonical assembler policy identity, and render the npm request/retry settings into the assembler environment as required by tasks 1.1–1.3.
-- [ ] 1.5 **INTROSPECT:** Review the phase diff for reliance on mutable npm defaults, inconsistent units, accidental configurability, missing identity inputs, proxy or trust persistence, and changes to the four required script-free npm flags; correct every issue without adding process streaming or cleanup behavior owned by later phases.
-- [ ] 1.6 **VALIDATE:** Run focused policy, identity, rendering, evidence-redaction, and existing assembler-vector tests; record the selected finite values, deterministic identity changes, unchanged required npm flags, and absence of a new CLI or inventory configuration surface.
+- [x] 1.1 **RED:** Add focused policy tests requiring explicit finite npm request timeout, retry count, minimum retry delay, maximum retry delay, and total assembly duration constants; verify the tests fail against the current unbounded policy.
+- [x] 1.2 **RED:** Add identity tests proving each limit is represented canonically, changing any one limit changes assembler policy identity, and an output from the prior policy cannot validate under the changed policy.
+- [x] 1.3 **RED:** Add rendering tests requiring the reviewed npm network limits to reach only the standalone assembler process, while command displays, evidence, and output trees remain free of local network configuration and no user-facing override is accepted.
+- [x] 1.4 **GREEN:** Define the reviewed finite limits, include them in canonical assembler policy identity, and render the npm request/retry settings into the assembler environment as required by tasks 1.1–1.3.
+- [x] 1.5 **INTROSPECT:** Review the phase diff for reliance on mutable npm defaults, inconsistent units, accidental configurability, missing identity inputs, proxy or trust persistence, and changes to the four required script-free npm flags; correct every issue without adding process streaming or cleanup behavior owned by later phases.
+- [x] 1.6 **VALIDATE:** Run focused policy, identity, rendering, evidence-redaction, and existing assembler-vector tests; record the selected finite values, deterministic identity changes, unchanged required npm flags, and absence of a new CLI or inventory configuration surface.
 
 ## 2. Bounded Redacted Streaming Executor
 
