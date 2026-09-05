@@ -56,6 +56,7 @@ from .storage import (
     AssemblerNamespace,
     prepare_assembler_namespace,
     prepare_identity_lock,
+    remove_staging_workspace,
 )
 from .tree import (
     TreeManifest,
@@ -607,6 +608,11 @@ def assemble_environment(
         )
         if cached is not None:
             return cached
+
+        # Securely replace any abandoned same-input staging left by a prior
+        # interrupted run: no-follow removal under the lock, never adopted as
+        # a completed environment.  Unsafe entries fail closed.
+        remove_staging_workspace(namespace, staging_name)
 
         run = assemble(
             validated=validated,

@@ -30,7 +30,7 @@ from .assembler import (
     npm_policy_env,
     npm_policy_flags,
 )
-from .errors import LockedNpmError
+from .errors import AssemblyTimeoutError, LockedNpmError
 from .evidence import (
     AssembledOutputIdentity,
     AssemblerEvidence,
@@ -170,6 +170,7 @@ from .validation import make_tree_read_only, validate_assembled_tree
 __all__ = [
     "ASSEMBLY_TOTAL_TIMEOUT_SECONDS",
     "AssemblyRun",
+    "AssemblyTimeoutError",
     "AssembledOutputIdentity",
     "AssemblerEvidence",
     "AssemblerEvidenceBody",

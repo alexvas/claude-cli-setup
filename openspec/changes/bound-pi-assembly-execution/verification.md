@@ -134,3 +134,138 @@ model/inventory modules declare no npm timeout/retry/duration field.
 - `ty check`: all checks passed.
 - No ResourceWarning under `-W error::ResourceWarning` (pipe descriptors
   closed after draining).
+
+## Phase 3 — Deadline, Interruption, and Mutable-State Cleanup
+
+### Deadline supervision
+
+- `DockerRunExecutor.run_streaming` accepts optional `deadline_seconds`,
+  `container_name`, and `grace_seconds`.  A single daemon supervisor thread
+  polls the client's own exit in short slices (a non-blocking
+  ``proc.wait(timeout=0)`` reap plus a bounded ``cancel_event`` sleep) rather
+  than blocking in one long ``proc.wait(timeout=deadline_seconds)``, so the
+  deadline bounds only the assembler execution (client lifetime) and reader
+  drain / sink finalization neither extend nor restart it.
+- On expiry the supervisor terminates the local Docker client, independently
+  force-removes the deterministic named container through a bounded
+  `docker rm -f` client (wait → terminate → bounded wait → SIGKILL → final
+  bounded wait), reaps the local client within `grace_seconds` (SIGKILL
+  fallback), and closes both pipes so blocked readers always reach EOF.
+  An already-absent daemon container remains idempotent success; an rm client
+  that survives SIGKILL is retained as bounded cleanup context without an
+  unbounded output read, while both of its output pipes are still closed.
+  Readers then finish, the dispatcher finalizes, and a structured
+  `AssemblyTimeoutError` (reason `"assembly_timeout"`) is raised with bounded
+  redacted tails and any retained truncation notice; deadline-cleanup and
+  pipe-close failures are bounded redacted notes, never the primary.
+- `_terminate_and_remove` never blocks forever: the post-SIGKILL reap uses a
+  bounded `proc.wait(timeout=grace_seconds)`; if that also expires the
+  expiry is recorded as a cleanup error (`TimeoutError`) instead of waiting
+  indefinitely, so the function always returns its collected errors in
+  finite time.
+- `_terminate_and_reap` (reader-failure path) is aligned with
+  `_terminate_and_remove`: bounded terminate → wait → kill → bounded wait,
+  collecting per-step errors (including a `TimeoutError` when the client
+  still has not exited after SIGKILL) and returning them so the structured
+  reader failure stays primary with the failed reap as bounded redacted
+  secondary context.  Reader-failure cleanup closes the failed pipe
+  immediately and, after the reap, closes both pipes through
+  `_close_stream_pipes` (each close attempted independently) so the sibling
+  reader always reaches EOF even when the client ignores terminate and
+  survives kill; any pipe-close failure joins the reap/terminate failures as
+  bounded redacted secondary context without replacing the reader failure.
+- An unexpected failure from a poll never crashes the supervisor thread
+  (which would strand the readers): it is recorded in shared supervisor
+  state, the same bounded termination/reaping/container removal still runs
+  to unblock the readers, and the supervisor is always joined before
+  ``run_streaming`` returns or raises.  The recorded failure is surfaced as
+  the primary error (bounded and redacted; control-flow exceptions propagate
+  unchanged) with termination/reaping/container-removal and pipe-close
+  failures attached as bounded redacted notes — ``AssemblyTimeoutError`` is
+  reported only when the constructor-owned deadline actually expires (the
+  monotonic clock, not a single poll timeout, decides expiry).
+- Supervisor cleanup ownership is claimed atomically under the shared lock.
+  An interruption that arrives before the supervisor claims cleanup sets the
+  cancellation event and owns the terminate/remove/reap/pipe-close sequence;
+  if the supervisor has already claimed deadline cleanup, interruption waits
+  for that one cleanup rather than starting a concurrent second sequence.
+  Thus a deadline that claimed cleanup first remains the primary
+  ``AssemblyTimeoutError`` (the concurrent control-flow exception is a
+  bounded redacted note), while an interruption that canceled first remains
+  primary.  ``_join_supervisor`` and the already-owned-cleanup wait use the
+  complete cleanup budget: three ``grace_seconds`` intervals for the bounded
+  ``docker rm -f`` client (wait, terminate-wait, kill-wait), then one each
+  for the local graceful reap, post-SIGKILL reap, and final pipe
+  closure/scheduling — not one grace interval.  A supervisor still alive
+  after that budget is recorded as a bounded ``TimeoutError`` and attached as
+  a redacted shutdown note; supported paths never return or raise with an
+  ``npm-deadline-supervisor`` thread alive.  Normal completion never cancels
+  the supervisor: both pipes reaching EOF is not process completion, so the
+  supervisor is joined *without* cancellation (``_wait_for_supervisor``,
+  bounded by the assembly deadline plus cleanup grace) and keeps enforcing
+  the deadline until it observes either a normal exit or the deadline expiry.
+  The normal path then reuses the supervisor's bounded outcome (a reaped
+  client on normal exit, or the deadline termination/reaping and a timeout)
+  instead of an unbounded ``proc.wait()``.
+- `assemble()` routes the deadline and container name to the real streaming
+  executor via signature introspection; injected Phase 2 executors without
+  those parameters remain usable (no deadline).  `AssemblyTimeoutError` is
+  re-raised unchanged through `assemble`'s existing cleanup boundary.
+
+### Unified interruption cleanup
+
+- `collect_streams` accepts `on_interruption`; a control-flow exception
+  delivered to the coordinating thread (``KeyboardInterrupt``/``SystemExit``)
+  invokes the hook.  When interruption owns cleanup it signals the supervisor
+  cancellation event and terminates + force-removes + reaps + closes both
+  pipes; when the supervisor already owns deadline cleanup, the hook waits
+  for that bounded cleanup instead of issuing a concurrent second sequence.
+  It then joins both readers, finalizes the dispatcher, and only then
+  propagates the race winner with any cleanup failure as a bounded redacted
+  note.  A hook that raises its own ``KeyboardInterrupt``/``SystemExit`` is
+  caught as ``BaseException`` and recorded the same way, so the original
+  interruption always remains primary unless the deadline had already won.
+  ``run_streaming`` always supplies the hook, so interruption never strands
+  the readers or the deadline supervisor.
+
+### Cleanup and storage
+
+- Streaming deadline/interruption cleanup exposes a thread-safe outcome to
+  `assemble()`: once its bounded `docker rm -f` has been attempted for the
+  named container, the outer failure boundary skips the duplicate normal
+  `_cleanup_container` call while still always removing staging.  Remaining
+  real-Docker `_cleanup_container` calls use bounded
+  `subprocess.run(..., timeout=grace_seconds)` rather than
+  `DockerRunExecutor.run()`'s unbounded subprocess path; already-absent
+  containers (``No such container`` / ``No such object``) remain idempotent
+  success and bounded cleanup failures remain notes on the original error.
+- `assemble_environment` securely replaces abandoned same-input staging
+  under the input-identity lock (no-follow removal; unsafe entries fail
+  closed), never adopting it as a completed environment.
+- Failed paths preserve the opaque npm cache and prior immutable published
+  outputs; nothing partial is published; authoritative cache state is never
+  chmod-ed, adopted, or deleted.
+
+### Validation evidence
+
+- New suite `tests/test_npm_environment_phase3_deadline.py`
+  (deadline terminate/reap, bounded-grace SIGKILL escalation, accepted-chunk
+  delivery, truncation-notice preservation under sink failure, named-container
+  force-removal (including an rm client that survives terminate/SIGKILL),
+  already-absent idempotency, ``KeyboardInterrupt`` reaping and
+  propagation, assemble-level interrupt cleanup with an unreapable client that
+  exercises the real 1800-second supervisor and its cancellation, stream-EOF
+  before process-exit still enforcing the deadline (no premature
+  cancellation of the supervisor), interruption racing a supervisor blocked
+  in deadline cleanup (one cleanup owner, deadline-primary result, and no
+  surviving workers), timeout skipping a later duplicate container removal
+  that would block (timeout remains primary with no workers), no network
+  classification on npm nonzero exits,
+  bounded redacted diagnostics, cache/output preservation, and abandoned-
+  staging replacement/unlinking) — all OK.
+- Full npm-environment discovery (`test_npm_environment*.py`): all OK.
+- Full discovery (`python3 -m unittest discover -s tests`): all OK.
+- `python3 -m py_compile` over changed modules: OK.
+- `ty check`: all checks passed.
+- No ResourceWarning under `-W error::ResourceWarning`; no surviving reader,
+  dispatcher, or deadline-supervisor threads after cleanup.

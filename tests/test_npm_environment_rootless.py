@@ -109,7 +109,9 @@ class _FakePopenProc:
         self.stdout = _EmptyPipe()
         self.stderr = _EmptyPipe()
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
+        # Matches ``subprocess.Popen.wait(timeout=...)``: the process has
+        # already exited, so the optional timeout is accepted and ignored.
         return self.returncode
 
 

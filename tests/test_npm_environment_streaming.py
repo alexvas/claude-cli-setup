@@ -656,22 +656,18 @@ class _FailingPipe:
 
 
 class _BlockedPipe:
-    """Pipe stub that blocks on read until its owning process is terminated."""
+    """Pipe stub that blocks on read until unblocked (terminate or close)."""
 
     def __init__(self, data: bytes = b"") -> None:
         self._data = data
         self._terminated = threading.Event()
-        self._closed = False
 
     def read(self, n: int) -> bytes:
         self._terminated.wait()
-        if self._closed:
-            return b""
         chunk, self._data = self._data[:n], self._data[n:]
         return chunk
 
     def close(self) -> None:
-        self._closed = True
         self._terminated.set()
 
     def unblock(self) -> None:
@@ -915,7 +911,7 @@ class TestReaderFailure(unittest.TestCase):
             (sys.executable, "-c", "import time; time.sleep(30)")
         )
         try:
-            execution_module._terminate_and_reap(proc)
+            execution_module._terminate_and_reap(proc, grace_seconds=5.0)
             with self.assertRaises(ProcessLookupError):
                 os.kill(proc.pid, 0)
         finally:

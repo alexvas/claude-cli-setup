@@ -52,3 +52,16 @@ class LockedNpmError(Exception):
 
     def __str__(self) -> str:
         return self.detail
+
+
+class AssemblyTimeoutError(LockedNpmError):
+    """Structured timeout failure from the constructor-owned total deadline.
+
+    Raised by the streaming executor when the reviewed total assembly
+    duration expires; ``reason`` is the stable ``"assembly_timeout"``
+    identifier and the human-readable *detail* includes any bounded redacted
+    assembler diagnostics.
+    """
+
+    def __init__(self, detail: str) -> None:
+        super().__init__("assembly_timeout", detail)

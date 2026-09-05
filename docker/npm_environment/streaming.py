@@ -496,6 +496,7 @@ def collect_streams(
     secrets: Sequence[str] = (),
     sink: DiagnosticSink | None = None,
     on_reader_failure: Callable[[str], None] | None = None,
+    on_interruption: Callable[[], None] | None = None,
 ) -> StreamingCapture:
     """Drain two byte pipes concurrently through redacting streams.
 
@@ -520,6 +521,17 @@ def collect_streams(
     its error is preserved as bounded, redacted secondary context on the
     raised failure rather than displacing it, and reader and dispatcher
     cleanup still complete first.
+
+    A control-flow interruption (``KeyboardInterrupt``/``SystemExit``)
+    delivered to this coordinating thread is handled the same way:
+    *on_interruption*, when given, is invoked to terminate/reap the producer
+    so the blocked readers reach EOF, both readers are joined, the dispatcher
+    is finalized, and only then is the interruption re-raised.  A raising
+    *on_interruption* hook — including one that raises its own
+    ``KeyboardInterrupt``/``SystemExit`` — never masks the interruption; its
+    error becomes a bounded, redacted note.  Callers without
+    *on_interruption* must ensure the readers are independently unblocked,
+    otherwise the interruption handler cannot join them.
     """
     stdout_stream = RedactingStream(secrets)
     stderr_stream = RedactingStream(secrets)
@@ -596,12 +608,13 @@ def collect_streams(
     # Report the first failure (or full completion) immediately rather than
     # waiting for the sibling reader to reach EOF; the callback unblocks a
     # sibling that would otherwise never finish.
-    terminal.wait()
-    with failures_lock:
-        first_failure = failures[0] if failures else None
-
-    cleanup_failures: list[Exception] = []
+    first_failure: StreamReaderFailure | None = None
+    cleanup_failures: list[BaseException] = []
+    interrupted: BaseException | None = None
     try:
+        terminal.wait()
+        with failures_lock:
+            first_failure = failures[0] if failures else None
         if first_failure is not None and on_reader_failure is not None:
             try:
                 on_reader_failure(first_failure.stream)
@@ -610,13 +623,34 @@ def collect_streams(
                 # dispatcher workers are cleaned up, nor may it displace the
                 # structured reader failure; preserve it as secondary context.
                 cleanup_failures.append(exc)
+    except BaseException as exc:
+        # Control-flow interruption delivered to this coordinating thread:
+        # unblock the readers via the caller hook so they can finish, then
+        # re-raise after reader join and dispatcher finalization.  A raising
+        # hook — even one that raises its own KeyboardInterrupt/SystemExit —
+        # never masks the interruption; it is recorded as secondary context.
+        interrupted = exc
+        if on_interruption is not None:
+            try:
+                on_interruption()
+            except BaseException as cb_exc:
+                cleanup_failures.append(cb_exc)
     finally:
-        # Guarantee worker cleanup even when the callback raised (e.g. pipe
+        # Guarantee worker cleanup even when a callback raised (e.g. pipe
         # close or client termination failed): always join both readers and
         # always finalize the dispatcher.
         for thread in threads:
             thread.join()
         notice = dispatcher.finish() if dispatcher is not None else None
+
+    if interrupted is not None:
+        for exc in cleanup_failures:
+            interrupted.add_note(
+                "interruption cleanup failed "
+                f"({type(exc).__name__}): "
+                f"{_redacted_exception_detail(exc, secrets)}"
+            )
+        raise interrupted
 
     if failures:
         primary = failures[0]
