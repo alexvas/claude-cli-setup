@@ -91,6 +91,28 @@ class _FakeProc:
         self.stderr = stderr
 
 
+class _EmptyPipe:
+    """Byte pipe stub that reports immediate EOF for streaming readers."""
+
+    def read(self, n: int) -> bytes:
+        return b""
+
+    def close(self) -> None:
+        pass
+
+
+class _FakePopenProc:
+    """Minimal ``subprocess.Popen`` stub for the streaming executor."""
+
+    def __init__(self, returncode=0):
+        self.returncode = returncode
+        self.stdout = _EmptyPipe()
+        self.stderr = _EmptyPipe()
+
+    def wait(self) -> int:
+        return self.returncode
+
+
 class TestIsRootlessDocker(unittest.TestCase):
     def test_rootless_stdout_is_detected(self):
         with mock.patch.object(
@@ -212,8 +234,11 @@ class TestRealExecutorEndToEnd(unittest.TestCase):
         def fake_run(argv, **kwargs):
             if argv[0] == "docker" and argv[1] == "info":
                 return _FakeProc(stdout="...\n  rootless\n...")
+            raise AssertionError(f"unexpected argv: {argv}")
+
+        def fake_popen(argv, **kwargs):
             if argv[0] == "docker" and argv[1] == "run":
-                return _FakeProc()
+                return _FakePopenProc()
             raise AssertionError(f"unexpected argv: {argv}")
 
         tmp = tempfile.TemporaryDirectory(prefix="npm-env-rootless-e2e-")
@@ -222,6 +247,8 @@ class TestRealExecutorEndToEnd(unittest.TestCase):
         cache_root.mkdir()
         with mock.patch.object(
             execution_module.subprocess, "run", side_effect=fake_run
+        ), mock.patch.object(
+            execution_module.subprocess, "Popen", side_effect=fake_popen
         ):
             result = assemble(
                 validated=_validated(),

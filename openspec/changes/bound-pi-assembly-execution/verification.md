@@ -1,6 +1,6 @@
 # Verification — bound-pi-assembly-execution
 
-Run Date: 2026-09-04T15:23:09Z
+Run Date: 2026-09-04T15:23:09Z (Phase 1), 2026-09-04T16:18:27Z (Phase 2)
 
 ## Phase 1 — Reviewed Assembler Limit Policy and Identity
 
@@ -60,17 +60,77 @@ model/inventory modules declare no npm timeout/retry/duration field.
 
 ### Validation evidence
 
-- New suite `tests/test_npm_environment_policy.py`: **14 tests OK**
-  (`TestReviewedFiniteLimits` 5, `TestPolicyIdentity` 4,
-  `TestPolicyRendering` 5).
+- New suite `tests/test_npm_environment_policy.py`
+  (`TestReviewedFiniteLimits`, `TestPolicyIdentity`, `TestPolicyRendering`) —
+  all OK.
 - Updated existing suites for the four added assembler env vars:
   `test_npm_environment_run_vector.py`, `test_npm_environment_phase3_introspection.py`,
   `test_npm_environment_corporate_network.py` — all OK.
 - Focused policy/identity/rendering/evidence-redaction/assembler-vector run:
-  **98 tests OK (1 env-dependent skip)**.
-- Full discovery (`python3 -m unittest discover -s tests`): **3227 tests OK,
-  5 skips** (was 3213 before this phase).
+  all OK.
+- Full discovery (`python3 -m unittest discover -s tests`): all OK.
 - `python3 -m py_compile` over changed modules: OK.
 - `ty check`: all checks passed.
 - `docs/npm-environment-assembler.md` "Fixed npm policy" section documents
   the finite limits and their identity binding.
+
+## Phase 2 — Bounded Redacted Streaming Executor
+
+### Streaming redaction and decoding
+
+`docker/npm_environment/streaming.py` adds the Phase 2 primitives:
+
+- `redact_text`/`RedactingStream`: deterministic caller-order-independent
+  leftmost-longest multi-pattern redaction.  At the leftmost position where
+  any configured secret matches, the longest complete match is replaced by
+  exactly one `<redacted>` marker and consumed whole, so no suffix of a
+  shorter alternative is exposed.  Streaming retains
+  ``longest_secret - 1`` decoded characters of overlap and only commits a
+  match once a full ``longest_secret`` window follows its start (or at EOF),
+  so no candidate prefix or suffix is emitted before the full match is
+  determined.
+- Incremental UTF-8 decoding via ``codecs.getincrementaldecoder("utf-8")``
+  (split multibyte characters stay intact; decoder holds at most three
+  incomplete bytes) with EOF flushing of the final partial record.
+- Independent 64 KiB (UTF-8 byte) retained diagnostic tails per stream via
+  ``RedactingStream`` (bounded independently of total output).
+- ``SinkDispatcher``: one serialized dispatcher thread behind a non-blocking
+  64-chunk queue; dropping restricted to queue overflow or sink-contract
+  failure; exactly one retained redacted truncation notice
+  (``<live output truncated>``); 100 ms per-callback budget; 10-second
+  dispatcher-drain budget; dispatcher joined before executor return.
+  Arbitrarily indefinitely blocking callbacks are documented as unsupported
+  (Python cannot safely cancel a running callback thread).
+- ``collect_streams`` drains two byte pipes concurrently with 16 KiB reads.
+
+### Executor integration
+
+- `DockerRunExecutor.run_streaming` replaces all-at-once capture for the
+  real executor: ``subprocess.Popen`` with both pipes drained concurrently,
+  redacted safe prefixes reaching the optional sink before exit, bounded
+  redacted tails returned, and pipe descriptors closed after draining.
+- `assemble(..., sink=...)` accepts an optional constructor-owned sink;
+  an absent sink produces no live output and retains only bounded
+  diagnostics.  Executors without ``run_streaming`` (existing injected
+  ``RunExecutor`` implementations) remain usable via the bounded
+  all-at-once fallback (`redact_tail`).
+- `ProcessResult`/`AssemblyRun` gain an optional ``truncation_notice``; a
+  nonzero exit reports redacted bounded diagnostics plus any retained
+  truncation notice.
+
+### Validation evidence
+
+- New suite `tests/test_npm_environment_streaming.py`
+  (redaction determinism/overlap, incremental decoding, 64 KiB tail and
+  overlap bounds, concurrent-stream sink delivery, serialized single-thread
+  sink, bounded reads, slow-compliant/raising/overflow sinks, normal
+  finalization join, 100 ms and 10-second budgets, injected-executor
+  compatibility) — all OK.
+- Updated `tests/test_npm_environment_rootless.py` for the executor's
+  ``subprocess.Popen`` streaming path (empty-pipe stub) — OK.
+- Full npm-environment discovery (`test_npm_environment*.py`): all OK.
+- Full discovery (`python3 -m unittest discover -s tests`): all OK.
+- `python3 -m py_compile` over changed modules: OK.
+- `ty check`: all checks passed.
+- No ResourceWarning under `-W error::ResourceWarning` (pipe descriptors
+  closed after draining).

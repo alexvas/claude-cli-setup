@@ -22,7 +22,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import IO, Protocol, Sequence
 
 from .assembler import EXIT_NODE_VERSION_MISMATCH, EXIT_NPM_VERSION_MISMATCH
 from .errors import LockedNpmError
@@ -42,8 +42,17 @@ from .storage import (
     prepare_staging_workspace,
     remove_staging_workspace,
 )
-
-REDACTED = "<redacted>"
+from .streaming import (
+    READER_FAILURE_DETAIL_BYTES,
+    REDACTED,
+    DiagnosticSink,
+    STREAM_STDERR,
+    STREAM_STDOUT,
+    StreamingCapture,
+    collect_streams,
+    redact_tail,
+    redact_text,
+)
 
 #: Control-flow exceptions that must propagate unchanged from the executor
 #: boundary (never converted into a structured assembler failure).
@@ -51,11 +60,13 @@ _CONTROL_FLOW_EXCEPTIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
 
 def redact(text: str, secrets: Sequence[str]) -> str:
-    """Replace every non-empty *secret* in *text* with ``<redacted>``."""
-    for secret in secrets:
-        if secret:
-            text = text.replace(secret, REDACTED)
-    return text
+    """Replace every non-empty *secret* in *text* with ``<redacted>``.
+
+    Deterministic and caller-order-independent: at the leftmost position
+    where any secret matches, the longest complete match is replaced with
+    exactly one marker.
+    """
+    return redact_text(text, secrets)
 
 
 def redact_docker_argv(
@@ -85,6 +96,8 @@ class ProcessResult:
     return_code: int
     stdout: str = ""
     stderr: str = ""
+    truncation_notice: str | None = None
+    """Fixed redacted notice when live output was not fully delivered."""
 
 
 class RunExecutor(Protocol):
@@ -134,12 +147,175 @@ def _resolve_container_user(
     return _default_container_user(uid, gid)
 
 
+def _terminate_and_reap(proc: subprocess.Popen) -> None:
+    """Terminate and reap a local docker client left writing to a failed pipe."""
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        proc.wait()
+
+
+def _close_stream_pipes(pipes: Sequence[IO[bytes]]) -> list[Exception]:
+    """Close every pipe independently, returning any close failures.
+
+    Each pipe is closed in its own try/except so one close failure cannot
+    skip another pipe's close; failures are collected, never raised here, so
+    the caller can guarantee downstream cleanup (process reaping) first.
+    """
+    close_errors: list[Exception] = []
+    for pipe in pipes:
+        try:
+            pipe.close()
+        except Exception as exc:
+            close_errors.append(exc)
+    return close_errors
+
+
+def _render_close_failure(exc: Exception, secrets: Sequence[str]) -> str:
+    """Render a close failure as a bounded, redacted message."""
+    return redact_tail(
+        str(exc) or repr(exc),
+        secrets,
+        tail_bytes=READER_FAILURE_DETAIL_BYTES,
+    )
+
+
+def _attach_close_failure_notes(
+    target: BaseException,
+    close_errors: Sequence[Exception],
+    secrets: Sequence[str],
+) -> None:
+    """Attach bounded, redacted close failures to *target* as notes."""
+    for exc in close_errors:
+        target.add_note(
+            f"pipe close failed ({type(exc).__name__}): "
+            f"{_render_close_failure(exc, secrets)}"
+        )
+
+
+def _raise_close_failures(
+    close_errors: Sequence[Exception], secrets: Sequence[str]
+) -> None:
+    """Raise the first close failure, redacted; note any further ones."""
+    primary = close_errors[0]
+    message = _render_close_failure(primary, secrets)
+    try:
+        raised: Exception = type(primary)(message)
+    except Exception:
+        raised = RuntimeError(message)
+    for exc in close_errors[1:]:
+        raised.add_note(
+            f"also ({type(exc).__name__}): {_render_close_failure(exc, secrets)}"
+        )
+    raise raised
+
+
 class DockerRunExecutor:
     """Real executor backed by the ``docker`` binary on ``PATH``."""
 
     def run(self, argv: tuple[str, ...]) -> ProcessResult:
         proc = subprocess.run(argv, capture_output=True, text=True)
         return ProcessResult(argv, proc.returncode, proc.stdout, proc.stderr)
+
+    def run_streaming(
+        self,
+        argv: tuple[str, ...],
+        *,
+        secrets: Sequence[str] = (),
+        sink: DiagnosticSink | None = None,
+    ) -> ProcessResult:
+        """Run *argv*, draining stdout/stderr concurrently with redaction.
+
+        Both pipes are drained without waiting for newlines; safe redacted
+        prefixes reach *sink* (when provided) before process exit; retained
+        stdout/stderr are bounded redacted tails.  A pipe-reader failure is
+        reported immediately: the failed pipe is closed and the local docker
+        client is terminated and reaped, which lets the sibling reader reach
+        EOF and drain its remaining data; both readers are then joined and
+        the sink dispatcher finalized before :class:`StreamReaderFailure` is
+        raised.  The named daemon-side container stays owned by ``assemble``'s
+        cleanup.
+        """
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        stdout_pipe = proc.stdout
+        stderr_pipe = proc.stderr
+
+        def react_to_reader_failure(failed_stream: str) -> None:
+            # Attempt every cleanup step independently so a failure in one
+            # (e.g. closing the failed pipe) cannot skip the others (e.g.
+            # terminating the client, which unblocks the sibling reader).
+            # Collected errors are re-raised so collect_streams records them
+            # as secondary context without masking the reader failure; the
+            # run_streaming finally block still guarantees both pipes close.
+            failed_pipe = (
+                stdout_pipe if failed_stream == STREAM_STDOUT else stderr_pipe
+            )
+            cleanup_errors: list[Exception] = []
+            try:
+                failed_pipe.close()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+            try:
+                _terminate_and_reap(proc)
+            except Exception as exc:
+                cleanup_errors.append(exc)
+            if cleanup_errors:
+                primary = cleanup_errors[0]
+                for extra in cleanup_errors[1:]:
+                    primary.add_note(
+                        f"also ({type(extra).__name__}): "
+                        f"{str(extra) or repr(extra)}"
+                    )
+                raise primary
+
+        try:
+            capture: StreamingCapture = collect_streams(
+                stdout_read=stdout_pipe.read,
+                stderr_read=stderr_pipe.read,
+                secrets=secrets,
+                sink=sink,
+                on_reader_failure=react_to_reader_failure,
+            )
+        except BaseException as exc:
+            # Close both pipes without letting a close failure replace the
+            # in-flight exception; close failures become bounded, redacted
+            # secondary notes on it.  The reader-failure callback already
+            # terminated and reaped the client in this path.
+            _attach_close_failure_notes(
+                exc, _close_stream_pipes((stdout_pipe, stderr_pipe)), secrets
+            )
+            raise
+
+        # Normal path: capture (do not raise) close failures so the
+        # subprocess is always reaped before any deferred cleanup failure
+        # surfaces.
+        close_errors = _close_stream_pipes((stdout_pipe, stderr_pipe))
+        try:
+            return_code = proc.wait()
+        except BaseException as wait_exc:
+            # A reaping failure is primary; close failures are secondary.
+            _attach_close_failure_notes(wait_exc, close_errors, secrets)
+            raise
+        if close_errors:
+            _raise_close_failures(close_errors, secrets)
+        return ProcessResult(
+            argv,
+            return_code,
+            capture.stdout_tail,
+            capture.stderr_tail,
+            truncation_notice=capture.truncation_notice,
+        )
 
     def resolve_user(self, uid: int | None, gid: int | None) -> tuple[int, int]:
         """Resolve the numeric container identity for the invoking host user.
@@ -179,7 +355,10 @@ class AssemblyRun:
     """Redacted container stdout."""
 
     stderr: str
-    """Redacted container stderr."""
+    """Redacted container stderr (bounded diagnostic tail)."""
+
+    truncation_notice: str | None = None
+    """Fixed redacted notice when live output was not fully delivered."""
 
 
 @dataclass(frozen=True)
@@ -203,21 +382,30 @@ class CleanupFailure:
     mutable residue may remain."""
 
 
-def _exit_failure(result: ProcessResult, *, secrets: Sequence[str]) -> LockedNpmError:
-    if result.return_code == EXIT_NODE_VERSION_MISMATCH:
+def _exit_failure(
+    return_code: int,
+    *,
+    stderr: str,
+    stdout: str,
+    truncation_notice: str | None = None,
+) -> LockedNpmError:
+    """Build a structured nonzero-exit failure from already-redacted output."""
+    if return_code == EXIT_NODE_VERSION_MISMATCH:
         reason = "node_version_mismatch"
-    elif result.return_code == EXIT_NPM_VERSION_MISMATCH:
+    elif return_code == EXIT_NPM_VERSION_MISMATCH:
         reason = "npm_version_mismatch"
     else:
         reason = "npm_exit_nonzero"
 
-    stderr = redact(result.stderr, secrets).strip()
-    stdout = redact(result.stdout, secrets).strip()
-    detail = f"assembler exited {result.return_code}"
+    stderr = stderr.strip()
+    stdout = stdout.strip()
+    detail = f"assembler exited {return_code}"
     if stderr:
         detail += f": {stderr}"
     elif stdout:
         detail += f": {stdout}"
+    if truncation_notice:
+        detail += f" {truncation_notice}"
     return LockedNpmError(reason, detail)
 
 
@@ -324,6 +512,7 @@ def assemble(
     gid: int | None = None,
     secrets: Sequence[str] = (),
     corporate_network: CorporateNetworkPolicy | None = None,
+    sink: DiagnosticSink | None = None,
 ) -> AssemblyRun:
     """Run one standalone pinned assembler container.
 
@@ -338,6 +527,11 @@ def assemble(
     and corporate trust policy.  Its values are automatically added to the
     redaction secrets, so the successful result and every raised or attached
     failure are free of the configured proxy endpoint and trust path.
+
+    *sink* is an optional constructor-owned prompt-returning diagnostic
+    callback.  Executors that support streaming deliver redacted output to
+    it before process exit; an absent *sink* produces no live output and
+    only bounded diagnostics are retained.
     """
     recheck_assembler_bindings(assembler)
     input_identity = compute_assembler_input_identity(validated, assembler)
@@ -371,8 +565,20 @@ def assemble(
         argv = render_docker_argv(vector)
         container_started = True
         executor_failure_detail: str | None = None
+        truncation_notice: str | None = None
+        streaming_runner = getattr(executor, "run_streaming", None)
         try:
-            result = executor.run(argv)
+            if streaming_runner is not None:
+                result = streaming_runner(
+                    argv, secrets=effective_secrets, sink=sink
+                )
+                stdout = result.stdout
+                stderr = result.stderr
+                truncation_notice = getattr(result, "truncation_notice", None)
+            else:
+                result = executor.run(argv)
+                stdout = redact_tail(result.stdout, effective_secrets)
+                stderr = redact_tail(result.stderr, effective_secrets)
         except _CONTROL_FLOW_EXCEPTIONS:
             raise
         except BaseException as exc:
@@ -390,13 +596,19 @@ def assemble(
                 executor_failure_detail,
             ) from None
         if result.return_code != 0:
-            raise _exit_failure(result, secrets=effective_secrets)
+            raise _exit_failure(
+                result.return_code,
+                stderr=stderr,
+                stdout=stdout,
+                truncation_notice=truncation_notice,
+            )
         return AssemblyRun(
             run_vector=redact_run_vector(vector, effective_secrets),
             argv=redact_docker_argv(argv, effective_secrets),
             staging=staging,
-            stdout=redact(result.stdout, effective_secrets),
-            stderr=redact(result.stderr, effective_secrets),
+            stdout=stdout,
+            stderr=stderr,
+            truncation_notice=truncation_notice,
         )
     except BaseException as exc:
         failures: list[CleanupFailure] = []
