@@ -34,6 +34,12 @@ from .assembler import (
 )
 from .errors import AssemblyTimeoutError, LockedNpmError
 from .identity import AssemblerIdentity, compute_assembler_input_identity
+from .lifecycle import (
+    LifecyclePolicy,
+    reap_process,
+    run_captured,
+    terminate_and_reap,
+)
 from .model import ValidatedAssemblyInput
 from .network import CorporateNetworkPolicy
 from .run_vector import (
@@ -181,32 +187,9 @@ def _terminate_and_reap(
     function never blocks forever.  Every step is attempted independently so
     one failure cannot skip another.
     """
-    errors: list[BaseException] = []
-    try:
-        proc.terminate()
-    except OSError as exc:
-        errors.append(exc)
-    try:
-        proc.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-        except OSError as exc:
-            errors.append(exc)
-        try:
-            proc.wait(timeout=grace_seconds)
-        except subprocess.TimeoutExpired:
-            errors.append(
-                TimeoutError(
-                    f"client did not exit after SIGKILL within "
-                    f"{grace_seconds:g}s"
-                )
-            )
-        except BaseException as exc:
-            errors.append(exc)
-    except BaseException as exc:
-        errors.append(exc)
-    return errors
+    return terminate_and_reap(
+        proc, policy=LifecyclePolicy(grace_seconds=grace_seconds)
+    ).errors
 
 
 def _bounded_docker_rm(
@@ -222,94 +205,25 @@ def _bounded_docker_rm(
     while other nonzero exits and every failed cleanup step are returned for
     attachment to the original primary error.
     """
-    errors: list[BaseException] = []
-    try:
-        removed = subprocess.Popen(
-            ("docker", "rm", "-f", container_name),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except BaseException as exc:
-        return [exc]
-
-    return_code: int | None = None
-    stdout = ""
-    stderr = ""
-    try:
-        try:
-            return_code = removed.wait(timeout=grace_seconds)
-        except subprocess.TimeoutExpired:
-            try:
-                removed.terminate()
-            except OSError as exc:
-                errors.append(exc)
-            try:
-                return_code = removed.wait(timeout=grace_seconds)
-            except subprocess.TimeoutExpired:
-                try:
-                    removed.kill()
-                except OSError as exc:
-                    errors.append(exc)
-                try:
-                    return_code = removed.wait(timeout=grace_seconds)
-                except subprocess.TimeoutExpired:
-                    errors.append(
-                        TimeoutError(
-                            "docker rm -f client did not exit after SIGKILL within "
-                            f"{grace_seconds:g}s"
-                        )
-                    )
-                except BaseException as exc:
-                    errors.append(exc)
-            except BaseException as exc:
-                errors.append(exc)
-        except BaseException as exc:
-            errors.append(exc)
-
-        # A still-running rm client can block indefinitely on a pipe read;
-        # only inspect captured output after bounded reaping supplied a code.
-        if return_code is not None:
-            for stream_name, stream in (
-                ("stdout", removed.stdout),
-                ("stderr", removed.stderr),
-            ):
-                if stream is None:
-                    continue
-                try:
-                    data = stream.read()
-                    text = (
-                        data.decode(errors="replace")
-                        if isinstance(data, bytes)
-                        else data
-                    )
-                    if stream_name == "stdout":
-                        stdout = text or ""
-                    else:
-                        stderr = text or ""
-                except BaseException as exc:
-                    errors.append(exc)
-    finally:
-        # Always close both descriptors after Popen succeeds, including an
-        # unreapable rm client; each close is independent.
-        for stream in (removed.stdout, removed.stderr):
-            if stream is None:
-                continue
-            try:
-                stream.close()
-            except BaseException as exc:
-                errors.append(exc)
-
-    if return_code is None:
-        return errors
-    if return_code != 0 and not _is_container_absent(f"{stderr}\n{stdout}"):
-        errors.append(
+    _, outcome = run_captured(
+        ("docker", "rm", "-f", container_name),
+        policy=LifecyclePolicy(
+            grace_seconds=grace_seconds,
+            process_label="docker rm -f client",
+        ),
+    )
+    if (
+        outcome.return_code is not None
+        and outcome.return_code != 0
+        and not _is_container_absent(f"{outcome.stderr}\n{outcome.stdout}")
+    ):
+        outcome.errors.append(
             OSError(
-                f"docker rm -f exited {return_code}: "
-                f"{(stderr or stdout).strip()}"
+                f"docker rm -f exited {outcome.return_code}: "
+                f"{(outcome.stderr or outcome.stdout).strip()}"
             )
         )
-    return errors
+    return outcome.errors
 
 
 def _terminate_and_remove(
@@ -339,26 +253,11 @@ def _terminate_and_remove(
         errors.extend(
             _bounded_docker_rm(container_name, grace_seconds=grace_seconds)
         )
-    try:
-        proc.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-        except OSError as exc:
-            errors.append(exc)
-        try:
-            proc.wait(timeout=grace_seconds)
-        except subprocess.TimeoutExpired:
-            errors.append(
-                TimeoutError(
-                    f"client did not exit after SIGKILL within "
-                    f"{grace_seconds:g}s"
-                )
-            )
-        except BaseException as exc:
-            errors.append(exc)
-    except BaseException as exc:
-        errors.append(exc)
+    errors.extend(
+        reap_process(
+            proc, policy=LifecyclePolicy(grace_seconds=grace_seconds)
+        ).errors
+    )
     return errors
 
 
