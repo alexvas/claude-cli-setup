@@ -28,6 +28,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR.parent))
 
 import docker.npm_environment.execution as execution_module
+from docker.npm_environment.lifecycle import DeadlineSupervisor
 from docker.npm_environment import (
     AssemblyTimeoutError,
     DockerRunExecutor,
@@ -551,6 +552,27 @@ class TestForcedCleanup(DeadlineTestCase):
         self.assertIn("docker rm -f client did not exit after SIGKILL", notes)
         _assert_no_workers(self)
 
+    def test_deadline_reaps_before_closing_blocked_pipes(self):
+        proc = _DeadlineProc(unblock_pipes_on_terminate=False)
+        close_after_termination: list[bool] = []
+        for pipe in (proc.stdout, proc.stderr):
+            original_close = pipe.close
+
+            def close(original_close=original_close) -> None:
+                close_after_termination.append(proc.terminated)
+                original_close()
+
+            pipe.close = close  # type: ignore[method-assign]
+
+        result = self._run_streaming(proc, deadline=0.05, grace=0.1)
+
+        self.assertIsInstance(result.get("error"), AssemblyTimeoutError)
+        self.assertTrue(proc.terminated)
+        self.assertTrue(proc.reaped)
+        self.assertTrue(close_after_termination)
+        self.assertTrue(all(close_after_termination))
+        _assert_no_workers(self)
+
     def test_timeout_closes_pipes_blocked_after_terminate(self):
         # terminate() reaps the client but leaves the pipes blocked; only the
         # forced pipe closure can unblock the readers.
@@ -817,6 +839,70 @@ class TestInterruption(DeadlineTestCase):
         self.assertTrue(proc.reaped)
         # Accepted chunks were delivered before interruption.
         self.assertTrue(delivered)
+        _assert_no_workers(self)
+
+    def test_interrupt_primary_preserves_poll_failure_as_secondary_note(self):
+        poll_error = OSError("SUPERSECRET poll failed")
+        reached_publication = threading.Event()
+        interruption_claimed = threading.Event()
+        release_publication = threading.Event()
+        proc = _DeadlineProc(wait_failure=poll_error)
+
+        class _GateLock:
+            def __init__(self) -> None:
+                self.lock = threading.Lock()
+
+            def __enter__(self):
+                if threading.current_thread().name == "npm-deadline-supervisor":
+                    reached_publication.set()
+                    release_publication.wait(5.0)
+                self.lock.acquire()
+                if threading.current_thread().name != "npm-deadline-supervisor":
+                    interruption_claimed.set()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback) -> None:
+                self.lock.release()
+
+        class _GatedSupervisor(DeadlineSupervisor):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self._lock = _GateLock()  # type: ignore[assignment]
+
+        def interrupt(on_interruption) -> None:
+            self.assertTrue(reached_publication.wait(5.0))
+
+            def release() -> None:
+                self.assertTrue(interruption_claimed.wait(5.0))
+                release_publication.set()
+
+            timer = threading.Thread(target=release, daemon=True)
+            timer.start()
+            on_interruption()
+            timer.join(5.0)
+            raise KeyboardInterrupt
+
+        with mock.patch.object(
+            execution_module.subprocess, "Popen", return_value=proc
+        ), mock.patch.object(
+            execution_module, "DeadlineSupervisor", _GatedSupervisor
+        ), mock.patch.object(
+            execution_module, "collect_streams",
+            side_effect=lambda **kwargs: interrupt(kwargs["on_interruption"]),
+        ):
+            with self.assertRaises(KeyboardInterrupt) as ctx:
+                DockerRunExecutor().run_streaming(
+                    ("docker", "run", "--rm", "alpine", "true"),
+                    secrets=("SUPERSECRET",),
+                    deadline_seconds=1.0,
+                    grace_seconds=0.1,
+                )
+
+        notes = "\n".join(getattr(ctx.exception, "__notes__", ()))
+        self.assertIn("supervisor wait failed (OSError): <redacted> poll failed", notes)
+        self.assertNotIn("SUPERSECRET", notes)
+        self.assertTrue(proc.terminated)
+        self.assertTrue(proc.reaped)
         _assert_no_workers(self)
 
     @unittest.skipUnless(

@@ -12,7 +12,12 @@ import time
 import unittest
 from unittest import mock
 
-from docker.npm_environment.lifecycle import LifecyclePolicy, reap_process, run_captured
+from docker.npm_environment.lifecycle import (
+    DeadlineSupervisor,
+    LifecyclePolicy,
+    reap_process,
+    run_captured,
+)
 
 
 class _Pipe(io.StringIO):
@@ -55,6 +60,128 @@ class _Process:
 
     def kill(self) -> None:
         self.killed = True
+
+
+class _PauseWorkerLock:
+    """Pause one supervisor thread before it acquires the outcome lock."""
+
+    def __init__(self, worker_name: str) -> None:
+        self._lock = threading.Lock()
+        self._worker_name = worker_name
+        self.reached = threading.Event()
+        self.release = threading.Event()
+
+    def __enter__(self):
+        if threading.current_thread().name == self._worker_name:
+            self.reached.set()
+            self.release.wait(1.0)
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._lock.release()
+
+
+class TestDeadlineSupervisor(unittest.TestCase):
+    def test_deadline_claims_cleanup_and_publishes_outcome(self) -> None:
+        cleanup_called = threading.Event()
+        cleanup_error = OSError("cleanup failed")
+
+        def cleanup():
+            cleanup_called.set()
+            return [cleanup_error], []
+
+        supervisor = DeadlineSupervisor(
+            deadline_seconds=0.01,
+            poll=lambda: False,
+            cleanup=cleanup,
+            poll_seconds=0.001,
+        )
+        supervisor.start()
+
+        self.assertTrue(supervisor.join(1.0))
+        outcome = supervisor.snapshot()
+        self.assertTrue(cleanup_called.is_set())
+        self.assertTrue(outcome.cleanup_started)
+        self.assertTrue(outcome.fired)
+        self.assertEqual(outcome.cleanup_errors, [cleanup_error])
+
+    def test_interruption_preserves_poll_failure_before_cleanup_publication(self) -> None:
+        poll_error = OSError("poll failed")
+        cleanup_called = threading.Event()
+        supervisor = DeadlineSupervisor(
+            deadline_seconds=10.0,
+            poll=lambda: (_ for _ in ()).throw(poll_error),
+            cleanup=lambda: (cleanup_called.set() or [], []),
+            poll_seconds=0.001,
+        )
+        gate = _PauseWorkerLock("deadline-supervisor")
+        supervisor._lock = gate  # type: ignore[assignment]
+        supervisor.start()
+
+        self.assertTrue(gate.reached.wait(1.0))
+        self.assertFalse(supervisor.claim_interruption())
+        gate.release.set()
+        self.assertTrue(supervisor.join(1.0))
+
+        outcome = supervisor.snapshot()
+        self.assertFalse(cleanup_called.is_set())
+        self.assertFalse(outcome.cleanup_started)
+        self.assertIs(outcome.wait_failure, poll_error)
+
+    def test_deadline_shorter_than_poll_interval_is_not_delayed(self) -> None:
+        cleanup_called = threading.Event()
+        deadline_seconds = 0.02
+        started = time.monotonic()
+        supervisor = DeadlineSupervisor(
+            deadline_seconds=deadline_seconds,
+            poll=lambda: False,
+            cleanup=lambda: (cleanup_called.set() or [], []),
+            poll_seconds=0.2,
+        )
+        supervisor.start()
+
+        self.assertTrue(supervisor.join(1.0))
+        elapsed = time.monotonic() - started
+        self.assertTrue(cleanup_called.is_set())
+        # The configured deadline, rather than the 200 ms poll interval,
+        # determines when cleanup begins.  Leave scheduling headroom while
+        # rejecting the former full-poll-interval delay.
+        self.assertLess(elapsed, 0.12)
+
+    def test_cancellation_atomically_takes_cleanup_ownership(self) -> None:
+        cleanup_called = threading.Event()
+        supervisor = DeadlineSupervisor(
+            deadline_seconds=10.0,
+            poll=lambda: False,
+            cleanup=lambda: (cleanup_called.set() or [], []),
+            poll_seconds=0.001,
+        )
+        supervisor.start()
+
+        self.assertFalse(supervisor.claim_interruption())
+        self.assertTrue(supervisor.join(1.0))
+        self.assertFalse(cleanup_called.is_set())
+        self.assertFalse(supervisor.snapshot().cleanup_started)
+
+    def test_cleanup_hook_failure_is_published_not_lost(self) -> None:
+        cleanup_error = RuntimeError("cleanup hook crashed")
+
+        def cleanup():
+            raise cleanup_error
+
+        supervisor = DeadlineSupervisor(
+            deadline_seconds=0.01,
+            poll=lambda: False,
+            cleanup=cleanup,
+            poll_seconds=0.001,
+        )
+        supervisor.start()
+
+        self.assertTrue(supervisor.join(1.0))
+        outcome = supervisor.snapshot()
+        self.assertTrue(outcome.fired)
+        self.assertEqual(outcome.cleanup_errors, [cleanup_error])
 
 
 class TestLifecyclePrimitives(unittest.TestCase):

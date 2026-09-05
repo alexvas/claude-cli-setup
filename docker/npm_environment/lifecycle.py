@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import IO, Sequence
+from typing import IO, Callable, Sequence
 
 _CAPTURE_READ_BYTES = 16 * 1024
 _CAPTURE_TAIL_BYTES = 64 * 1024
@@ -36,6 +36,119 @@ class LifecycleOutcome:
     errors: list[BaseException] = field(default_factory=list)
     stdout: str = ""
     stderr: str = ""
+
+
+@dataclass
+class DeadlineOutcome:
+    """Thread-safe publication state for one domain-neutral deadline."""
+
+    fired: bool = False
+    cleanup_started: bool = False
+    wait_failure: BaseException | None = None
+    cleanup_errors: list[BaseException] = field(default_factory=list)
+    close_errors: list[BaseException] = field(default_factory=list)
+
+
+class DeadlineSupervisor:
+    """Reusable monotonic polling supervisor with atomic cleanup ownership.
+
+    ``poll`` returns true once its child has exited.  ``cleanup`` is a domain
+    hook that returns cleanup and descriptor errors; the supervisor itself
+    has no Docker, streaming, redaction, or exception-mapping knowledge.
+    """
+
+    def __init__(
+        self,
+        *,
+        deadline_seconds: float,
+        poll: Callable[[], bool],
+        cleanup: Callable[[], tuple[list[BaseException], list[BaseException]]],
+        poll_seconds: float = 0.1,
+        thread_name: str = "deadline-supervisor",
+    ) -> None:
+        self._deadline_seconds = deadline_seconds
+        self._poll = poll
+        self._cleanup = cleanup
+        self._poll_seconds = poll_seconds
+        self._cancel = threading.Event()
+        self._lock = threading.Lock()
+        self._deadline_at: float | None = None
+        self.outcome = DeadlineOutcome()
+        self.thread = threading.Thread(
+            target=self._run, name=thread_name, daemon=True
+        )
+
+    def start(self) -> None:
+        # Capture the deadline before scheduling the worker so thread-start
+        # contention cannot extend the configured execution duration.
+        self._deadline_at = time.monotonic() + self._deadline_seconds
+        self.thread.start()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def claim_interruption(self) -> bool:
+        """Cancel polling unless deadline cleanup already owns the process."""
+        with self._lock:
+            if self.outcome.cleanup_started:
+                return True
+            self._cancel.set()
+            return False
+
+    def snapshot(self) -> DeadlineOutcome:
+        with self._lock:
+            return DeadlineOutcome(
+                fired=self.outcome.fired,
+                cleanup_started=self.outcome.cleanup_started,
+                wait_failure=self.outcome.wait_failure,
+                cleanup_errors=list(self.outcome.cleanup_errors),
+                close_errors=list(self.outcome.close_errors),
+            )
+
+    def join(self, timeout: float, *, cancel: bool = False) -> bool:
+        if cancel:
+            self.cancel()
+        self.thread.join(timeout=timeout)
+        return not self.thread.is_alive()
+
+    def _run(self) -> None:
+        # ``start`` sets this before the thread is scheduled.
+        assert self._deadline_at is not None
+        deadline_at = self._deadline_at
+        wait_failure: BaseException | None = None
+        while not self._cancel.is_set():
+            try:
+                if self._poll():
+                    return
+            except BaseException as exc:
+                wait_failure = exc
+                break
+            remaining = max(0.0, deadline_at - time.monotonic())
+            if remaining == 0.0:
+                break
+            # Polling must not delay deadline enforcement: cancellation waits
+            # are capped by the remaining monotonic deadline.
+            self._cancel.wait(timeout=min(self._poll_seconds, remaining))
+        else:
+            return
+        with self._lock:
+            # Preserve an unexpected poll failure even when interruption won
+            # cleanup ownership in the narrow interval before publication.
+            self.outcome.wait_failure = wait_failure
+            if self._cancel.is_set():
+                return
+            self.outcome.cleanup_started = True
+        try:
+            cleanup_errors, close_errors = self._cleanup()
+        except BaseException as exc:
+            # A domain cleanup hook must not crash the supervisor and silently
+            # lose its outcome; callers retain the hook failure as context.
+            cleanup_errors, close_errors = [exc], []
+        with self._lock:
+            if wait_failure is None:
+                self.outcome.fired = True
+            self.outcome.cleanup_errors.extend(cleanup_errors)
+            self.outcome.close_errors.extend(close_errors)
 
 
 def close_descriptors(

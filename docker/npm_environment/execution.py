@@ -22,7 +22,6 @@ import inspect
 import os
 import subprocess
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Protocol, Sequence
@@ -35,6 +34,7 @@ from .assembler import (
 from .errors import AssemblyTimeoutError, LockedNpmError
 from .identity import AssemblerIdentity, compute_assembler_input_identity
 from .lifecycle import (
+    DeadlineSupervisor,
     LifecyclePolicy,
     reap_process,
     run_captured,
@@ -418,92 +418,52 @@ def _supervisor_cleanup_budget(grace_seconds: float) -> float:
 
 
 def _join_supervisor(
-    supervisor: threading.Thread | None,
-    cancel_event: threading.Event,
+    supervisor: DeadlineSupervisor | None,
     *,
     grace_seconds: float,
 ) -> list[BaseException]:
-    """Stop and join the deadline supervisor within the complete cleanup budget.
-
-    Signalling *cancel_event* lets the supervisor's poll loop stop promptly
-    (it never blocks in one long ``proc.wait``), so the join is short when
-    the supervisor is still polling.  When the supervisor has already started
-    its deadline cleanup (``docker rm -f``, the graceful reap, the
-    post-SIGKILL reap, and pipe closure), a single grace interval is
-    insufficient: the join allows the complete cleanup budget so the caller
-    never returns or raises while ``npm-deadline-supervisor`` is still alive.
-    A supervisor that still has not stopped within that budget is recorded
-    as a bounded cleanup failure instead of blocking the caller.
-    """
+    """Cancel and join the reusable supervisor within its cleanup budget."""
     if supervisor is None:
         return []
-    cancel_event.set()
     budget = _supervisor_cleanup_budget(grace_seconds)
-    supervisor.join(timeout=budget)
-    if supervisor.is_alive():
-        return [
-            TimeoutError(
-                f"deadline supervisor did not stop within {budget:g}s"
-            )
-        ]
+    if not supervisor.join(budget, cancel=True):
+        return [TimeoutError(f"deadline supervisor did not stop within {budget:g}s")]
     return []
 
 
 def _wait_for_cleanup_owner(
-    supervisor: threading.Thread | None,
+    supervisor: DeadlineSupervisor | None,
     *,
     grace_seconds: float,
 ) -> list[BaseException]:
-    """Wait for an already-started supervisor cleanup without cancelling it.
-
-    The deadline supervisor has already claimed cleanup ownership, so it is
-    running its bounded terminate/remove/reap/pipe-close sequence.  Wait the
-    complete cleanup budget for it to finish so a second cleanup is never
-    started and the readers are unblocked by the time this returns.  A
-    supervisor still alive after the budget is reported as a bounded failure.
-    """
+    """Wait for supervisor-owned cleanup without taking ownership from it."""
     if supervisor is None:
         return []
     budget = _supervisor_cleanup_budget(grace_seconds)
-    supervisor.join(timeout=budget)
-    if supervisor.is_alive():
+    if not supervisor.join(budget):
         return [
             TimeoutError(
-                "deadline supervisor cleanup did not finish within "
-                f"{budget:g}s"
+                f"deadline supervisor cleanup did not finish within {budget:g}s"
             )
         ]
     return []
 
 
 def _wait_for_supervisor(
-    supervisor: threading.Thread | None,
+    supervisor: DeadlineSupervisor | None,
     *,
     deadline_seconds: float,
     grace_seconds: float,
 ) -> list[BaseException]:
-    """Join the deadline supervisor on the normal path without cancelling it.
-
-    On normal completion the supervisor must keep enforcing the deadline
-    after both pipes reach EOF — a process that closes its output pipes has
-    not necessarily exited.  Unlike :func:`_join_supervisor` this does not
-    signal the cancellation event, so the supervisor observes either a normal
-    process exit or the deadline expiry (running its bounded
-    termination/reaping/container removal and pipe closure) and records the
-    outcome in shared state.  The join is bounded by the assembly deadline
-    plus cleanup grace, so a supervisor that somehow never finishes is
-    reported as a bounded failure instead of blocking the caller
-    indefinitely.
-    """
+    """Wait for normal exit or deadline cleanup without cancelling supervision."""
+    cleanup_budget = _supervisor_cleanup_budget(grace_seconds)
     if supervisor is None:
         return []
-    supervisor.join(timeout=deadline_seconds + 4.0 * grace_seconds)
-    if supervisor.is_alive():
+    if not supervisor.join(deadline_seconds + cleanup_budget):
         return [
             TimeoutError(
                 "deadline supervisor did not finish within "
-                f"{deadline_seconds:g}s deadline + {4.0 * grace_seconds:g}s "
-                "cleanup grace"
+                f"{deadline_seconds:g}s deadline + {cleanup_budget:g}s cleanup grace"
             )
         ]
     return []
@@ -616,27 +576,21 @@ class DockerRunExecutor:
                     )
                 raise primary
 
+        supervisor: DeadlineSupervisor | None = None
+
         def react_to_interruption() -> None:
-            # Claim interruption cleanup atomically with the supervisor's
-            # deadline-cleanup claim.  Once the supervisor owns cleanup, do
-            # not run a second terminate/remove sequence concurrently: wait
-            # for its complete bounded cleanup instead.  Otherwise cancel the
-            # supervisor before taking interruption cleanup ownership here.
-            with timeout_lock:
-                supervisor_owns_cleanup = bool(
-                    timeout_state["cleanup_started"]
-                )
-                if not supervisor_owns_cleanup:
-                    cancel_event.set()
+            # The reusable supervisor atomically decides whether deadline
+            # cleanup already owns the process.  The domain layer still owns
+            # Docker removal, pipe closure, and exception-note formatting.
+            supervisor_owns_cleanup = (
+                supervisor.claim_interruption() if supervisor is not None else False
+            )
             if supervisor_owns_cleanup:
                 shutdown_failures = _wait_for_cleanup_owner(
                     supervisor, grace_seconds=grace_seconds
                 )
                 if not shutdown_failures:
                     return
-                # The supervisor exceeded its own bounded cleanup budget.
-                # Fall back to interruption cleanup so the readers cannot be
-                # stranded; retain the shutdown failure as primary context.
                 errors = bounded_streaming_cleanup()
                 errors.extend(_close_stream_pipes((stdout_pipe, stderr_pipe)))
                 primary = shutdown_failures[0]
@@ -657,75 +611,31 @@ class DockerRunExecutor:
                     )
                 raise primary
 
-        timeout_state: dict = {
-            "fired": False,
-            "cleanup_started": False,
-            "wait_failure": None,
-            "errors": [],
-            "close_errors": [],
-        }
-        timeout_lock = threading.Lock()
-        cancel_event = threading.Event()
-        supervisor: threading.Thread | None = None
-
         if deadline_seconds is not None:
-            def supervise() -> None:
-                # The deadline bounds only the assembler execution (client
-                # lifetime); reader drain and sink finalization are separate
-                # bounded cleanup steps that neither extend nor restart it.
-                # Poll the client in short slices — a non-blocking reap plus
-                # a bounded sleep — while checking the cancellation event, so
-                # interruption cleanup can stop the supervisor promptly
-                # instead of leaving it blocked in one long
-                # ``proc.wait(timeout=deadline_seconds)`` call.
-                deadline_expired = False
-                wait_failure: BaseException | None = None
-                deadline_at = time.monotonic() + deadline_seconds
-                while True:
-                    if cancel_event.is_set():
-                        return  # interruption cleanup owns termination/reaping
-                    try:
-                        proc.wait(timeout=0)
-                    except subprocess.TimeoutExpired:
-                        pass  # still running before the deadline
-                    except BaseException as exc:
-                        # An unexpected poll failure must never crash the
-                        # supervisor thread (which would strand the readers);
-                        # record it and still run bounded deadline cleanup so
-                        # the client is terminated/reaped and readers unblocked.
-                        wait_failure = exc
-                        break
-                    else:
-                        return  # client exited before the deadline
-                    if time.monotonic() >= deadline_at:
-                        deadline_expired = True
-                        break
-                    # Sleep until cancellation or the next poll slice.
-                    if cancel_event.wait(timeout=_SUPERVISOR_POLL_SECONDS):
-                        return  # canceled during the sleep
-                # Atomically claim cleanup ownership.  If interruption
-                # cleanup already canceled the supervisor, it owns the
-                # terminate/remove sequence; otherwise mark the supervisor as
-                # owner before starting any cleanup work.
-                with timeout_lock:
-                    if wait_failure is not None:
-                        timeout_state["wait_failure"] = wait_failure
-                    if cancel_event.is_set():
-                        return
-                    timeout_state["cleanup_started"] = True
-                # Whether the deadline expired or the poll failed, run the
-                # bounded termination/reaping and named-container removal,
-                # then close both pipes so blocked readers always reach EOF.
-                errors = bounded_streaming_cleanup()
-                close_errors = _close_stream_pipes((stdout_pipe, stderr_pipe))
-                with timeout_lock:
-                    if deadline_expired:
-                        timeout_state["fired"] = True
-                    timeout_state["errors"].extend(errors)
-                    timeout_state["close_errors"].extend(close_errors)
+            def poll_process() -> bool:
+                try:
+                    proc.wait(timeout=0)
+                except subprocess.TimeoutExpired:
+                    return False
+                return True
 
-            supervisor = threading.Thread(
-                target=supervise, name="npm-deadline-supervisor", daemon=True
+            def deadline_cleanup() -> tuple[
+                list[BaseException], list[BaseException]
+            ]:
+                # Terminate/remove/reap first.  Closing pipes before that can
+                # release readers while the Docker client is still running.
+                cleanup_errors = bounded_streaming_cleanup()
+                close_errors: list[BaseException] = list(
+                    _close_stream_pipes((stdout_pipe, stderr_pipe))
+                )
+                return cleanup_errors, close_errors
+
+            supervisor = DeadlineSupervisor(
+                deadline_seconds=deadline_seconds,
+                poll=poll_process,
+                cleanup=deadline_cleanup,
+                poll_seconds=_SUPERVISOR_POLL_SECONDS,
+                thread_name="npm-deadline-supervisor",
             )
             supervisor.start()
 
@@ -740,13 +650,19 @@ class DockerRunExecutor:
             )
         except BaseException as exc:
             supervisor_failures = _join_supervisor(
-                supervisor, cancel_event, grace_seconds=grace_seconds
+                supervisor, grace_seconds=grace_seconds
             )
-            with timeout_lock:
-                fired = bool(timeout_state["fired"])
-                wait_failure = timeout_state["wait_failure"]
-                timeout_errors = list(timeout_state["errors"])
-                timeout_close_errors = list(timeout_state["close_errors"])
+            deadline_outcome = supervisor.snapshot() if supervisor is not None else None
+            fired = bool(deadline_outcome and deadline_outcome.fired)
+            wait_failure = (
+                deadline_outcome.wait_failure if deadline_outcome is not None else None
+            )
+            timeout_errors = (
+                deadline_outcome.cleanup_errors if deadline_outcome is not None else []
+            )
+            timeout_close_errors = (
+                deadline_outcome.close_errors if deadline_outcome is not None else []
+            )
             close_errors = timeout_close_errors + _close_stream_pipes(
                 (stdout_pipe, stderr_pipe)
             )
@@ -797,11 +713,17 @@ class DockerRunExecutor:
                 deadline_seconds=deadline_seconds,
                 grace_seconds=grace_seconds,
             )
-        with timeout_lock:
-            fired = bool(timeout_state["fired"])
-            wait_failure = timeout_state["wait_failure"]
-            timeout_errors = list(timeout_state["errors"])
-            timeout_close_errors = list(timeout_state["close_errors"])
+        deadline_outcome = supervisor.snapshot() if supervisor is not None else None
+        fired = bool(deadline_outcome and deadline_outcome.fired)
+        wait_failure = (
+            deadline_outcome.wait_failure if deadline_outcome is not None else None
+        )
+        timeout_errors = (
+            deadline_outcome.cleanup_errors if deadline_outcome is not None else []
+        )
+        timeout_close_errors = (
+            deadline_outcome.close_errors if deadline_outcome is not None else []
+        )
 
         # Normal path: capture (do not raise) close failures so the
         # subprocess outcome is always known before any deferred cleanup

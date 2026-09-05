@@ -206,7 +206,9 @@ model/inventory modules declare no npm timeout/retry/duration field.
   the deadline until it observes either a normal exit or the deadline expiry.
   The normal path then reuses the supervisor's bounded outcome (a reaped
   client on normal exit, or the deadline termination/reaping and a timeout)
-  instead of an unbounded ``proc.wait()``.
+  instead of an unbounded ``proc.wait()``. Deadline cleanup terminates,
+  force-removes, and reaps the Docker client before closing pipes to release
+  any remaining readers.
 - `assemble()` routes the deadline and container name to the real streaming
   executor via signature introspection; injected Phase 2 executors without
   those parameters remain usable (no deadline).  `AssemblyTimeoutError` is
@@ -258,8 +260,10 @@ model/inventory modules declare no npm timeout/retry/duration field.
   before process-exit still enforcing the deadline (no premature
   cancellation of the supervisor), interruption racing a supervisor blocked
   in deadline cleanup (one cleanup owner, deadline-primary result, and no
-  surviving workers), timeout skipping a later duplicate container removal
-  that would block (timeout remains primary with no workers), no network
+  surviving workers), deadline pipe closure only after client termination and
+  reaping (blocked readers released afterward), timeout skipping a later
+  duplicate container removal that would block (timeout remains primary with
+  no workers), no network
   classification on npm nonzero exits,
   bounded redacted diagnostics, cache/output preservation, and abandoned-
   staging replacement/unlinking) — all OK.
@@ -269,3 +273,35 @@ model/inventory modules declare no npm timeout/retry/duration field.
 - `ty check`: all checks passed.
 - No ResourceWarning under `-W error::ResourceWarning`; no surviving reader,
   dispatcher, or deadline-supervisor threads after cleanup.
+
+## Phase 4 — Reusable Process Lifecycle and Deadline Supervision
+
+### Reuse and behavior preservation
+
+`docker/npm_environment/lifecycle.py` now owns the domain-neutral lifecycle
+policy/outcome values, bounded terminate/kill/reap primitives, bounded captured
+subprocess runner, and `DeadlineSupervisor`. `DockerRunExecutor` supplies only
+domain hooks for named-container removal and pipe closure; it retains Docker
+naming, streaming redaction/dispatch, staging cleanup, and assembler exception
+mapping outside the reusable supervisor.
+
+The supervisor publishes cleanup ownership, timeout/poll-failure outcome, and
+bounded join state under one lock. Its deadline is captured before the worker
+thread is scheduled, and each cancellation wait is capped by the remaining
+monotonic deadline, so a deadline shorter than the polling interval is not
+delayed by a full polling slice.
+
+### Validation evidence
+
+- `tests/test_npm_environment_phase4_lifecycle.py` covers lifecycle reuse,
+  captured dual-stream draining, bounded descendants holding pipes, descriptor
+  safety, cleanup ownership, supervisor cleanup/poll failures, a poll-failure
+  race where interruption retains primary status and the failure is secondary
+  context, and a deadline shorter than the polling interval.
+- Focused Phase 2–4 streaming, deadline, interruption, rootless, and lifecycle
+  tests: all OK.
+- Full discovery: `python -m unittest discover -s tests -p 'test_*.py'` —
+  passed, with expected skips.
+- `ty check docker --python-version 3.14 --output-format concise` — passed.
+- `openspec validate bound-pi-assembly-execution --type change --strict --json`
+  — passed.
