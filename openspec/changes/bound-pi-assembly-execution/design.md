@@ -10,6 +10,7 @@ See `proposal.md` for motivation. Pi is now assembled before BuildKit by a stand
 - Bound npm request/retry behavior and total assembler runtime.
 - Stream redacted diagnostics while retaining bounded tails for failures.
 - Guarantee container and staging cleanup across timeout and interruption.
+- Factor process lifecycle management into small reusable primitives and one reusable deadline supervisor without moving Docker-, streaming-, or storage-specific policy into the generic layer.
 - Preserve JSON-output isolation, opaque cache reuse, and existing immutable publication rules.
 
 **Non-Goals:**
@@ -52,6 +53,16 @@ Host-materialization progress is finalized only after reader EOF handling, dispa
 
 Direct inheritance of the terminal was rejected because it cannot enforce redaction or retain bounded failure context. Keeping `capture_output=True` was rejected because it hides liveness and allows memory growth proportional to process output. Newline-delimited buffering was rejected because one arbitrarily long unterminated record would delay progress and violate the memory bound. Direct calls from both pipe readers were rejected because concurrent writes can corrupt a non-thread-safe sink, while blocking readers on sink backpressure can deadlock the subprocess.
 
+### Factor process lifecycle into small reusable primitives
+
+Represent process lifecycle policy and outcome explicitly, then centralize the mechanics shared by the primary `docker run` client and short-lived cleanup clients. A bounded termination/reaping primitive accepts an already-started process and owns the terminate, bounded wait, SIGKILL fallback, final bounded reap, and descriptor-closure sequence. A bounded captured-process runner starts a simple auxiliary command and builds on that primitive rather than reproducing a second wait/terminate/kill implementation. Both return structured lifecycle outcomes so callers can preserve the primary failure and attach cleanup failures without parsing exception text.
+
+Use one reusable deadline supervisor for monotonic deadline polling, cancellation, atomic cleanup ownership, bounded supervisor joining, and publication of a structured lifecycle outcome. The supervisor accepts explicit cleanup hooks and coordinates when they run, but it does not know about Docker container names, npm diagnostics, redaction, stream decoding, sink dispatch, staging paths, or assembler exception classes. The assembler execution layer remains the domain orchestrator: it supplies independent named-container removal and pipe-unblocking hooks, finalizes streaming diagnostics, removes staging at the outer boundary, and maps lifecycle outcomes to `AssemblyTimeoutError` or the original control-flow/operational exception.
+
+Keep cleanup-error presentation separate from lifecycle execution. Helpers that redact and attach bounded cleanup notes consume lifecycle outcomes but are not part of process supervision. This separation lets the same lifecycle primitives serve both streamed and captured subprocesses while keeping security-sensitive redaction and primary-exception precedence explicit at the assembler boundary.
+
+A single universal subprocess function parameterized by many Docker-, streaming-, and exception-specific callbacks was rejected because it would obscure cleanup ownership and ordering. Separate ad hoc supervisors for `docker run` and every auxiliary command were also rejected because they duplicate deadline, cancellation, kill, reap, and descriptor rules. Small typed primitives plus one domain-neutral supervisor provide reuse without weakening the explicit assembler cleanup boundary.
+
 ### Separate durable progress events from raw assembler diagnostics
 
 Build orchestration emits coarse lifecycle events before release acquisition, assembly, validation, and the main Docker build. These events provide liveness even when npm emits nothing. Raw npm output remains diagnostic and is streamed only in text mode. The facade owns formatting and output-mode routing so domain modules do not print directly.
@@ -78,6 +89,7 @@ Automatic cache deletion was rejected because the observed stall does not establ
 - [npm may exceed conservative limits on unusually slow networks] → Choose documented generous built-in values and return a diagnostic that identifies the elapsed phase and policy limit.
 - [Force-removal races with natural container exit] → Treat already-absent containers as successful cleanup and preserve the original result.
 - [Concurrent pipe draining and timeout handling can leak threads or descriptors] → Centralize process lifecycle ownership and test success, nonzero exit, timeout, cancellation, and sink failure.
+- [An over-general callback-driven supervisor can hide cleanup ownership or reorder domain cleanup] → Keep typed lifecycle primitives small, expose structured outcomes, and retain named-container, pipe, sink, redaction, staging, and exception mapping in the explicit assembler orchestration layer.
 - [Policy identity changes cause a cold assembly] → Preserve the shared opaque npm download cache so package bytes remain reusable.
 
 ## Migration Plan
