@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
@@ -43,8 +44,12 @@ from docker.networking import (
     apply_rootless_override,
 )
 from docker.versioning.dispatch_types import ExitKind
-from docker.versioning.build_cache import BuildCacheError
-from docker.versioning.cache_storage import prepare_resolved_root, resolve_effective_root
+from docker.versioning.build_cache import (
+    BuildCacheError, CheckoutBuildLock, acquire_checkout_build_lock,
+    commit_build_set, maintain_uncommitted_blobs,
+    recover_abandoned_snapshots,
+)
+from docker.versioning.cache_storage import prepare_project_root, resolve_effective_root
 from docker.versioning.build_materialization import (
     HostNetworkPolicy,
     MaterializationError,
@@ -714,18 +719,31 @@ def execute_build(
         )
     # Resolve constructor identity once; all implicit build state shares it.
     snapshot: MaterializedSnapshot | None = None
+    lock: CheckoutBuildLock | None = None
     try:
         from docker.versioning.project_state import resolve_project_state
         if plan.cache_root is None:
             raise SnapshotError("missing resolved constructor cache root")
         project_state = resolve_project_state(
-            repo_root, cache_root=prepare_resolved_root(plan.cache_root),
+            repo_root, cache_root=prepare_project_root(plan.cache_root),
         )
+        lock = acquire_checkout_build_lock(
+            repo_root, cache_root=project_state.cache_root,
+        )
+        recover_abandoned_snapshots(
+            repo_root, lock=lock, cache_root=project_state.cache_root,
+            project_state=project_state,
+        )
+        maintain_uncommitted_blobs(
+            repo_root, lock=lock, cache_root=project_state.cache_root,
+            project_state=project_state,
+        )
+        selected_artifacts = tuple(select_build_artifacts(projection))
         transport_factory = request._transport_factory or UrllibStreamingTransport
         transport = transport_factory(plan.host_network_policy)
         materialized = materialize(
             projection, checkout_root=repo_root, cache_root=project_state.cache_root,
-            project_state=project_state, transport=transport,
+            project_state=project_state, transport=transport, lock=lock,
         )
         if not isinstance(materialized, (tuple, list)) or not all(
             isinstance(path, Path) for path in materialized
@@ -759,7 +777,7 @@ def execute_build(
             canonical_tree_digest=attestation.canonical_tree_digest,
         )
         snapshot = create_artifact_snapshot(
-            select_build_artifacts(projection), blobs, checkout_root=repo_root,
+            selected_artifacts, blobs, checkout_root=repo_root,
             cache_root=project_state.cache_root, project_state=project_state,
             derived=derived,
         )
@@ -769,13 +787,33 @@ def execute_build(
         build_args = render_build_vector(render_inputs)
         display_string = render_command_display(build_args)
     except (MaterializationError, BuildCacheError, SnapshotError, OSError, ValueError) as exc:
-        cleanup_artifact_snapshot(snapshot)
+        try:
+            cleanup_artifact_snapshot(snapshot)
+        except (SnapshotError, OSError) as cleanup_exc:
+            exc = SnapshotError(f"{exc}; snapshot cleanup failed: {cleanup_exc}")
+        if lock is not None:
+            lock.release()
         return BuildResult(exit_kind=ExitKind.OPERATIONAL,
                            message=f"build artifact materialization failed: {exc}",
                            build_args=build_args, display_string=display_string)
+    except BaseException:
+        try:
+            cleanup_artifact_snapshot(snapshot)
+        except BaseException:
+            # Never replace interruption/unexpected primary failure with cleanup.
+            pass
+        if lock is not None:
+            lock.release()
+        raise
 
-    # 4–5. Everything after snapshot creation shares one cleanup boundary.
-    # ``finally`` also runs for interruption and unexpected exceptions.
+    # 4–5. Snapshot cleanup is the final transaction precondition. A live-set
+    # commit is allowed only after Docker succeeds and cleanup succeeds.
+    def finish_snapshot() -> None:
+        nonlocal snapshot
+        current = snapshot
+        snapshot = None
+        cleanup_artifact_snapshot(current)
+
     try:
         publish = request._publish_projection
         try:
@@ -787,6 +825,14 @@ def execute_build(
                     project_state=project_state,
                 )
         except Exception as exc:
+            try:
+                finish_snapshot()
+            except (SnapshotError, OSError) as cleanup_exc:
+                return BuildResult(
+                    exit_kind=ExitKind.OPERATIONAL,
+                    message=f"failed to clean transaction snapshot: {cleanup_exc}",
+                    build_args=build_args, display_string=display_string,
+                )
             return BuildResult(
                 exit_kind=ExitKind.OPERATIONAL,
                 message=f"failed to publish effective projection: {getattr(exc, 'detail', str(exc))}",
@@ -795,30 +841,82 @@ def execute_build(
 
         runner = request.runner or SubprocessBuildExecutor(request.output_policy)
         emit(request.event_sink, HostPhaseEvent(HostPhase.DOCKER_TRANSITION, HostPhaseState.STARTED))
-        # The host transition is complete before Docker is allowed to present
-        # native BuildKit output. Docker execution itself is not a host phase.
         emit(request.event_sink, HostPhaseEvent(HostPhase.DOCKER_TRANSITION, HostPhaseState.SUCCEEDED))
         try:
             proc = runner.run(build_args)
         except FileNotFoundError as exc:
+            try:
+                finish_snapshot()
+            except (SnapshotError, OSError) as cleanup_exc:
+                return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                    message=f"failed to clean transaction snapshot: {cleanup_exc}",
+                    build_args=build_args, display_string=display_string,
+                    publish_result=publish_result)
             return BuildResult(exit_kind=ExitKind.OPERATIONAL,
                 message=f"docker executable not found: {exc}", build_args=build_args,
                 display_string=display_string, publish_result=publish_result)
         except OSError as exc:
+            try:
+                finish_snapshot()
+            except (SnapshotError, OSError) as cleanup_exc:
+                return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                    message=f"failed to clean transaction snapshot: {cleanup_exc}",
+                    build_args=build_args, display_string=display_string,
+                    publish_result=publish_result)
             return BuildResult(exit_kind=ExitKind.OPERATIONAL,
                 message=f"docker execution failed: {exc}", build_args=build_args,
                 display_string=display_string, publish_result=publish_result)
 
-        exit_kind = ExitKind.SUCCESS if proc.return_code == 0 else ExitKind.OPERATIONAL
-        message: str | None = "image build completed" if proc.return_code == 0 else None
         if proc.return_code != 0:
+            try:
+                finish_snapshot()
+            except (SnapshotError, OSError) as cleanup_exc:
+                return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                    message=f"failed to clean transaction snapshot: {cleanup_exc}",
+                    build_args=build_args, display_string=display_string,
+                    process_result=proc, publish_result=publish_result)
             message = (f"build exited with code {proc.return_code}"
                 if getattr(proc, "output_policy", BuildOutputPolicy.CAPTURED) is BuildOutputPolicy.STREAMED
                 else (proc.stderr or f"build exited with code {proc.return_code}"))
-        return BuildResult(exit_kind=exit_kind, message=message, build_args=build_args,
-            display_string=display_string, process_result=proc, publish_result=publish_result)
+            return BuildResult(exit_kind=ExitKind.OPERATIONAL, message=message,
+                build_args=build_args, display_string=display_string,
+                process_result=proc, publish_result=publish_result)
+
+        try:
+            finish_snapshot()
+        except (SnapshotError, OSError) as exc:
+            return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                message=f"failed to clean transaction snapshot: {exc}",
+                build_args=build_args, display_string=display_string,
+                process_result=proc, publish_result=publish_result)
+
+        try:
+            assert lock is not None
+            commit_build_set(
+                repo_root, {selected.identity for selected in selected_artifacts},
+                lock=lock, cache_root=project_state.cache_root,
+                project_state=project_state,
+            )
+        except BuildCacheError as exc:
+            return BuildResult(exit_kind=ExitKind.OPERATIONAL,
+                message=f"failed to commit successful build artifacts: {exc}",
+                build_args=build_args, display_string=display_string,
+                process_result=proc, publish_result=publish_result)
+        return BuildResult(exit_kind=ExitKind.SUCCESS, message="image build completed",
+            build_args=build_args, display_string=display_string,
+            process_result=proc, publish_result=publish_result)
     finally:
-        cleanup_artifact_snapshot(snapshot)
+        primary_exception = sys.exc_info()[0] is not None
+        try:
+            if snapshot is not None:
+                cleanup_artifact_snapshot(snapshot)
+        except BaseException:
+            if not primary_exception:
+                raise
+            # A cleanup problem is secondary to an interrupt/primary failure.
+        finally:
+            if lock is not None:
+                lock.release()
 
 
 # ═══════════════════════════════════════════════════════════════════════

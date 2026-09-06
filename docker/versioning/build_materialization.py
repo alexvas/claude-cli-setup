@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 from docker.versioning.build_cache import (
-    BLOB_EXTENSION, BuildCacheError, build_blob_path, prepare_build_cache,
+    BLOB_EXTENSION, BuildCacheError, CheckoutBuildLock, build_blob_path,
+    mark_uncommitted_blob, prepare_build_cache,
 )
 from docker.versioning.digest_identity import DigestIdentity
 from docker.versioning.project_state import ProjectState
@@ -109,7 +110,7 @@ def _verify_hit(path: Path, identity: DigestIdentity) -> bool:
 def materialize_artifact(
     selected: SelectedBuildArtifact, *, checkout_root: str | Path,
     transport: StreamingTransport, cache_root: str | Path | None = None,
-    project_state: ProjectState | None = None,
+    project_state: ProjectState | None = None, lock: CheckoutBuildLock | None = None,
 ) -> Path:
     """Reuse a verified hit or stream, verify, and atomically publish a miss."""
     paths = prepare_build_cache(checkout_root, cache_root=cache_root, project_state=project_state)
@@ -142,6 +143,16 @@ def materialize_artifact(
             try: destination.unlink()
             except OSError: pass
             raise MaterializationError(f"published artifact {selected.name!r} failed verification")
+        if lock is not None:
+            try:
+                mark_uncommitted_blob(
+                    selected.identity, checkout_root, lock=lock,
+                    cache_root=cache_root, project_state=project_state,
+                )
+            except BaseException:
+                try: destination.unlink()
+                except OSError: pass
+                raise
         return destination
     except MaterializationError:
         raise
@@ -157,12 +168,12 @@ def materialize_artifact(
 def materialize_build_artifacts(
     projection: EffectiveBuildProjection, *, checkout_root: str | Path,
     transport: StreamingTransport, cache_root: str | Path | None = None,
-    project_state: ProjectState | None = None,
+    project_state: ProjectState | None = None, lock: CheckoutBuildLock | None = None,
 ) -> tuple[Path, ...]:
     results: list[Path] = []
     for selected in select_build_artifacts(projection):
         results.append(materialize_artifact(
             selected, checkout_root=checkout_root, transport=transport,
-            cache_root=cache_root, project_state=project_state,
+            cache_root=cache_root, project_state=project_state, lock=lock,
         ))
     return tuple(results)

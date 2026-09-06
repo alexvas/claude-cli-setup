@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import shutil
 import tempfile
 import uuid
 from pathlib import Path
+
+from docker.versioning.build_cache import publish_verified_blob
+from docker.versioning.build_materialization import SelectedBuildArtifact
+from docker.versioning.digest_identity import DigestIdentity
 
 from tests.pi_fixtures import (
     fake_pi_materialization,
@@ -13,7 +18,10 @@ from tests.pi_fixtures import (
 )
 
 __all__ = [
+    "DIGEST_VALID_ARTIFACT_BYTES",
     "INVENTORY_PATH",
+    "digest_valid_selected_artifacts",
+    "publish_digest_valid_artifacts",
     "fake_pi_materialization",
     "fixture_directory",
     "no_network_transport_factory",
@@ -31,6 +39,39 @@ def fixture_directory(prefix: str) -> Path:
     path = Path(_FIXTURE_DIRECTORY.name) / f"{prefix}{uuid.uuid4().hex}"
     path.mkdir()
     return path
+
+
+DIGEST_VALID_ARTIFACT_BYTES = {
+    "rustup": b"test-rustup-artifact", "uv": b"test-uv-artifact",
+    "rtk": b"test-rtk-artifact", "fd": b"test-fd-artifact",
+}
+
+
+def digest_valid_selected_artifacts(_projection=None):
+    """Return test-only artifact identities derived from local fixture bytes."""
+    return tuple(
+        SelectedBuildArtifact(
+            name=name, url=f"https://test.invalid/{name}",
+            identity=DigestIdentity.from_hex(
+                "sha256", hashlib.sha256(data).hexdigest(),
+            ),
+        )
+        for name, data in DIGEST_VALID_ARTIFACT_BYTES.items()
+    )
+
+
+def publish_digest_valid_artifacts(
+    projection=None, *, checkout_root, cache_root=None, project_state=None, **_kwargs,
+):
+    """Publish real digest-verified blobs for orchestration fixture builds."""
+    return tuple(
+        publish_verified_blob(
+            selected.identity, DIGEST_VALID_ARTIFACT_BYTES[selected.name],
+            checkout_root=checkout_root, cache_root=cache_root,
+            project_state=project_state,
+        )
+        for selected in digest_valid_selected_artifacts(projection)
+    )
 
 
 INVENTORY_PATH = Path(_TEMPORARY_DIRECTORY.name) / "docker-constructor.toml"

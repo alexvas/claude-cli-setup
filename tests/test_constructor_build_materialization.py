@@ -8,7 +8,10 @@ from unittest.mock import patch
 from dataclasses import replace
 from pathlib import Path
 
-from tests.build_test_support import fake_pi_materialization, fixture_directory
+from tests.build_test_support import (
+    digest_valid_selected_artifacts, fake_pi_materialization, fixture_directory,
+    publish_digest_valid_artifacts,
+)
 
 from docker.versioning.build_snapshot import MaterializedSnapshot
 from docker.versioning.build_materialization import (
@@ -129,6 +132,43 @@ class TestStreamingMaterializer(unittest.TestCase):
             self.assertTrue(path.is_relative_to(state.build_artifacts_root))
             self.assertFalse(path.is_relative_to(checkout))
 
+    def test_new_publication_marks_once_and_cache_hit_keeps_timestamp(self):
+        with tempfile.TemporaryDirectory() as td:
+            checkout = Path(td) / "proj"; checkout.mkdir()
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
+            selected = self.selected()
+            transport = RecordingTransport(chunks=(b"payload",))
+            from docker.versioning.build_cache import acquire_checkout_build_lock, prepare_build_cache
+            with acquire_checkout_build_lock(checkout, cache_root=cache) as lock, patch(
+                "docker.versioning.build_cache.time.time", return_value=123,
+            ):
+                materialize_artifact(selected, checkout_root=checkout, cache_root=cache,
+                                     transport=transport, lock=lock)
+            paths = prepare_build_cache(checkout, cache_root=cache)
+            marker = paths.markers_root / f"sha256:{selected.identity.hex_digest()}.json"
+            self.assertEqual({"verified_at": 123}, __import__("json").loads(marker.read_text()))
+            with acquire_checkout_build_lock(checkout, cache_root=cache) as lock, patch(
+                "docker.versioning.build_cache.time.time", return_value=456,
+            ):
+                materialize_artifact(selected, checkout_root=checkout, cache_root=cache,
+                                     transport=RecordingTransport(error=AssertionError()), lock=lock)
+            self.assertEqual({"verified_at": 123}, __import__("json").loads(marker.read_text()))
+
+    def test_failed_or_mismatched_download_creates_neither_blob_nor_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            checkout = Path(td) / "proj"; checkout.mkdir()
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
+            selected = self.selected()
+            from docker.versioning.build_cache import acquire_checkout_build_lock, build_blob_path, prepare_build_cache
+            for transport in (RecordingTransport(error=InterruptedError()), RecordingTransport(chunks=(b"wrong",))):
+                with acquire_checkout_build_lock(checkout, cache_root=cache) as lock:
+                    with self.assertRaises(MaterializationError):
+                        materialize_artifact(selected, checkout_root=checkout, cache_root=cache,
+                                             transport=transport, lock=lock)
+                paths = prepare_build_cache(checkout, cache_root=cache)
+                self.assertFalse(build_blob_path(paths.blobs_root, selected.identity).exists())
+                self.assertFalse((paths.markers_root / f"sha256:{selected.identity.hex_digest()}.json").exists())
+
     def test_external_namespace_verified_hit_reuses_blob_without_download(self):
         with tempfile.TemporaryDirectory() as td:
             checkout = Path(td) / "proj"; checkout.mkdir()
@@ -167,24 +207,36 @@ def tearDownModule():
 class TestMaterializationOrchestration(unittest.TestCase):
     def test_injected_docker_runner_does_not_skip_materialization(self):
         effects = []
-        def materialize(*args, **kwargs):
-            effects.append("materialize")
-            root = fixture_directory("fixture-blobs-")
-            return tuple(root / name for name in ("rustup.blob", "uv.blob", "rtk.blob", "fd.blob"))
-        def publish(*args, **kwargs):
-            effects.append("publish")
-            return PublishResult("/tmp/effective.toml")
-        class Docker:
-            def run(self, argv):
-                effects.append("docker")
-                return ProcessResult(argv, 0, "", "")
-        result = orchestrate_build(BuildRequest(
-            inventory_path=str(ROOT / "docker-constructor.toml"),
-            repo_root=str(ROOT), confirmed=True, runner=Docker(),
-            _materialize_artifacts=materialize, _named_context_supported=lambda: True,
-            _materialize_pi=fake_pi_materialization,
-            _publish_projection=publish,
-        ))
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"; repo.mkdir()
+            cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
+            inventory = repo / "docker-constructor.toml"
+            inventory.write_bytes((ROOT / "docker-constructor.toml").read_bytes())
+            (repo / "docker-constructor.local.toml").write_text(
+                f'[cache]\ndir = "{cache}"\n'
+            )
+            def materialize(*args, **kwargs):
+                effects.append("materialize")
+                return publish_digest_valid_artifacts(*args, **kwargs)
+            def publish(*args, **kwargs):
+                effects.append("publish")
+                return PublishResult("/tmp/effective.toml")
+            class Docker:
+                def run(self, argv):
+                    effects.append("docker")
+                    return ProcessResult(argv, 0, "", "")
+            with patch(
+                "docker.versioning.build_orchestration.select_build_artifacts",
+                side_effect=digest_valid_selected_artifacts,
+            ):
+                result = orchestrate_build(BuildRequest(
+                    inventory_path=str(inventory), repo_root=str(repo),
+                    confirmed=True, runner=Docker(),
+                    _materialize_artifacts=materialize,
+                    _named_context_supported=lambda: True,
+                    _materialize_pi=fake_pi_materialization,
+                    _publish_projection=publish,
+                ))
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         self.assertEqual(["materialize", "publish", "docker"], effects)
 

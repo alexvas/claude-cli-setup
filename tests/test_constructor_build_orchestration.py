@@ -24,7 +24,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
-from tests.build_test_support import INVENTORY_PATH, fake_pi_materialization, fixture_directory, no_network_transport_factory
+from tests.build_test_support import (
+    DIGEST_VALID_ARTIFACT_BYTES, INVENTORY_PATH, digest_valid_selected_artifacts,
+    fake_pi_materialization, fixture_directory, no_network_transport_factory,
+    publish_digest_valid_artifacts,
+)
 
 from docker.networking import (
     DockerMode,
@@ -37,7 +41,9 @@ from docker.versioning.build_materialization import (
     MaterializationError, SelectedBuildArtifact, UrllibStreamingTransport,
 )
 from docker.versioning.build_cache import (
-    acquire_checkout_build_lock, commit_build_set, publish_verified_blob,
+    UNCOMMITTED_TTL_SECONDS, acquire_checkout_build_lock, build_blob_path,
+    commit_build_set, prepare_build_cache, publish_uncommitted_blob,
+    publish_verified_blob,
 )
 from docker.versioning.digest_identity import DigestIdentity
 from docker.versioning.cache_storage import runtime_artifacts_child, versioning_child
@@ -139,32 +145,19 @@ def _publish_ok(projection, *, repo_root=None):
     return PublishResult(published_path="/tmp/effective.toml")
 
 
-_TEST_ARTIFACT_BYTES = {
-    "rustup": b"test-rustup-artifact", "uv": b"test-uv-artifact",
-    "rtk": b"test-rtk-artifact", "fd": b"test-fd-artifact",
-}
+_TEST_ARTIFACT_BYTES = DIGEST_VALID_ARTIFACT_BYTES
 
 
 def _test_selected_artifacts(_projection):
     """Test-only effective selection with identities derived from local bytes."""
-    return tuple(
-        SelectedBuildArtifact(
-            name=name, url=f"https://test.invalid/{name}",
-            identity=DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest()),
-        )
-        for name, data in _TEST_ARTIFACT_BYTES.items()
-    )
+    return digest_valid_selected_artifacts(_projection)
 
 
 def _materialize_ok(projection, *, checkout_root, cache_root=None, project_state=None, **_kwargs):
     """Publish real digest-verified blobs for orchestration fixture builds."""
-    return tuple(
-        publish_verified_blob(
-            selected.identity, _TEST_ARTIFACT_BYTES[selected.name],
-            checkout_root=checkout_root, cache_root=cache_root,
-            project_state=project_state,
-        )
-        for selected in _test_selected_artifacts(projection)
+    return publish_digest_valid_artifacts(
+        projection, checkout_root=checkout_root, cache_root=cache_root,
+        project_state=project_state,
     )
 
 
@@ -1563,6 +1556,298 @@ class TestMaterializationBoundary(unittest.TestCase):
         # The complete constructor project is unchanged, including every file's
         # contents and mode.
         self.assertEqual(project_before, self._tree_snapshot(self.repo))
+
+    def _seed_prior_live_set(self):
+        identities = set()
+        paths = []
+        for data in (b"prior-live-one", b"prior-live-two"):
+            identity = DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest())
+            identities.add(identity)
+            paths.append(publish_verified_blob(
+                identity, data, checkout_root=self.repo, cache_root=self.cache,
+            ))
+        with acquire_checkout_build_lock(self.repo, cache_root=self.cache) as lock:
+            commit_build_set(self.repo, identities, lock=lock, cache_root=self.cache)
+        return identities, paths
+
+    def _assert_prior_live_set(self, identities, paths):
+        state = prepare_build_cache(self.repo, cache_root=self.cache)
+        committed = json.loads((state.persistent_root / "committed-build.json").read_text())
+        self.assertEqual(
+            sorted(f"sha256:{identity.hex_digest()}" for identity in identities),
+            committed["blobs"],
+        )
+        self.assertTrue(all(path.exists() for path in paths))
+
+    def _recording_materializer(self, recorded):
+        def materialize(*args, **kwargs):
+            paths = _materialize_ok(*args, **kwargs)
+            recorded.extend(paths)
+            return paths
+        return materialize
+
+    def _assert_interruption_releases_lock_and_preserves_prior_set(self, request, old_ids, old_paths):
+        with self.assertRaises(KeyboardInterrupt):
+            orchestrate_build(request)
+        self._assert_prior_live_set(old_ids, old_paths)
+        with acquire_checkout_build_lock(self.repo, cache_root=self.cache):
+            pass
+
+    def test_artifact_materialization_interruption_releases_lock(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        request = self._request(
+            materialize=lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt()),
+            publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+            runner=FakeBuildExecutor(),
+        )
+        self._assert_interruption_releases_lock_and_preserves_prior_set(request, old_ids, old_paths)
+
+    def test_pi_materialization_interruption_releases_lock_and_keeps_blobs(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        request = self._request(
+            materialize=self._recording_materializer(materialized),
+            publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+            runner=FakeBuildExecutor(),
+        )
+        object.__setattr__(request, "_materialize_pi", lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt()))
+        self._assert_interruption_releases_lock_and_preserves_prior_set(request, old_ids, old_paths)
+        self.assertTrue(materialized and all(path.exists() for path in materialized))
+
+    def test_snapshot_creation_interruption_releases_lock_and_cleans_snapshot(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        def interrupting_snapshot(*_a, **_k):
+            raise KeyboardInterrupt()
+        with patch("docker.versioning.build_orchestration.create_artifact_snapshot", side_effect=interrupting_snapshot):
+            request = self._request(
+                materialize=self._recording_materializer(materialized),
+                publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+                runner=FakeBuildExecutor(),
+            )
+            self._assert_interruption_releases_lock_and_preserves_prior_set(request, old_ids, old_paths)
+        self.assertTrue(materialized and all(path.exists() for path in materialized))
+
+    def test_docker_failure_preserves_prior_set_and_reusable_new_blobs(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        class Docker:
+            def run(self, argv):
+                return ProcessResult(argv=argv, return_code=9, stdout="", stderr="failed")
+        result = orchestrate_build(self._request(
+            materialize=self._recording_materializer(materialized),
+            publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"), runner=Docker(),
+        ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self._assert_prior_live_set(old_ids, old_paths)
+        self.assertTrue(materialized)
+        self.assertTrue(all(path.exists() and (path.stat().st_mode & 0o777) == 0o444 for path in materialized))
+
+    def test_signal_interruption_preserves_prior_set_and_reusable_new_blobs(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        class Docker:
+            def run(self, argv):
+                raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            orchestrate_build(self._request(
+                materialize=self._recording_materializer(materialized),
+                publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"), runner=Docker(),
+            ))
+        self._assert_prior_live_set(old_ids, old_paths)
+        self.assertTrue(materialized)
+        self.assertTrue(all(path.exists() for path in materialized))
+
+    def test_snapshot_failure_preserves_prior_set_and_reusable_new_blobs(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        with patch(
+            "docker.versioning.build_orchestration.create_artifact_snapshot",
+            side_effect=SnapshotError("snapshot failed"),
+        ):
+            result = orchestrate_build(self._request(
+                materialize=self._recording_materializer(materialized),
+                publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+                runner=FakeBuildExecutor(),
+            ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self._assert_prior_live_set(old_ids, old_paths)
+        self.assertTrue(materialized)
+        self.assertTrue(all(path.exists() for path in materialized))
+
+    def test_commit_revalidation_failure_preserves_prior_set_and_new_blobs(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        class Docker:
+            def run(self, argv):
+                materialized[0].chmod(0o644)
+                return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
+        result = orchestrate_build(self._request(
+            materialize=self._recording_materializer(materialized),
+            publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"), runner=Docker(),
+        ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self._assert_prior_live_set(old_ids, old_paths)
+        self.assertTrue(all(path.exists() for path in materialized))
+
+    def test_snapshot_cleanup_failure_prevents_commit_and_preserves_blobs(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        materialized = []
+        def fail_cleanup(snapshot):
+            if snapshot is not None:
+                raise SnapshotError("snapshot cleanup failed")
+        with patch(
+            "docker.versioning.build_orchestration.cleanup_artifact_snapshot",
+            side_effect=fail_cleanup,
+        ):
+            result = orchestrate_build(self._request(
+                materialize=self._recording_materializer(materialized),
+                publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+                runner=FakeBuildExecutor(),
+            ))
+        self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
+        self._assert_prior_live_set(old_ids, old_paths)
+        self.assertTrue(materialized)
+        self.assertTrue(all(path.exists() for path in materialized))
+
+    def test_cancelled_build_preserves_prior_set_and_reusable_uncommitted_blob(self):
+        old_ids, old_paths = self._seed_prior_live_set()
+        pending_data = b"already-verified-uncommitted"
+        pending_id = DigestIdentity.from_hex("sha256", hashlib.sha256(pending_data).hexdigest())
+        pending_path = publish_verified_blob(
+            pending_id, pending_data, checkout_root=self.repo, cache_root=self.cache,
+        )
+        request = self._request(
+            materialize=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not materialize")),
+            publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+            runner=FakeBuildExecutor(),
+        )
+        object.__setattr__(request, "confirmed", False)
+        result = orchestrate_build(request)
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
+        self._assert_prior_live_set(old_ids, old_paths)
+        self.assertTrue(pending_path.exists())
+
+    def test_build_lifecycle_downloads_only_missing_or_changed_inputs(self):
+        from docker.versioning import build_materialization as materialization_module
+
+        payloads = dict(_TEST_ARTIFACT_BYTES)
+        selections = list(_test_selected_artifacts(None))
+        calls: list[str] = []
+        class Transport:
+            def stream(self, url):
+                calls.append(url)
+                name = url.rsplit("/", 1)[-1]
+                yield payloads[name]
+        transport = Transport()
+
+        def run(selected, returncode=0):
+            with patch(
+                "docker.versioning.build_orchestration.select_build_artifacts",
+                return_value=tuple(selected),
+            ), patch.object(
+                materialization_module, "select_build_artifacts", return_value=tuple(selected),
+            ):
+                return orchestrate_build(self._request(
+                    materialize=materialization_module.materialize_build_artifacts,
+                    transport_factory=lambda _policy: transport,
+                    publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+                    runner=FakeBuildExecutor(returncode=returncode),
+                ))
+
+        self.assertEqual(ExitKind.SUCCESS, run(selections).exit_kind)
+        self.assertEqual(4, len(calls))
+        calls.clear()
+        self.assertEqual(ExitKind.SUCCESS, run(selections).exit_kind)
+        self.assertEqual([], calls, "unchanged rebuild must perform zero downloads")
+
+        payloads["rtk"] = b"changed-rtk"
+        changed_rtk = SelectedBuildArtifact(
+            name="rtk", url="https://test.invalid/rtk",
+            identity=DigestIdentity.from_hex("sha256", hashlib.sha256(payloads["rtk"]).hexdigest()),
+        )
+        changed = [changed_rtk if item.name == "rtk" else item for item in selections]
+        calls.clear()
+        self.assertEqual(ExitKind.SUCCESS, run(changed).exit_kind)
+        self.assertEqual(["https://test.invalid/rtk"], calls)
+
+        payloads["fd"] = b"failed-build-fd"
+        changed_fd = SelectedBuildArtifact(
+            name="fd", url="https://test.invalid/fd",
+            identity=DigestIdentity.from_hex("sha256", hashlib.sha256(payloads["fd"]).hexdigest()),
+        )
+        failed_set = [changed_fd if item.name == "fd" else item for item in changed]
+        calls.clear()
+        self.assertEqual(ExitKind.OPERATIONAL, run(failed_set, returncode=7).exit_kind)
+        self.assertEqual(["https://test.invalid/fd"], calls)
+        calls.clear()
+        self.assertEqual(ExitKind.SUCCESS, run(failed_set).exit_kind)
+        self.assertEqual([], calls, "failed-build download must be reusable within its TTL")
+
+    def test_expired_uncommitted_blob_is_removed_and_reacquired(self):
+        from docker.versioning import build_materialization as materialization_module
+
+        data = b"expired-input"
+        selected = SelectedBuildArtifact(
+            name="expired", url="https://test.invalid/expired",
+            identity=DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest()),
+        )
+        with acquire_checkout_build_lock(self.repo, cache_root=self.cache) as lock:
+            path = publish_uncommitted_blob(
+                selected.identity, data, checkout_root=self.repo, cache_root=self.cache,
+                lock=lock, verified_at=1,
+            )
+        calls = []
+        class Transport:
+            def stream(self, url):
+                calls.append(url)
+                yield data
+        with patch(
+            "docker.versioning.build_orchestration.select_build_artifacts",
+            return_value=(selected,),
+        ), patch.object(
+            materialization_module, "select_build_artifacts", return_value=(selected,),
+        ), patch("docker.versioning.build_cache.time.time", return_value=UNCOMMITTED_TTL_SECONDS + 2):
+            result = orchestrate_build(self._request(
+                materialize=materialization_module.materialize_build_artifacts,
+                transport_factory=lambda _policy: Transport(),
+                publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"),
+                runner=FakeBuildExecutor(),
+            ))
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
+        self.assertEqual([selected.url], calls)
+        self.assertTrue(path.exists())
+
+    def test_built_image_and_existing_container_survive_source_blob_deletion(self):
+        materialized = []
+        image_files = {}
+        container_files = {}
+        class Docker:
+            def run(self, argv):
+                # Model the Docker/BuildKit import boundary: the resulting
+                # image and an existing container own copies, not host paths.
+                image_files.update({path.name: path.read_bytes() for path in materialized})
+                container_files.update(image_files)
+                return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
+
+        result = orchestrate_build(self._request(
+            materialize=self._recording_materializer(materialized),
+            publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"), runner=Docker(),
+        ))
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
+        self.assertNotIn("--label", result.build_args)
+        self.assertTrue(image_files)
+        for path in materialized:
+            path.unlink()
+        self.assertTrue(all(not path.exists() for path in materialized))
+        self.assertEqual(
+            sorted(_TEST_ARTIFACT_BYTES.values()), sorted(image_files.values()),
+            "existing image must retain imported artifact bytes",
+        )
+        self.assertEqual(image_files, container_files)
+        state = prepare_build_cache(self.repo, cache_root=self.cache)
+        self.assertEqual([], list(state.persistent_root.glob("generation-*")))
+        self.assertEqual([], list(state.persistent_root.glob("*history*")))
 
     def test_successful_build_commits_then_removes_every_superseded_blob(self):
         """RED: task 7.5 must wire commit and post-commit cleanup after Docker."""

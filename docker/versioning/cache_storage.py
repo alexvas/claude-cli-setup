@@ -510,6 +510,18 @@ def prepare_resolved_root(root: Path) -> Path:
     return root
 
 
+def prepare_project_root(root: Path) -> Path:
+    """Prepare only the shared root for project-scoped state.
+
+    Project build retention must not inspect the independent runtime-artifact
+    or versioning subtrees. The project-state resolver validates and creates
+    only its own ``projects`` child after this root boundary is secured.
+    """
+    _inspect_entry(root)
+    _create_and_secure(root)
+    return root
+
+
 def prepare_default_root(xdg_cache_home: str | None, *, home: Path) -> Path:
     """Resolve and harden the default constructor cache root.
 

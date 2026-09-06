@@ -535,6 +535,8 @@ def cleanup_artifact_snapshot(snapshot: MaterializedSnapshot | Path | None) -> N
     # unlinks it; shutil handles the child permissions on supported hosts.
     try:
         shutil.rmtree(path)
+    except FileNotFoundError:
+        return
     except PermissionError:
         # Unlinking a file requires write permission on its parent directory,
         # not on the file itself. Snapshot payloads may be hard links to
@@ -548,3 +550,5 @@ def cleanup_artifact_snapshot(snapshot: MaterializedSnapshot | Path | None) -> N
         try: os.chmod(path, 0o700)
         except OSError: pass
         shutil.rmtree(path, ignore_errors=True)
+        if path.exists() or path.is_symlink():
+            raise SnapshotError(f"failed to remove transaction snapshot: {path}")
