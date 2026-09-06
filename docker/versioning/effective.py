@@ -698,6 +698,9 @@ def _validate_serialized_projection(data: object) -> None:
     * empty string values
     * non-dict ``extensions``
 
+    An empty extensions table is valid: launching without optional runtime
+    extensions still requires a mounted, closed-schema projection.
+
     Raises:
         EffectiveConfigError: any invariant is violated.
     """
@@ -718,11 +721,6 @@ def _validate_serialized_projection(data: object) -> None:
         raise EffectiveConfigError(
             "'extensions' must be a table in serialized runtime projection"
         )
-    if not extensions:
-        raise EffectiveConfigError(
-            "'extensions' must not be empty in serialized runtime projection"
-        )
-
     for ext_name, ext_val in extensions.items():
         if not isinstance(ext_val, dict):
             raise EffectiveConfigError(
@@ -1061,6 +1059,10 @@ def create_runtime_projection(
 
     buf = io.StringIO()
     _write_toml(buf, data)
+    # The generic writer omits empty inline tables. Runtime projections retain
+    # the required top-level table even when no optional extensions are selected.
+    if not projection.extensions:
+        buf.write("[extensions]\n")
     content = buf.getvalue().encode("utf-8")
 
     # ── validate serialized projection before publication ──────────

@@ -23,3 +23,17 @@ Runtime projection publication and host-path validation SHALL use the invoking-u
 #### Scenario: Planning runtime projection state without side effects
 - **WHEN** dry-run or another side-effect-free planning operation resolves runtime launch inputs
 - **THEN** it SHALL perform no external namespace creation, identity-metadata publication, projection publication, cache mutation, creation of a namespace for a primary or extra workspace, or mutation of any constructor-project, primary-workspace, or extra-workspace directory
+
+### Requirement: Represent an empty runtime extension selection explicitly
+The runtime projection schema SHALL require an `extensions` table and SHALL permit that table to contain zero entries. An empty extension selection SHALL serialize as an explicit `[extensions]` table, SHALL remain subject to the same closed-schema validation and external publication lifecycle as a non-empty projection, and SHALL produce no runtime artifact materialization or extension installation. A projection that omits the `extensions` table, gives it a non-table value, or contains unknown top-level or extension fields SHALL be rejected before container execution.
+
+#### Scenario: Launching without runtime extensions
+- **WHEN** the effective runtime selection contains zero extensions
+- **THEN** the constructor SHALL publish a runtime projection containing an explicit empty `[extensions]` table
+- **AND** the runtime installer SHALL accept it as an empty installation plan
+- **AND** SHALL download and install no runtime artifacts
+
+#### Scenario: Rejecting an invalid empty-projection schema
+- **WHEN** a runtime projection omits the mandatory `extensions` table, represents it with a non-table value, or includes an unknown field
+- **THEN** runtime projection validation SHALL reject it before container execution
+- **AND** SHALL NOT treat the malformed projection as an empty extension selection

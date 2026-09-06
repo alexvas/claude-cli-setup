@@ -966,9 +966,6 @@ def read_projection(path: str) -> list[ProjectionEntry]:
 
         entries.append(entry)
 
-    if not entries:
-        raise ProjectionError("projection contains no extensions")
-
     entries.sort(key=lambda e: e.package)
 
     # ── reject duplicate package identities ────────────────────────

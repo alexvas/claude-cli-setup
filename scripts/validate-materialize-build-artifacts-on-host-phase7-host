@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+# Docker-host validator for OpenSpec materialize-build-artifacts-on-host task 7.8.
+set -euo pipefail
+
+readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+readonly PREFIX="dc-materialize-phase7-host"
+# Complete task 7.8 module inventory, grouped by its named suite categories.
+# Whole-repository discovery is intentionally excluded only because it includes
+# unrelated facade prompt tests; additions to these categories must be listed
+# here explicitly so the host validation remains reviewable and noninteractive.
+readonly VALIDATION_MODULES=(
+  # Inventory, digest, project identity, and cache security.
+  tests.test_constructor_inventory_build
+  tests.test_constructor_inventory_root
+  tests.test_constructor_inventory_runtime
+  tests.test_constructor_build_digest_identity
+  tests.test_constructor_build_projection
+  tests.test_constructor_project_state_phase1
+  tests.test_constructor_build_cache_paths
+  tests.test_constructor_build_cache_permissions
+  tests.test_constructor_cache_contracts
+  tests.test_constructor_cache_documentation
+  tests.test_constructor_cross_consumer_cache
+  tests.test_constructor_evidence_collector
+  # Transaction and host materialization lifecycle.
+  tests.test_constructor_build_transactions
+  tests.test_constructor_build_persistence
+  tests.test_constructor_build_materialization
+  tests.test_constructor_materialization
+  tests.test_constructor_build_orchestration
+  # Corporate-network configuration across build, run, docs, and npm.
+  tests.test_constructor_corporate_network_acceptance_red
+  tests.test_constructor_corporate_network_build_red
+  tests.test_constructor_corporate_network_docs_red
+  tests.test_constructor_corporate_network_red
+  tests.test_constructor_corporate_network_run_red
+  tests.test_npm_environment_corporate_network
+  # Snapshot, build-vector, BuildKit, Dockerfile, and output contracts.
+  tests.test_constructor_build_snapshot
+  tests.test_constructor_phase4_named_context
+  tests.test_constructor_build_vector
+  tests.test_constructor_buildkit_cache
+  tests.test_dockerfile_contracts
+  tests.test_constructor_build_output
+  tests.test_constructor_build_output_acceptance
+  # Pi assembly, admission, verification, and public interface.
+  tests.test_constructor_pi_inventory
+  tests.test_constructor_pi_release
+  tests.test_constructor_pi_assembly
+  tests.test_constructor_pi_consumer
+  tests.test_constructor_pi_snapshot
+  tests.test_constructor_pi_verify
+  tests.test_constructor_verification
+  # Runtime projection, installation, cache migration, launch, and access.
+  tests.test_constructor_runtime_dto
+  tests.test_constructor_runtime_projection
+  tests.test_constructor_runtime_installer
+  tests.test_constructor_runtime_cache_migration
+  tests.test_constructor_runtime_lifecycle
+  tests.test_constructor_runtime_verification
+  tests.test_constructor_launcher
+  tests.test_constructor_run_vector
+  tests.test_constructor_host_access_acceptance
+  tests.test_constructor_host_access_launch_red
+  tests.test_constructor_host_access_verify_red
+  # End-to-end acceptance for the combined constructor boundary.
+  tests.test_constructor_acceptance
+)
+
+usage() {
+  printf 'Usage: %s [--evidence-dir DIR] [--timeout-seconds SECONDS]\n' "${0##*/}"
+}
+
+EVIDENCE_DIR=""
+TIMEOUT_SECONDS="${PHASE7_COMMAND_TIMEOUT_SECONDS:-7200}"
+while (($#)); do
+  case "$1" in
+    --evidence-dir)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      EVIDENCE_DIR=$2; shift 2 ;;
+    --timeout-seconds)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      TIMEOUT_SECONDS=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'error: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+[[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'error: timeout must be a positive integer\n' >&2; exit 2;
+}
+
+if [[ -z "$EVIDENCE_DIR" ]]; then
+  EVIDENCE_DIR="$ROOT/validation-evidence/materialize-build-artifacts-on-host-phase7-$(date -u +%Y%m%dT%H%M%SZ)"
+fi
+mkdir -p -- "$EVIDENCE_DIR"
+EVIDENCE_DIR="$(cd -- "$EVIDENCE_DIR" && pwd -P)"
+readonly EVIDENCE_DIR
+readonly LOG="$EVIDENCE_DIR/validation.log"
+readonly REPORT="$EVIDENCE_DIR/report.json"
+readonly RUN_ID="$PREFIX-$$-$(date -u +%s)"
+readonly IMAGE_TAG="docker-constructor-phase7-validation:$RUN_ID"
+readonly STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STATUS=1
+DETAIL="validation did not complete"
+WORK_ROOT=""
+PROJECT=""
+INVOKING_UID="$(id -u)"
+INVOKING_GID="$(id -g)"
+
+write_report() {
+  local finished
+  finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  VALIDATION_STATUS="$STATUS" VALIDATION_DETAIL="$DETAIL" \
+  VALIDATION_STARTED="$STARTED" VALIDATION_FINISHED="$finished" \
+  VALIDATION_RUN_ID="$RUN_ID" VALIDATION_LOG="$LOG" \
+  python3 - "$REPORT" <<'PY'
+import json, os, pathlib, platform, sys
+report = {
+    "schema_version": 1,
+    "change": "materialize-build-artifacts-on-host",
+    "phase": 7,
+    "tier": "host-linux-amd64",
+    "run_id": os.environ["VALIDATION_RUN_ID"],
+    "started_at": os.environ["VALIDATION_STARTED"],
+    "finished_at": os.environ["VALIDATION_FINISHED"],
+    "passed": os.environ["VALIDATION_STATUS"] == "0",
+    "detail": os.environ["VALIDATION_DETAIL"],
+    "log": os.environ["VALIDATION_LOG"],
+    "host_machine": platform.machine(),
+    "platform": "linux-amd64",
+}
+pathlib.Path(sys.argv[1]).write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+PY
+}
+
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if command -v docker >/dev/null 2>&1; then
+    docker image rm -f "$IMAGE_TAG" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$PROJECT" && -e "$PROJECT" ]]; then
+    sudo chown -R "$INVOKING_UID:$INVOKING_GID" -- "$PROJECT" >/dev/null 2>&1 || true
+  fi
+  [[ -z "$WORK_ROOT" ]] || rm -rf -- "$WORK_ROOT" >/dev/null 2>&1 || true
+  if [[ $STATUS -ne 0 ]]; then STATUS=$rc; fi
+  write_report || true
+  printf 'Evidence: %s\n' "$EVIDENCE_DIR"
+  exit "$rc"
+}
+trap cleanup EXIT INT TERM HUP
+
+exec > >(tee -a "$LOG") 2>&1
+cd -- "$ROOT"
+printf '[%s] Starting Phase 7 host validator; run_id=%s\n' "$STARTED" "$RUN_ID"
+
+command -v docker >/dev/null 2>&1 || { DETAIL='docker executable is required'; exit 127; }
+docker info >/dev/null 2>&1 || { DETAIL='Docker daemon is unavailable'; exit 1; }
+docker build --help 2>&1 | grep -q -- '--build-context' || {
+  DETAIL='Docker BuildKit named-context support is required'; exit 1;
+}
+getent passwd docker-dev >/dev/null || {
+  DETAIL='an existing docker-dev account is required'; exit 2;
+}
+command -v sudo >/dev/null 2>&1 && sudo -v || {
+  DETAIL='working sudo credentials are required'; exit 2;
+}
+command -v timeout >/dev/null 2>&1 || { DETAIL='GNU timeout is required'; exit 2; }
+
+# Keep every implicit test cache, home, and temporary path inside one disposable
+# filesystem. Snapshot tests can then exercise their required hard-link path,
+# and runtime tests cannot observe or collide with the invoking user's state.
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/constructor-phase7.XXXXXX")"
+chmod 755 -- "$WORK_ROOT"
+mkdir -m 700 -- "$WORK_ROOT/cache-home" "$WORK_ROOT/test-home"
+mkdir -m 1777 -- "$WORK_ROOT/tmp"
+chmod 1777 -- "$WORK_ROOT/tmp"
+mkdir -m 700 -- "$WORK_ROOT/test-home/.pi"
+export TMPDIR="$WORK_ROOT/tmp"
+export XDG_CACHE_HOME="$WORK_ROOT/cache-home"
+export HOME="$WORK_ROOT/test-home"
+
+# Run the task 7.8 inventory, identity, cache, transaction, materialization,
+# network, snapshot, build-vector, Dockerfile, Pi, runtime, and acceptance
+# modules. Deliberately avoid whole-repository discovery: unrelated facade and
+# interactive-prompt tests are outside this change and can block on a host TTY.
+# Closed stdin is an additional guard against accidental interactive input.
+export PRIVILEGED_HELPERS=1
+export PYTHONDONTWRITEBYTECODE=1
+printf '[%s] Running focused Phase 7 Python validation inventory\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Keep modules in separate interpreters. Several legacy acceptance modules
+# patch process-global runtime-installer state; combining the complete allowlist
+# in one unittest process makes later modules order-dependent even though each
+# suite is independently green.
+for module in "${VALIDATION_MODULES[@]}"; do
+  printf '[%s] Running %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$module"
+  module_root="$(mktemp -d "$WORK_ROOT/module.XXXXXX")"
+  chmod 755 -- "$module_root"
+  mkdir -m 700 -- "$module_root/cache" "$module_root/home"
+  mkdir -m 1777 -- "$module_root/tmp"
+  chmod 1777 -- "$module_root/tmp"
+  targets=("$module")
+  if [[ "$module" == tests.test_constructor_acceptance ]]; then
+    # Acceptance cases patch facade-wide collaborators and some host setups
+    # retain enough ambient state to make later cases order-dependent. Keep the
+    # complete module inventory while isolating every case in its own process.
+    mapfile -t targets < <(python3 - "$module" <<'PY'
+import sys, unittest
+suite = unittest.defaultTestLoader.loadTestsFromName(sys.argv[1])
+def cases(value):
+    for item in value:
+        if isinstance(item, unittest.TestSuite): yield from cases(item)
+        else: yield item.id()
+for case in cases(suite): print(case)
+PY
+    )
+    ((${#targets[@]} > 0)) || { DETAIL='acceptance test inventory is empty'; exit 1; }
+  fi
+  for target in "${targets[@]}"; do
+    target_root="$module_root"
+    if ((${#targets[@]} > 1)); then
+      target_root="$(mktemp -d "$WORK_ROOT/case.XXXXXX")"
+      chmod 755 -- "$target_root"
+      mkdir -m 700 -- "$target_root/cache" "$target_root/home"
+      mkdir -m 1777 -- "$target_root/tmp"
+      chmod 1777 -- "$target_root/tmp"
+    fi
+    env TMPDIR="$target_root/tmp" XDG_CACHE_HOME="$target_root/cache" \
+      HOME="$target_root/home" PRIVILEGED_HELPERS=1 PYTHONDONTWRITEBYTECODE=1 \
+      timeout --signal=TERM --kill-after=30 "$TIMEOUT_SECONDS" \
+      python3 -m unittest -v "$target" </dev/null
+    [[ "$target_root" == "$module_root" ]] || rm -rf -- "$target_root"
+  done
+  rm -rf -- "$module_root"
+done
+
+# Phase 4 supplies invoking-user ownership transfer and multi-workspace runtime
+# namespace acceptance. BuildKit snapshot/cache boundaries are covered by the
+# focused Phase 7 modules above; the former Phase 5 host harness predates the
+# required derived Pi evidence context and is not a valid full-image builder.
+printf '[%s] Running privileged ownership and workspace validation\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+timeout --signal=TERM --kill-after=30 "$TIMEOUT_SECONDS" scripts/validate-phase4
+# Build from a disposable constructor-project copy after independent recursive
+# transfer to docker-dev. The invoking user retains read/traverse access, while
+# all generated state is redirected outside the project.
+PROJECT="$WORK_ROOT/constructor-project"
+PRIMARY="$WORK_ROOT/primary-workspace"
+EXTRA="$WORK_ROOT/extra-workspace"
+CACHE_HOME="$WORK_ROOT/cache-home"
+mkdir -m 755 -- "$PRIMARY" "$EXTRA"
+cp -a -- "$ROOT" "$PROJECT"
+rm -rf -- "$PROJECT/.git" "$PROJECT/.docker-cache" "$PROJECT/.docker-generated" \
+  "$PROJECT/docker-constructor.local.toml" "$PROJECT/validation-evidence"
+# The real launch validates workspace and runtime-namespace behavior, not npm
+# transport availability. Use a schema-valid empty extension set so transient
+# registry/TLS behavior cannot prevent the container boundary from running.
+python3 -B - "$PROJECT/docker-constructor.toml" "$PROJECT/phase7-launch.toml" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+marker = "# Pi extensions — installed at runtime"
+if marker not in source:
+    raise SystemExit("cannot locate runtime extension section")
+prefix = source.split(marker, 1)[0]
+pathlib.Path(sys.argv[2]).write_text(prefix + "[runtime.pi-extensions]\n", encoding="utf-8")
+PY
+find "$PROJECT" -type d -exec chmod a+rx {} +
+find "$PROJECT" -type f -exec chmod a+r {} +
+sudo chown -R docker-dev:docker-dev -- "$PROJECT"
+
+manifest() {
+  python3 -B - "$1" "$2" <<'PY'
+import hashlib, json, os, pathlib, stat, sys
+root = pathlib.Path(sys.argv[1])
+rows = []
+for path in sorted(root.rglob('*'), key=lambda p: os.fsencode(p.relative_to(root))):
+    st = path.lstat(); rel = os.fspath(path.relative_to(root))
+    row = {"path": rel, "mode": stat.S_IMODE(st.st_mode), "uid": st.st_uid,
+           "gid": st.st_gid, "kind": stat.S_IFMT(st.st_mode)}
+    if path.is_symlink(): row["target"] = os.readlink(path)
+    elif path.is_file(): row["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    rows.append(row)
+pathlib.Path(sys.argv[2]).write_text(json.dumps(rows, sort_keys=True, separators=(',', ':')) + '\n')
+PY
+}
+
+manifest "$PROJECT" "$EVIDENCE_DIR/project-before-build.json"
+manifest "$PRIMARY" "$EVIDENCE_DIR/primary-before.json"
+manifest "$EXTRA" "$EVIDENCE_DIR/extra-before.json"
+
+printf '[%s] Running linux-amd64 build from foreign-owned readable project\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+(
+  cd -- "$PROJECT"
+  XDG_CACHE_HOME="$CACHE_HOME" PYTHONDONTWRITEBYTECODE=1 \
+    timeout --signal=TERM --kill-after=30 "$TIMEOUT_SECONDS" \
+    python3 -B "$PROJECT/docker/docker-constructor.py" \
+      --inventory "$PROJECT/docker-constructor.toml" --color never \
+      build --platform linux-amd64 --yes --tag "$IMAGE_TAG"
+)
+
+# Resolve the authoritative constructor-project namespace after the build and
+# prove the real launch neither creates project state for mounted workspaces nor
+# publishes its runtime projection anywhere outside that namespace.
+NAMESPACE="$(
+  XDG_CACHE_HOME="$CACHE_HOME" PYTHONPATH="$PROJECT" python3 -B - "$PROJECT" <<'PY'
+import sys
+from docker.versioning.project_state import resolve_project_state
+print(resolve_project_state(sys.argv[1]).namespace)
+PY
+)"
+[[ "$NAMESPACE" == "$CACHE_HOME/docker-constructor/projects/"* ]] || {
+  DETAIL="external project namespace has an unexpected path: $NAMESPACE"; exit 1;
+}
+find "$CACHE_HOME/docker-constructor/projects" -mindepth 1 -maxdepth 1 -type d \
+  -printf '%f\n' | sort > "$EVIDENCE_DIR/namespaces-before-launch.txt"
+[[ "$(wc -l < "$EVIDENCE_DIR/namespaces-before-launch.txt")" -eq 1 ]] || {
+  DETAIL='build created more than the constructor project namespace'; exit 1;
+}
+
+REAL_DOCKER="$(command -v docker)"
+DOCKER_SHIM="$WORK_ROOT/docker-shim"
+DOCKER_ARGV_LOG="$EVIDENCE_DIR/launch-docker-argv.jsonl"
+mkdir -m 700 -- "$DOCKER_SHIM"
+cat > "$DOCKER_SHIM/docker" <<'PY'
+#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["PHASE7_DOCKER_ARGV_LOG"], "a", encoding="utf-8") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\n")
+os.execv(os.environ["PHASE7_REAL_DOCKER"], [os.environ["PHASE7_REAL_DOCKER"], *sys.argv[1:]])
+PY
+chmod 700 -- "$DOCKER_SHIM/docker"
+: > "$DOCKER_ARGV_LOG"
+
+printf '[%s] Launching built image with primary and extra workspaces\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+(
+  cd -- "$PROJECT"
+  HOME="$WORK_ROOT/test-home" XDG_CACHE_HOME="$CACHE_HOME" PYTHONDONTWRITEBYTECODE=1 \
+    PATH="$DOCKER_SHIM:$PATH" PHASE7_REAL_DOCKER="$REAL_DOCKER" \
+    PHASE7_DOCKER_ARGV_LOG="$DOCKER_ARGV_LOG" \
+    timeout --signal=TERM --kill-after=30 "$TIMEOUT_SECONDS" \
+    python3 -B "$PROJECT/docker/docker-constructor.py" \
+      --inventory "$PROJECT/phase7-launch.toml" --color never \
+      run --main-project "$PRIMARY" --project "$EXTRA" \
+      --image "$IMAGE_TAG" --no-tty --no-interactive \
+      --chown-on-start 0 -- pi --version
+)
+
+find "$CACHE_HOME/docker-constructor/projects" -mindepth 1 -maxdepth 1 -type d \
+  -printf '%f\n' | sort > "$EVIDENCE_DIR/namespaces-after-launch.txt"
+cmp -s "$EVIDENCE_DIR/namespaces-before-launch.txt" "$EVIDENCE_DIR/namespaces-after-launch.txt" || {
+  DETAIL='launch created a generated namespace for a mounted workspace'; exit 1;
+}
+if ! python3 - "$DOCKER_ARGV_LOG" "$NAMESPACE/runtime" "$PRIMARY" "$EXTRA" <<'PY'
+import json, pathlib, sys
+records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+runs = [argv for argv in records if argv and argv[0] == "run"]
+if len(runs) != 1:
+    raise SystemExit(f"expected exactly one recorded docker run, got {len(runs)}")
+argv = runs[0]
+for label, path in (("constructor runtime projection", sys.argv[2]),
+                    ("primary workspace", sys.argv[3]),
+                    ("extra workspace", sys.argv[4])):
+    if not any(path in arg for arg in argv):
+        raise SystemExit(f"docker run did not mount {label} from {path}")
+PY
+then
+  DETAIL='real launch did not use the required constructor/workspace mounts'
+  exit 1
+fi
+
+manifest "$PROJECT" "$EVIDENCE_DIR/project-after-launch.json"
+manifest "$PRIMARY" "$EVIDENCE_DIR/primary-after.json"
+manifest "$EXTRA" "$EVIDENCE_DIR/extra-after.json"
+cmp -s "$EVIDENCE_DIR/project-before-build.json" "$EVIDENCE_DIR/project-after-launch.json" || {
+  DETAIL='build or launch mutated the constructor project'; exit 1;
+}
+cmp -s "$EVIDENCE_DIR/primary-before.json" "$EVIDENCE_DIR/primary-after.json" || {
+  DETAIL='launch mutated the primary workspace'; exit 1;
+}
+cmp -s "$EVIDENCE_DIR/extra-before.json" "$EVIDENCE_DIR/extra-after.json" || {
+  DETAIL='launch mutated the extra workspace'; exit 1;
+}
+for root in "$PROJECT" "$PRIMARY" "$EXTRA"; do
+  [[ ! -e "$root/.docker-cache" && ! -e "$root/.docker-generated" ]] || {
+    DETAIL="legacy generated state was created beneath $root"; exit 1;
+  }
+done
+
+STATUS=0
+DETAIL='complete Phase 7 host validation passed'
+printf '[%s] PASS: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DETAIL"

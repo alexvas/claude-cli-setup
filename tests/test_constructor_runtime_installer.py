@@ -576,10 +576,9 @@ artifacts = { "1.0.0" = { artifact_id = "https://x", integrity = "sha512-A" }, "
 class TestRequiredFields(unittest.TestCase):
     """Every projection field required by Stage 5 must be validated."""
 
-    def test_empty_extensions_rejected(self) -> None:
-        path = _tmp_toml("")
-        with self.assertRaises(ProjectionError):
-            read_projection(path)
+    def test_empty_extensions_are_valid(self) -> None:
+        path = _tmp_toml("[extensions]\n")
+        self.assertEqual([], read_projection(path))
 
     def test_missing_package_identity(self) -> None:
         path = _tmp_toml("""\
@@ -4375,6 +4374,10 @@ class TestEntrypointExecution(unittest.TestCase):
         with mock.patch.object(mod, "_FIXED_PROJECTION", proj_path), \
              mock.patch.object(mod, "_FIXED_PI_HOME", pi_home), \
              mock.patch.object(mod, "_MOUNTED_ARTIFACT_ROOT", art_root), \
+             mock.patch.object(
+                 mod.InstallContext, "real_privilege",
+                 return_value=_FakePrivilegeContext(),
+             ), \
              mock.patch.object(
                  mod._StatvfsMountInspection,
                  "is_read_only_mount",

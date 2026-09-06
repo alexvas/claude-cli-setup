@@ -801,36 +801,38 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # package/version/metadata identity.
 
     try:
-        class _InjectedTransport:
-            def fetch_chunks(self, url: str):
-                assert request._artifact_fetcher is not None
-                data = request._artifact_fetcher(url)
-                if not isinstance(data, bytes):
-                    raise TypeError("artifact fetcher must return bytes")
-                yield data
+        artifact_mounts = ()
+        if selected_artifacts:
+            class _InjectedTransport:
+                def fetch_chunks(self, url: str):
+                    assert request._artifact_fetcher is not None
+                    data = request._artifact_fetcher(url)
+                    if not isinstance(data, bytes):
+                        raise TypeError("artifact fetcher must return bytes")
+                    yield data
 
-        transport = (_InjectedTransport() if request._artifact_fetcher
-                     else artifact_cache.HttpStreamingTransport())
-        if request._artifact_cache_root is not None:
-            os.makedirs(runtime_tmp_root, mode=0o700, exist_ok=True)
-        configured_root = os.path.abspath(runtime_cache_root)
-        if os.path.islink(configured_root):
-            raise artifact_cache.ArtifactMaterializationError(
-                "containment", "runtime artifact cache root is a symlink",
+            transport = (_InjectedTransport() if request._artifact_fetcher
+                         else artifact_cache.HttpStreamingTransport())
+            if request._artifact_cache_root is not None:
+                os.makedirs(runtime_tmp_root, mode=0o700, exist_ok=True)
+            configured_root = os.path.abspath(runtime_cache_root)
+            if os.path.islink(configured_root):
+                raise artifact_cache.ArtifactMaterializationError(
+                    "containment", "runtime artifact cache root is a symlink",
+                )
+            root = os.path.realpath(configured_root)
+            blobs = artifact_cache.materialize_selected_artifacts(
+                selected_artifacts,
+                transport=transport,
+                filesystem=artifact_cache.LocalCacheFilesystem(),
+                lock_factory=artifact_cache.FileIdentityLockFactory(
+                    root, lock_root=runtime_locks_root,
+                ),
+                temp_dir=artifact_cache.LocalTemporaryDirectory(),
+                temp_root=runtime_tmp_root,
+                cache_root=root,
             )
-        root = os.path.realpath(configured_root)
-        blobs = artifact_cache.materialize_selected_artifacts(
-            selected_artifacts,
-            transport=transport,
-            filesystem=artifact_cache.LocalCacheFilesystem(),
-            lock_factory=artifact_cache.FileIdentityLockFactory(
-                root, lock_root=runtime_locks_root,
-            ),
-            temp_dir=artifact_cache.LocalTemporaryDirectory(),
-            temp_root=runtime_tmp_root,
-            cache_root=root,
-        )
-        artifact_mounts = plan_artifact_mounts(blobs.values())
+            artifact_mounts = plan_artifact_mounts(blobs.values())
     except Exception as exc:
         return RunResult(
             exit_kind=ExitKind.OPERATIONAL,

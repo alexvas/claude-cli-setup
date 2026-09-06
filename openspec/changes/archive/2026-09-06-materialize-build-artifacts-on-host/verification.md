@@ -305,3 +305,26 @@ Reviewed for implicit asset inference, binary archives, mutable resolution, life
 - Materialized-attestation binding: `execute_build` now materializes Pi, builds a `DerivedEnvironment(assembledOutputIdentity, canonicalTreeDigest, assemblerEvidenceDigest, consumerLauncherEvidenceDigest)` attestation, and passes it through `Materialized(path, DerivedEnvironment(…))`; the four values are emitted as `PI_*` build args only for materialized derived-environment contexts. Dry-run remains `Prospective` (`path: null`) and Phase 4 `NoDerivedEnvironment` remains a closed variant.
 - No-build-network / Dockerfile: `pi-tools` consumes only the named context; the in-image `docker/verify-pi.mjs` re-verifies launcher contents/mode/target/containment and cross-checks the evidence sets against the four attestation values before `pi --version` (CI-only; no Docker daemon on this host).
 - Identical external Pi interfaces: `pi --version` version check and `/opt/pi/bin/pi` layout are preserved; the runtime stage still copies `/opt/pi` and links `/usr/local/bin/pi`.
+
+# Phase 7 Validation Record
+
+## Host run
+
+Date: 2026-09-06T23:18:33Z–2026-09-06T23:19:45Z
+
+Command:
+
+```text
+scripts/validate-materialize-build-artifacts-on-host-phase7-host
+```
+
+## Results
+
+- The complete focused inventory, digest, project-identity, cache-security, transaction, materialization, corporate-network, snapshot, build-vector, Dockerfile, Pi, runtime, host-access, and acceptance inventory passed.
+- The privileged Phase 4 inventory passed as the invoking user with narrowly delegated ownership operations and no skipped credential-sensitive scenarios.
+- A real `linux-amd64` image build succeeded from a readable constructor-project copy recursively owned by `docker-dev`.
+- A real launch succeeded with one primary and one extra workspace. Captured `docker run` argv proves the runtime projection was mounted from the constructor project's external runtime namespace and both workspaces were mounted.
+- Constructor-project, primary-workspace, and extra-workspace before/after manifests are byte-identical. No workspace namespace appeared, and no `.docker-cache` or `.docker-generated` entry was created.
+- External metadata/path diagnostics passed: malformed and identity-mismatched `project.json` state was rejected without adoption or mutation, and diagnostics retained the selected constructor-project and external namespace/path boundary rather than reporting a legacy checkout-local state location.
+- Unsupported-platform rejection passed: build projection and orchestration coverage explicitly rejected targets other than the reviewed `linux-amd64` platform before artifact materialization or Docker execution.
+- The report records `passed: true`; evidence is under `validation-evidence/materialize-build-artifacts-on-host-phase7-20260906T231833Z/`.

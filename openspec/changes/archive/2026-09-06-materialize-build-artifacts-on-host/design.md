@@ -77,6 +77,19 @@ Then pass the same digest-bound validated input and exact lock bytes to Docker-b
 
 Do not materialize Pi's binary archive, implement npm cacache, or run npm/network operations inside BuildKit.
 
+### Permit an empty runtime extension projection
+
+Treat runtime extensions as optional while retaining the projection as a required,
+closed-schema mount. An empty selected set serializes canonically as the explicit
+`[extensions]` TOML table, produces no runtime artifact downloads or installs, and
+still follows the same external constructor-project namespace, publication,
+read-only mount, and cleanup lifecycle. The container-side reader accepts this
+representation as an empty installation plan rather than a configuration error.
+
+This keeps workspace-only launches valid and deterministic without inventing a
+placeholder extension or coupling runtime projection publication to registry
+availability.
+
 ### Unify host network policy
 
 The streaming downloader receives the resolved credential-free proxy and validated corporate trust bundle through an injected host HTTP transport. Disabled settings add no overrides. Secrets and URLs follow existing redaction rules. Downloads complete before Docker starts, making materialization errors early operational failures.

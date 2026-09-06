@@ -64,7 +64,13 @@ def _run(
             handle = original_create_projection(_projection, parent_dir=parent_dir)
             handle.path = str(Path(parent_dir) / "fake-projection.toml")
             return handle
-    with redirect_stdout(out), redirect_stderr(err):
+    # This daemon-independent acceptance module never exercises transport or
+    # cache materialization. Keep every real-launch fixture network-free even
+    # when the isolated validation cache starts empty.
+    with redirect_stdout(out), redirect_stderr(err), patch(
+        "docker.launcher.artifact_cache.materialize_selected_artifacts",
+        return_value={},
+    ):
         rc = mod.main(
             list(argv),
             dispatcher=dispatcher,
@@ -837,16 +843,18 @@ class TestRunFailureDiagnostics(unittest.TestCase):
             return_code=0, stdout="pi-0001\n",
         )
 
-        rc, out, err = _run(
-            self.m,
-            ["--output", "json", "run", "--main-project",
-             "/tmp/fake-project", "--no-tty", "--no-interactive"],
-            _process_runner=runner,
-            _container_inspector=self._fake_inspector("pi-0001"),
-            _run_executor=executor,
-            _create_projection=lambda p, **kw: self._ProjectionHandle(),
-            _prompt_user=lambda _: True,
-        )
+        with tempfile.TemporaryDirectory() as td:
+            rc, out, err = _run(
+                self.m,
+                ["--output", "json", "run", "--main-project",
+                 str(Path(td) / "main-project"),
+                 "--no-tty", "--no-interactive"],
+                _process_runner=runner,
+                _container_inspector=self._fake_inspector("pi-0001"),
+                _run_executor=executor,
+                _create_projection=lambda p, **kw: self._ProjectionHandle(),
+                _prompt_user=lambda _: True,
+            )
         self.assertEqual(4, rc)
         self.assertEqual("", err)
         data = json.loads(out)
@@ -879,16 +887,17 @@ class TestRunFailureDiagnostics(unittest.TestCase):
             return_code=0, stdout="pi-0001\n",
         )
 
-        rc, out, err = _run(
-            self.m,
-            ["run", "--main-project", "/tmp/fake-project",
-             "--no-tty", "--no-interactive"],
-            _process_runner=runner,
-            _container_inspector=self._fake_inspector("pi-0001"),
-            _run_executor=executor,
-            _create_projection=lambda p, **kw: self._ProjectionHandle(),
-            _prompt_user=lambda _: True,
-        )
+        with tempfile.TemporaryDirectory() as td:
+            rc, out, err = _run(
+                self.m,
+                ["run", "--main-project", str(Path(td) / "main-project"),
+                 "--no-tty", "--no-interactive"],
+                _process_runner=runner,
+                _container_inspector=self._fake_inspector("pi-0001"),
+                _run_executor=executor,
+                _create_projection=lambda p, **kw: self._ProjectionHandle(),
+                _prompt_user=lambda _: True,
+            )
 
         self.assertEqual(4, rc)
         self.assertEqual("", out)

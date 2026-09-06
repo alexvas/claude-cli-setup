@@ -21,6 +21,7 @@ from docker.versioning.effective import (
     resolve_runtime,
 )
 from docker.versioning.model import (
+    EffectiveRuntimeProjection,
     NpmArtifact,
     NpmSource,
     NpmUpdate,
@@ -263,6 +264,17 @@ class TestRuntimeLifecycle(unittest.TestCase):
         os.unlink(link)
 
     # ── content identity ───────────────────────────────────────────
+
+    def test_empty_projection_round_trips_as_explicit_table(self):
+        target = os.path.join(self._tmp, "empty.toml")
+        path, content_hash = create_runtime_projection(
+            EffectiveRuntimeProjection(extensions={}), host_path=target,
+        )
+        with open(path, "rb") as stream:
+            self.assertEqual(b"[extensions]\n", stream.read())
+        self.assertEqual(hashlib.sha256(b"[extensions]\n").hexdigest(), content_hash)
+        from docker.runtime_installer import read_projection
+        self.assertEqual([], read_projection(path))
 
     def test_create_returns_content_hash(self):
         _, proj = resolve_runtime(_runtime(), {})
@@ -1227,13 +1239,11 @@ class TestSerializedProjectionValidator(unittest.TestCase):
             _validate_serialized_projection(data)
         self.assertIn("must be a table", str(ctx.exception))
 
-    def test_rejects_empty_extensions(self):
+    def test_accepts_empty_extensions(self):
         from docker.versioning.effective import _validate_serialized_projection
         data = self._valid_data()
         data["extensions"] = {}
-        with self.assertRaises(EffectiveConfigError) as ctx:
-            _validate_serialized_projection(data)
-        self.assertIn("must not be empty", str(ctx.exception))
+        _validate_serialized_projection(data)
 
     # ── unknown extension keys ─────────────────────────────────
 

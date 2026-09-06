@@ -4083,6 +4083,31 @@ class TestOrchestrationOrdering(unittest.TestCase):
 
     # ── happy-path order ──────────────────────────────────────
 
+    def test_empty_selection_skips_materialization_and_cache_mutation(self) -> None:
+        from unittest import mock
+        from docker.versioning.model import EffectiveRuntimeProjection
+
+        executor = _LoggedExecutor(self._event_log, returncode=0)
+        req = self._request(
+            executor=executor,
+            inspector=FakeContainerNameInspector(set()),
+        )
+        with mock.patch(
+            "docker.versioning.effective.resolve_runtime",
+            return_value=([], EffectiveRuntimeProjection(extensions={})),
+        ), mock.patch(
+            "docker.versioning.artifact_cache.materialize_selected_artifacts",
+        ) as materialize, mock.patch(
+            "docker.versioning.rendering.render_run_vector",
+            side_effect=self._render_patch(),
+        ):
+            result = self._run(req)
+
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
+        materialize.assert_not_called()
+        self.assertFalse(os.path.exists(self._artifact_cache_root))
+        self.assertFalse(os.path.exists(os.path.dirname(self._artifact_cache_root)))
+
     def test_event_order(self) -> None:
         """Events MUST occur in the exact required sequence:
         validate-and-plan → materialize → projection_publish →
