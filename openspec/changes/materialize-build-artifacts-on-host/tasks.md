@@ -118,7 +118,7 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 4 ──┬──> Phase 5
 
 **Deliverables:** complete build transaction from lock through materialization, snapshots, Docker execution, atomic commit, GC, and cleanup; self-contained existing images; acceptance evidence for cache hits, failures, retries, replacement, and unsupported scope.
 
-- [ ] 7.1 **RED:** Add orchestration acceptance tests proving successful Docker completion commits the external build set for the canonical constructor-project identity and only then removes every superseded build blob without reading or mutating other project namespaces or global runtime/versioning caches.
+- [x] 7.1 **RED:** Add orchestration acceptance tests proving successful Docker completion commits the external build set for the canonical constructor-project identity and only then removes every superseded build blob without reading or mutating other project namespaces or global runtime/versioning caches.
 - [ ] 7.2 **RED:** Add failure acceptance tests for Docker nonzero exit, cancellation, signal interruption, snapshot failure, commit failure, and cleanup failure, each preserving the prior committed set and reusable verified uncommitted blobs.
 - [ ] 7.3 **RED:** Add lifecycle acceptance tests proving an unchanged rebuild performs zero host artifact downloads, a changed artifact downloads once, a failed-build download is reused within 30 days, and an expired uncommitted blob is reacquired.
 - [ ] 7.4 **RED:** Add image-independence tests proving existing images and containers remain operational after source-blob deletion without image labels or historical generation manifests.

@@ -13,6 +13,8 @@ that drives the Stage 9.3 implementation.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -31,7 +33,14 @@ from docker.networking import (
     ProbeResult,
 )
 from docker.versioning.build_snapshot import MaterializedSnapshot, SnapshotError
-from docker.versioning.build_materialization import MaterializationError, UrllibStreamingTransport
+from docker.versioning.build_materialization import (
+    MaterializationError, SelectedBuildArtifact, UrllibStreamingTransport,
+)
+from docker.versioning.build_cache import (
+    acquire_checkout_build_lock, commit_build_set, publish_verified_blob,
+)
+from docker.versioning.digest_identity import DigestIdentity
+from docker.versioning.cache_storage import runtime_artifacts_child, versioning_child
 from docker.npm_environment.errors import LockedNpmError
 from docker.versioning.pi_assembly import PiAssemblyError
 from docker.versioning.pi_consumer import PiConsumerError
@@ -130,14 +139,33 @@ def _publish_ok(projection, *, repo_root=None):
     return PublishResult(published_path="/tmp/effective.toml")
 
 
-def _materialize_ok(*args, **kwargs):
-    """Return four opaque fixture paths in reviewed selection order.
+_TEST_ARTIFACT_BYTES = {
+    "rustup": b"test-rustup-artifact", "uv": b"test-uv-artifact",
+    "rtk": b"test-rtk-artifact", "fd": b"test-fd-artifact",
+}
 
-    Snapshot construction is mocked below: these orchestration tests exercise
-    vector/lifecycle behaviour, not SHA-256 streaming itself.
-    """
-    root = fixture_directory("fixture-blobs-")
-    return tuple(root / name for name in ("rustup.blob", "uv.blob", "rtk.blob", "fd.blob"))
+
+def _test_selected_artifacts(_projection):
+    """Test-only effective selection with identities derived from local bytes."""
+    return tuple(
+        SelectedBuildArtifact(
+            name=name, url=f"https://test.invalid/{name}",
+            identity=DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest()),
+        )
+        for name, data in _TEST_ARTIFACT_BYTES.items()
+    )
+
+
+def _materialize_ok(projection, *, checkout_root, cache_root=None, project_state=None, **_kwargs):
+    """Publish real digest-verified blobs for orchestration fixture builds."""
+    return tuple(
+        publish_verified_blob(
+            selected.identity, _TEST_ARTIFACT_BYTES[selected.name],
+            checkout_root=checkout_root, cache_root=cache_root,
+            project_state=project_state,
+        )
+        for selected in _test_selected_artifacts(projection)
+    )
 
 
 def _fixture_snapshot(*_args, **_kwargs) -> MaterializedSnapshot:
@@ -146,15 +174,21 @@ def _fixture_snapshot(*_args, **_kwargs) -> MaterializedSnapshot:
 
 
 def setUpModule() -> None:
-    global _snapshot_patcher
+    global _snapshot_patcher, _selection_patcher
     _snapshot_patcher = patch(
         "docker.versioning.build_orchestration.create_artifact_snapshot",
         side_effect=_fixture_snapshot,
     )
+    _selection_patcher = patch(
+        "docker.versioning.build_orchestration.select_build_artifacts",
+        side_effect=_test_selected_artifacts,
+    )
     _snapshot_patcher.start()
+    _selection_patcher.start()
 
 
 def tearDownModule() -> None:
+    _selection_patcher.stop()
     _snapshot_patcher.stop()
 
 
@@ -1529,6 +1563,127 @@ class TestMaterializationBoundary(unittest.TestCase):
         # The complete constructor project is unchanged, including every file's
         # contents and mode.
         self.assertEqual(project_before, self._tree_snapshot(self.repo))
+
+    def test_successful_build_commits_then_removes_every_superseded_blob(self):
+        """RED: task 7.5 must wire commit and post-commit cleanup after Docker."""
+        from docker.versioning.project_state import resolve_project_state
+
+        old_paths = []
+        old_identities = set()
+        for data in (b"superseded-one", b"superseded-two"):
+            identity = DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest())
+            old_identities.add(identity)
+            old_paths.append(publish_verified_blob(identity, data, checkout_root=self.repo, cache_root=self.cache))
+        with acquire_checkout_build_lock(self.repo, cache_root=self.cache) as lock:
+            commit_build_set(self.repo, old_identities, lock=lock, cache_root=self.cache)
+
+        other = self.base / "other-project"
+        other.mkdir()
+        other_data = b"other-project-input"
+        other_identity = DigestIdentity.from_hex("sha256", hashlib.sha256(other_data).hexdigest())
+        other_path = publish_verified_blob(other_identity, other_data, checkout_root=other, cache_root=self.cache)
+        with acquire_checkout_build_lock(other, cache_root=self.cache) as lock:
+            commit_build_set(other, {other_identity}, lock=lock, cache_root=self.cache)
+        other_state = resolve_project_state(other, cache_root=self.cache)
+        other_snapshot = self._tree_snapshot(other_state.build_artifacts_root)
+
+        runtime_sentinel = runtime_artifacts_child(self.cache) / "sentinel"
+        versioning_sentinel = versioning_child(self.cache) / "sentinel"
+        runtime_sentinel.parent.mkdir(); versioning_sentinel.parent.mkdir()
+        runtime_sentinel.write_bytes(b"runtime"); versioning_sentinel.write_bytes(b"versioning")
+        global_snapshot = {path: (path.read_bytes(), path.stat().st_mode) for path in (runtime_sentinel, versioning_sentinel)}
+        alias = self.base / "repo-alias"
+        alias.symlink_to(self.repo, target_is_directory=True)
+
+        selected_state = resolve_project_state(alias, cache_root=self.cache)
+        canonical_state = resolve_project_state(self.repo, cache_root=self.cache)
+        self.assertEqual(canonical_state.namespace, selected_state.namespace)
+        materialized_paths: list[Path] = []
+        def materialize_and_record(*args, **kwargs):
+            paths = _materialize_ok(*args, **kwargs)
+            materialized_paths.extend(paths)
+            return paths
+
+        docker_calls: list[tuple[str, ...]] = []
+        case = self
+        class Docker:
+            def run(self, argv):
+                # Commit/GC is a post-Docker concern: the prior live set must
+                # remain authoritative while Docker is running.
+                case.assertTrue(all(path.exists() for path in old_paths))
+                committed = json.loads((selected_state.build_artifacts_root / "committed-build.json").read_text())
+                case.assertEqual(sorted(f"sha256:{item.hex_digest()}" for item in old_identities), committed["blobs"])
+                docker_calls.append(argv)
+                return ProcessResult(argv=argv, return_code=0, stdout="", stderr="")
+
+        request = self._request(materialize=materialize_and_record, publish=lambda *_a, **_k: PublishResult("/tmp/effective.toml"), runner=Docker())
+        object.__setattr__(request, "repo_root", str(alias))
+        from docker.versioning import build_cache as build_cache_module
+        from docker.versioning import project_state as project_state_module
+        protected_roots = (
+            runtime_artifacts_child(self.cache).resolve(),
+            versioning_child(self.cache).resolve(),
+        )
+        project_accesses: list[Path] = []
+        build_cache_accesses: list[Path] = []
+        global_cache_accesses: list[tuple[str, Path]] = []
+        real_resolve_project_state = project_state_module.resolve_project_state
+        real_open_build_cache_state = build_cache_module.open_build_cache_state
+        real_os_open = os.open
+        real_os_close = os.close
+        directory_fds: dict[int, Path] = {}
+
+        def record_project_state(path, *args, **kwargs):
+            project_accesses.append(Path(path).resolve(strict=True))
+            return real_resolve_project_state(path, *args, **kwargs)
+        def record_build_cache(path, *args, **kwargs):
+            build_cache_accesses.append(Path(path).resolve(strict=True))
+            return real_open_build_cache_state(path, *args, **kwargs)
+        def record_os_open(path, flags, mode=0o777, *, dir_fd=None):
+            raw_path = Path(path)
+            if raw_path.is_absolute():
+                candidate = raw_path
+            elif dir_fd is not None and dir_fd in directory_fds:
+                candidate = directory_fds[dir_fd] / raw_path
+            else:
+                candidate = Path.cwd() / raw_path
+            resolved = candidate.resolve(strict=False)
+            fd = real_os_open(path, flags, mode, dir_fd=dir_fd)
+            if flags & os.O_DIRECTORY:
+                directory_fds[fd] = resolved
+            if any(resolved == root or root in resolved.parents for root in protected_roots):
+                global_cache_accesses.append(("os.open", resolved))
+            return fd
+
+        def record_os_close(fd):
+            try:
+                return real_os_close(fd)
+            finally:
+                directory_fds.pop(fd, None)
+
+        with patch.object(project_state_module, "resolve_project_state", side_effect=record_project_state), patch.object(
+            build_cache_module, "open_build_cache_state", side_effect=record_build_cache
+        ), patch("os.open", side_effect=record_os_open), patch("os.close", side_effect=record_os_close):
+            result = orchestrate_build(request)
+
+        self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
+        self.assertTrue(project_accesses)
+        self.assertTrue(all(path == self.repo.resolve() for path in project_accesses))
+        self.assertNotIn(other.resolve(), project_accesses)
+        self.assertTrue(build_cache_accesses)
+        self.assertTrue(all(path == self.repo.resolve() for path in build_cache_accesses))
+        self.assertNotIn(other.resolve(), build_cache_accesses)
+        self.assertEqual([], global_cache_accesses, f"unexpected global cache access: {global_cache_accesses}")
+        self.assertEqual(1, len(docker_calls))
+        self.assertEqual(4, len(materialized_paths))
+        self.assertTrue(all(path.exists() for path in materialized_paths))
+        self.assertEqual(other_snapshot, self._tree_snapshot(other_state.build_artifacts_root))
+        self.assertEqual(global_snapshot, {path: (path.read_bytes(), path.stat().st_mode) for path in global_snapshot})
+        self.assertTrue(all(not path.exists() for path in old_paths))
+        selected = _test_selected_artifacts(None)
+        committed = json.loads((selected_state.build_artifacts_root / "committed-build.json").read_text())
+        self.assertEqual(sorted(f"sha256:{item.identity.hex_digest()}" for item in selected), committed["blobs"])
+        self.assertTrue(old_identities.isdisjoint({DigestIdentity.from_hex(*item.split(":", 1)) for item in committed["blobs"]}))
 
 
 class TestPiMaterializationBoundary(unittest.TestCase):
