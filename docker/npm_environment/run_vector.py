@@ -39,6 +39,11 @@ LOCKFILE_CONTAINER_PATH = "/work/package-lock.json"
 #: override when corporate trust is enabled.
 SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 
+#: npm does not necessarily ask Node to use the operating-system CA store.
+#: Point npm explicitly at the fixed container path whenever a reviewed trust
+#: bundle is mounted; the machine-local host path remains absent from env.
+NPM_CONFIG_CAFILE = "npm_config_cafile"
+
 #: Standard proxy variable names emitted at runtime.  The endpoint is copied
 #: verbatim across every uppercase/lowercase HTTP, HTTPS, and ALL variable.
 PROXY_URL_ENV_NAMES: tuple[str, ...] = (
@@ -177,6 +182,7 @@ def render_run_vector(
                 for bypass_name in PROXY_BYPASS_ENV_NAMES:
                     env.append((bypass_name, corporate_network.proxy_no_proxy))
         if corporate_network.corporate_trust_bundle is not None:
+            env.append((NPM_CONFIG_CAFILE, SYSTEM_CA_BUNDLE))
             mounts.append(
                 Mount(
                     corporate_network.corporate_trust_bundle,

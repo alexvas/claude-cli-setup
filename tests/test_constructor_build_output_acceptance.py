@@ -93,6 +93,7 @@ class TestBuildOutputEndToEnd(unittest.TestCase):
             "            output_identity='1' * 64,\n"
             "            tree_digest='2' * 64,\n"
             "            assembler_evidence_digest='3' * 64,\n"
+            "            assembler_evidence_bytes_digest='5' * 64,\n"
             "            launcher_evidence_digest='4' * 64,\n"
             "        )\n"
             "    build_orchestration.materialize_build_artifacts = materialize\n"

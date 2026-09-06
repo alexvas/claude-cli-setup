@@ -36,6 +36,7 @@ from docker.npm_environment import (
     CorporateNetworkPolicy,
     LockedNpmError,
     RootSpec,
+    NPM_CONFIG_CAFILE,
     SYSTEM_CA_BUNDLE,
     PROXY_BYPASS_ENV_NAMES,
     PROXY_URL_ENV_NAMES,
@@ -232,12 +233,14 @@ class TestEnabledDisabledProjection(unittest.TestCase):
         self.assertEqual(
             set(env),
             {"HOME", "npm_config_cache", "REVIEWED_NODE_VERSION",
-             "REVIEWED_NPM_VERSION"}
+             "REVIEWED_NPM_VERSION", NPM_CONFIG_CAFILE}
             | {name for name, _value in npm_policy_env()},
         )
 
     def test_enabled_trust_mounted_readonly_at_fixed_path(self):
-        mounts = _vector(policy=_policy()).mounts
+        vector = _vector(policy=_policy())
+        self.assertEqual(dict(vector.env)[NPM_CONFIG_CAFILE], SYSTEM_CA_BUNDLE)
+        mounts = vector.mounts
         trust = [m for m in mounts if m.container == SYSTEM_CA_BUNDLE]
         self.assertEqual(len(trust), 1)
         self.assertEqual(trust[0].host, _TRUST_BUNDLE)
@@ -279,12 +282,14 @@ class TestOnlyResolvedPolicyReceived(_AssemblerTestBase):
         self.assertEqual(
             set(env),
             base | set(PROXY_URL_ENV_NAMES) | set(PROXY_BYPASS_ENV_NAMES)
+            | {NPM_CONFIG_CAFILE}
             | {name for name, _value in npm_policy_env()},
         )
         for name in PROXY_URL_ENV_NAMES:
             self.assertEqual(env[name], _PROXY)
         for name in PROXY_BYPASS_ENV_NAMES:
             self.assertEqual(env[name], _NO_PROXY)
+        self.assertEqual(env[NPM_CONFIG_CAFILE], SYSTEM_CA_BUNDLE)
 
         volumes = _volumes(argv)
         self.assertIn(f"{_TRUST_BUNDLE}:{SYSTEM_CA_BUNDLE}:ro", volumes)

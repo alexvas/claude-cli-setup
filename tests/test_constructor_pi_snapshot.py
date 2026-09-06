@@ -87,6 +87,7 @@ def _derived_source(parts) -> DerivedEnvironmentSource:
         assembler_evidence=parts.assembler_evidence,
         launcher_evidence=parts.launcher_evidence.data,
         assembler_evidence_digest=parts.assembler_evidence_digest,
+        assembler_evidence_bytes_digest=parts.assembler_evidence_bytes_digest,
         launcher_evidence_digest=parts.launcher_evidence_digest,
         assembled_output_identity=parts.output_identity,
         canonical_tree_digest=parts.tree_digest,
@@ -317,6 +318,9 @@ class TestPiSnapshotValidation(unittest.TestCase):
     def test_each_attestation_value_incorrect_rejected(self):
         cases = {
             "assembler_evidence_digest": (
+                "assembler evidence body digest does not match the attestation"
+            ),
+            "assembler_evidence_bytes_digest": (
                 "assembler evidence digest does not match the attestation"
             ),
             "launcher_evidence_digest": (

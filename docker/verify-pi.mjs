@@ -95,6 +95,9 @@ const piVersion = requireEnv("PI_VERSION");
 const assembledOutputIdentity = requireEnv("PI_ASSEMBLED_OUTPUT_IDENTITY");
 const treeDigest = requireEnv("PI_TREE_DIGEST");
 const assemblerEvidenceDigest = requireEnv("PI_ASSEMBLER_EVIDENCE_DIGEST");
+const assemblerEvidenceBytesDigest = requireEnv(
+  "PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST",
+);
 const launcherEvidenceDigest = requireEnv("PI_LAUNCHER_EVIDENCE_DIGEST");
 
 const piRoot = resolve(process.env.PI_ROOT || "/opt/pi");
@@ -106,8 +109,15 @@ const launcherPath = join(piRoot, "bin", "pi");
 
 // ── 1. Assembler evidence: strict shape, canonical digest, output identity ──
 
+const assemblerEvidenceBytes = readFileSync(assemblerEvidencePath);
+if (sha256(assemblerEvidenceBytes) !== assemblerEvidenceBytesDigest) {
+  fail(
+    "serialized assembler evidence digest does not match " +
+      "PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST",
+  );
+}
 const assemblerEvidence = requireObject(
-  JSON.parse(readFileSync(assemblerEvidencePath, "utf8")),
+  JSON.parse(assemblerEvidenceBytes.toString("utf8")),
   "assembler evidence",
 );
 requireExactKeys(

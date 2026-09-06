@@ -114,12 +114,14 @@ class DerivedEnvironment:
     assembled_output_identity: str
     canonical_tree_digest: str
     assembler_evidence_digest: str
+    assembler_evidence_bytes_digest: str
     consumer_launcher_evidence_digest: str
 
     def __post_init__(self) -> None:
         if not all(isinstance(value, str) and value for value in (
             self.assembled_output_identity, self.canonical_tree_digest,
-            self.assembler_evidence_digest, self.consumer_launcher_evidence_digest,
+            self.assembler_evidence_digest, self.assembler_evidence_bytes_digest,
+            self.consumer_launcher_evidence_digest,
         )):
             raise ValueError("derived-environment attestation values must be non-empty")
 
@@ -524,6 +526,7 @@ _PI_ATTESTATION_ARGS: tuple[tuple[str, str], ...] = (
     ("PI_ASSEMBLED_OUTPUT_IDENTITY", "assembled_output_identity"),
     ("PI_TREE_DIGEST", "canonical_tree_digest"),
     ("PI_ASSEMBLER_EVIDENCE_DIGEST", "assembler_evidence_digest"),
+    ("PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST", "assembler_evidence_bytes_digest"),
     ("PI_LAUNCHER_EVIDENCE_DIGEST", "consumer_launcher_evidence_digest"),
 )
 

@@ -19,6 +19,7 @@ injectable, so tests can drive the full pipeline without a Docker daemon.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 
 from docker.npm_environment import (
@@ -96,6 +97,9 @@ class PiMaterialization:
     output_identity: str
     tree_digest: str
     assembler_evidence_digest: str
+    """Canonical evidence-body digest bound into assembled-output identity."""
+    assembler_evidence_bytes_digest: str
+    """SHA-256 of the exact serialized assembler-evidence bytes."""
     launcher_evidence_digest: str
 
 
@@ -199,6 +203,7 @@ def materialize_pi(request: PiAssemblyRequest) -> PiMaterialization:
         raise
     emit(request.event_sink, HostPhaseEvent(HostPhase.DERIVED_VALIDATION, HostPhaseState.SUCCEEDED))
 
+    evidence_bytes = result.evidence_path.read_bytes()
     return PiMaterialization(
         result=result,
         launcher_plan=launcher_plan,
@@ -206,6 +211,7 @@ def materialize_pi(request: PiAssemblyRequest) -> PiMaterialization:
         output_identity=result.output_identity,
         tree_digest=result.tree_digest,
         assembler_evidence_digest=result.evidence_digest,
+        assembler_evidence_bytes_digest=hashlib.sha256(evidence_bytes).hexdigest(),
         launcher_evidence_digest=evidence.digest,
     )
 

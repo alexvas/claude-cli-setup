@@ -202,8 +202,8 @@ class TestDockerfileBuildContract(unittest.TestCase):
             "PYTHON_VERSION", "TY_VERSION", "RTK_VERSION", "RTK_SHA256",
             "FD_VERSION", "FD_SHA256", "PI_VERSION", "OPENSPEC_VERSION",
             "PI_ASSEMBLED_OUTPUT_IDENTITY", "PI_TREE_DIGEST",
-            "PI_ASSEMBLER_EVIDENCE_DIGEST", "PI_LAUNCHER_EVIDENCE_DIGEST",
-            "OH_MY_ZSH_VERSION", "PI_CORPORATE_PROXY_URL", "PI_CORPORATE_NO_PROXY",
+            "PI_ASSEMBLER_EVIDENCE_DIGEST", "PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST",
+            "PI_LAUNCHER_EVIDENCE_DIGEST", "OH_MY_ZSH_VERSION", "PI_CORPORATE_PROXY_URL", "PI_CORPORATE_NO_PROXY",
             "CORPORATE_TRUST_ENABLED", "PI_CORPORATE_CA_PATH", "DEV_UID", "DEV_GID",
         }
         declared = set(re.findall(r"^ARG\s+([A-Z][A-Z0-9_]*)", DOCKERFILE, re.MULTILINE))
@@ -221,7 +221,8 @@ class TestDockerfileBuildContract(unittest.TestCase):
         # ARG-provided environment, not via ``${...}`` interpolation.
         pi_verification_arguments = {
             "PI_VERSION", "PI_ASSEMBLED_OUTPUT_IDENTITY", "PI_TREE_DIGEST",
-            "PI_ASSEMBLER_EVIDENCE_DIGEST", "PI_LAUNCHER_EVIDENCE_DIGEST",
+            "PI_ASSEMBLER_EVIDENCE_DIGEST", "PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST",
+            "PI_LAUNCHER_EVIDENCE_DIGEST",
         }
         for name in rendered - helper_arguments - identity_arguments - pi_verification_arguments:
             with self.subTest(argument=name):

@@ -195,6 +195,9 @@ class _Scenario:
             "PI_ASSEMBLED_OUTPUT_IDENTITY": self.output_identity,
             "PI_TREE_DIGEST": self.tree_digest,
             "PI_ASSEMBLER_EVIDENCE_DIGEST": self.evidence_digest,
+            "PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST": _sha256(
+                serialize_evidence(self.assembler_evidence)
+            ),
             "PI_LAUNCHER_EVIDENCE_DIGEST": self.launcher_evidence_digest,
             "PI_ROOT": str(self.pi_root),
             "PI_ASSEMBLER_EVIDENCE_PATH": str(
@@ -262,6 +265,12 @@ class TestVerifyPiScript(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("tree digest", proc.stderr)
 
+    def test_modified_serialized_evidence_bytes_digest_fails(self) -> None:
+        scenario = self._scenario()
+        proc = scenario.run_verify(PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST="f" * 64)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("serialized assembler evidence digest", proc.stderr)
+
     def test_modified_evidence_body_with_unchanged_digest_fields_fails(self) -> None:
         scenario = self._scenario()
         evidence = json.loads(
@@ -270,10 +279,13 @@ class TestVerifyPiScript(unittest.TestCase):
         # Tamper with a body field while leaving the top-level digest fields
         # (evidence_digest/output_identity/tree_digest) unchanged.
         evidence["body"]["npm_policy_flags"].append("--tampered")
-        (scenario.evidence_dir / "pi-assembler-evidence.json").write_text(
+        evidence_path = scenario.evidence_dir / "pi-assembler-evidence.json"
+        evidence_path.write_text(
             json.dumps(evidence, sort_keys=True, separators=(",", ":"))
         )
-        proc = scenario.run_verify()
+        proc = scenario.run_verify(
+            PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST=_sha256(evidence_path.read_bytes())
+        )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("evidence body digest", proc.stderr)
 
@@ -283,10 +295,13 @@ class TestVerifyPiScript(unittest.TestCase):
             serialize_evidence(scenario.assembler_evidence).decode()
         )
         evidence["output_identity"] = "f" * 64
-        (scenario.evidence_dir / "pi-assembler-evidence.json").write_text(
+        evidence_path = scenario.evidence_dir / "pi-assembler-evidence.json"
+        evidence_path.write_text(
             json.dumps(evidence, sort_keys=True, separators=(",", ":"))
         )
-        proc = scenario.run_verify()
+        proc = scenario.run_verify(
+            PI_ASSEMBLER_EVIDENCE_BYTES_DIGEST=_sha256(evidence_path.read_bytes())
+        )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("output identity", proc.stderr)
 

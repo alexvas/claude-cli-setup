@@ -225,7 +225,8 @@ def build_pi_attestation(
         tree_digest=manifest.digest,
         output_identity=output_identity.digest,
         assembler_evidence=evidence_bytes,
-        assembler_evidence_digest=hashlib.sha256(evidence_bytes).hexdigest(),
+        assembler_evidence_digest=evidence_digest,
+        assembler_evidence_bytes_digest=hashlib.sha256(evidence_bytes).hexdigest(),
         launcher_plan=launcher_plan,
         launcher_evidence=launcher_ev,
         launcher_evidence_digest=launcher_ev.digest,
@@ -257,6 +258,7 @@ def fake_pi_materialization(*args, **kwargs) -> object:
         output_identity=parts.output_identity,
         tree_digest=parts.tree_digest,
         assembler_evidence_digest=parts.assembler_evidence_digest,
+        assembler_evidence_bytes_digest=parts.assembler_evidence_bytes_digest,
         launcher_evidence_digest=parts.launcher_evidence_digest,
     )
 

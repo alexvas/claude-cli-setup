@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Docker-host acceptance validator for OpenSpec change
+# bound-pi-assembly-execution, Phase 6. No npm registry is started or used.
+set -uo pipefail
+
+readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+readonly HARNESS="tests/test_bound_pi_assembly_execution_phase6_host.py"
+readonly PREFIX="dc-bound-pi-phase6-host"
+
+usage() {
+  printf 'Usage: %s [--evidence-dir DIR]\n' "${0##*/}"
+}
+
+EVIDENCE_DIR=""
+while (($#)); do
+  case "$1" in
+    --evidence-dir)
+      (($# >= 2)) || { usage >&2; exit 2; }
+      EVIDENCE_DIR=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'error: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$EVIDENCE_DIR" ]]; then
+  EVIDENCE_DIR="$ROOT/validation-evidence/bound-pi-assembly-execution-phase6-host-$(date -u +%Y%m%dT%H%M%SZ)"
+fi
+mkdir -p -- "$EVIDENCE_DIR" || exit 1
+EVIDENCE_DIR="$(cd -- "$EVIDENCE_DIR" && pwd -P)"
+readonly EVIDENCE_DIR
+readonly LOG="$EVIDENCE_DIR/validation.log"
+readonly REPORT="$EVIDENCE_DIR/report.json"
+readonly RUN_ID="${PREFIX}-$$-$(date -u +%s)"
+readonly RESOURCE_FILE="$EVIDENCE_DIR/assembler-containers.txt"
+: > "$RESOURCE_FILE"
+STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STATUS=1
+DETAIL="validation did not complete"
+
+write_report() {
+  local finished
+  finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  VALIDATION_STATUS="$STATUS" VALIDATION_DETAIL="$DETAIL" \
+  VALIDATION_STARTED="$STARTED" VALIDATION_FINISHED="$finished" \
+  VALIDATION_RUN_ID="$RUN_ID" VALIDATION_LOG="$LOG" \
+  python3 - "$REPORT" <<'PY'
+import json, os, pathlib, sys
+report = {
+    "schema_version": 1,
+    "change": "bound-pi-assembly-execution",
+    "phase": 6,
+    "tier": "host-without-local-registry",
+    "run_id": os.environ["VALIDATION_RUN_ID"],
+    "started_at": os.environ["VALIDATION_STARTED"],
+    "finished_at": os.environ["VALIDATION_FINISHED"],
+    "passed": os.environ["VALIDATION_STATUS"] == "0",
+    "detail": os.environ["VALIDATION_DETAIL"],
+    "log": os.environ["VALIDATION_LOG"],
+    "public_npm_registry_used": False,
+    "local_registry_used": False,
+}
+pathlib.Path(sys.argv[1]).write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+PY
+}
+
+cleanup() {
+  local rc=$?
+  if command -v docker >/dev/null 2>&1; then
+    mapfile -t containers < <(sort -u "$RESOURCE_FILE" 2>/dev/null || true)
+    ((${#containers[@]} == 0)) || docker rm -f "${containers[@]}" >/dev/null 2>&1 || true
+    mapfile -t networks < <(docker network ls -q --filter "label=com.docker-constructor.phase6-run=$RUN_ID" 2>/dev/null || true)
+    for network in "${networks[@]}"; do docker network rm "$network" >/dev/null 2>&1 || true; done
+  fi
+  [[ $STATUS -eq 0 ]] || STATUS=$rc
+  write_report || true
+  printf 'Evidence: %s\n' "$EVIDENCE_DIR"
+}
+trap cleanup EXIT INT TERM HUP
+
+exec > >(tee -a "$LOG") 2>&1
+cd -- "$ROOT"
+printf '[%s] Starting host validator; run_id=%s\n' "$STARTED" "$RUN_ID"
+
+command -v docker >/dev/null 2>&1 || { DETAIL='docker executable is required'; exit 127; }
+docker info >/dev/null 2>&1 || { DETAIL='Docker daemon is unavailable'; exit 1; }
+[[ -f "$HARNESS" ]] || {
+  DETAIL="Phase 6 host harness is not implemented: $HARNESS"
+  printf 'error: %s\n' "$DETAIL" >&2
+  exit 3
+}
+
+export BOUND_PI_PHASE6_RUN_ID="$RUN_ID"
+export BOUND_PI_PHASE6_EVIDENCE_DIR="$EVIDENCE_DIR"
+export BOUND_PI_PHASE6_RESOURCE_FILE="$RESOURCE_FILE"
+export BOUND_PI_PHASE6_FORBID_REGISTRY=1
+
+if ! python3 -m unittest -v tests.test_bound_pi_assembly_execution_phase6_host; then
+  DETAIL='host acceptance harness failed'
+  exit 1
+fi
+
+orphans=""
+while IFS= read -r name; do
+  [[ -n "$name" ]] || continue
+  if docker inspect "$name" >/dev/null 2>&1; then orphans+="${orphans:+ }$name"; fi
+done < <(sort -u "$RESOURCE_FILE")
+if [[ -n "$orphans" ]]; then
+  DETAIL='host acceptance left labeled Docker containers'
+  printf 'error: %s: %s\n' "$DETAIL" "$orphans" >&2
+  exit 1
+fi
+
+STATUS=0
+DETAIL='host acceptance passed without an npm registry'
+printf '[%s] PASS: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$DETAIL"

@@ -743,6 +743,7 @@ def execute_build(
             assembled_output_identity=pi_materialization.output_identity,
             canonical_tree_digest=pi_materialization.tree_digest,
             assembler_evidence_digest=pi_materialization.assembler_evidence_digest,
+            assembler_evidence_bytes_digest=pi_materialization.assembler_evidence_bytes_digest,
             consumer_launcher_evidence_digest=pi_materialization.launcher_evidence_digest,
         )
         derived = DerivedEnvironmentSource(
@@ -752,6 +753,7 @@ def execute_build(
             assembler_evidence=pi_materialization.result.evidence_path.read_bytes(),
             launcher_evidence=pi_materialization.launcher_evidence.data,
             assembler_evidence_digest=attestation.assembler_evidence_digest,
+            assembler_evidence_bytes_digest=attestation.assembler_evidence_bytes_digest,
             launcher_evidence_digest=attestation.consumer_launcher_evidence_digest,
             assembled_output_identity=attestation.assembled_output_identity,
             canonical_tree_digest=attestation.canonical_tree_digest,

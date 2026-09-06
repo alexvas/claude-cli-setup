@@ -36,6 +36,15 @@ The assembler SHALL make ongoing execution observable to an authorized text-mode
 - **WHEN** assembler output contains a configured proxy endpoint, trust path, or supplied secret
 - **THEN** every displayed, returned, and persisted representation SHALL replace that value with a redaction marker
 
+### Requirement: Distinguish canonical and serialized assembler evidence digests
+The constructor SHALL retain the canonical assembler evidence-body digest as the value bound into assembled-output identity and semantic in-image verification. It SHALL separately compute and carry the SHA-256 digest of the exact serialized assembler evidence bytes used for host snapshot admission. Snapshot admission SHALL verify the serialized bytes against only the serialized-evidence digest and SHALL independently parse and validate the canonical body digest. Both digest bindings SHALL be represented in the derived build input without substituting one meaning for the other.
+
+#### Scenario: Assembler evidence enters the build snapshot
+- **WHEN** a verified assembled environment is admitted into the constructor snapshot
+- **THEN** the exact evidence bytes SHALL match the serialized-evidence digest
+- **AND** the parsed evidence body SHALL match its canonical evidence-body digest and assembled-output identity
+- **AND** changing either digest binding SHALL invalidate the derived build input
+
 ### Requirement: Clean failed assembler executions without discarding reusable cache
 On timeout, cancellation, interruption, executor failure, or nonzero exit, the assembler SHALL force-remove its named container and remove mutable staging. It SHALL preserve prior immutable published environments and the shared opaque npm download cache. Abandoned same-input staging SHALL be detected under the existing private input-identity coordination boundary and handled without adopting it as valid output.
 

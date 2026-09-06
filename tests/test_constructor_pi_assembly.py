@@ -60,6 +60,12 @@ def _projection():
     return resolve_build_projection(inv.build, {}, platform="linux-amd64")
 
 
+def _evidence_path() -> Path:
+    path = Path(tempfile.mkdtemp()) / "evidence.json"
+    path.write_bytes(b"serialized assembler evidence")
+    return path
+
+
 class TestMaterializePiOrchestration(unittest.TestCase):
     def test_preflight_precedes_assembly_and_binds_exact_inputs(self):
         package = pi_install_package_bytes()
@@ -85,7 +91,7 @@ class TestMaterializePiOrchestration(unittest.TestCase):
                 tree_digest=build_tree_manifest(env_root).digest,
                 evidence_digest="e" * 64,
                 output_identity="o" * 64,
-                evidence_path=Path(tempfile.mkdtemp()) / "evidence.json",
+                evidence_path=_evidence_path(),
             )
 
         projection = _projection()
@@ -126,6 +132,10 @@ class TestMaterializePiOrchestration(unittest.TestCase):
         # Attestation bindings are carried through to the result.
         self.assertEqual(result.output_identity, "o" * 64)
         self.assertEqual(result.assembler_evidence_digest, "e" * 64)
+        self.assertEqual(
+            result.assembler_evidence_bytes_digest,
+            hashlib.sha256(b"serialized assembler evidence").hexdigest(),
+        )
         self.assertEqual(result.tree_digest, result.result.tree_digest)
         self.assertEqual(len(result.launcher_evidence_digest), 64)
         self.assertIn(PI_BIN_TARGET, result.launcher_plan.contents.decode())
@@ -146,7 +156,7 @@ class TestMaterializePiOrchestration(unittest.TestCase):
                 tree_digest=build_tree_manifest(env_root).digest,
                 evidence_digest="e" * 64,
                 output_identity="o" * 64,
-                evidence_path=Path(tempfile.mkdtemp()) / "evidence.json",
+                evidence_path=_evidence_path(),
             )
 
         with patch.object(pi_assembly, "assemble_environment", side_effect=fake_assemble):
@@ -183,7 +193,7 @@ class TestMaterializePiOrchestration(unittest.TestCase):
                 tree_digest=build_tree_manifest(env_root).digest,
                 evidence_digest="e" * 64,
                 output_identity="o" * 64,
-                evidence_path=Path(tempfile.mkdtemp()) / "evidence.json",
+                evidence_path=_evidence_path(),
             )
 
         with patch.object(pi_assembly, "assemble_environment", side_effect=fake_assemble):

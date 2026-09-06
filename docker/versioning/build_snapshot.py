@@ -80,6 +80,9 @@ class DerivedEnvironmentSource:
     launcher_evidence: bytes
 
     assembler_evidence_digest: str
+    """Canonical digest of the parsed assembler evidence body."""
+
+    assembler_evidence_bytes_digest: str
     """SHA-256 of the exact assembler-evidence bytes."""
 
     launcher_evidence_digest: str
@@ -330,12 +333,16 @@ def _validate_derived_environment(derived: DerivedEnvironmentSource) -> Assemble
     try:
         if (
             hashlib.sha256(derived.assembler_evidence).hexdigest()
-            != derived.assembler_evidence_digest
+            != derived.assembler_evidence_bytes_digest
         ):
             raise SnapshotError(
                 "assembler evidence digest does not match the attestation"
             )
         evidence = parse_evidence(derived.assembler_evidence)
+        if evidence.evidence_digest != derived.assembler_evidence_digest:
+            raise SnapshotError(
+                "assembler evidence body digest does not match the attestation"
+            )
         if evidence.output_identity != derived.assembled_output_identity:
             raise SnapshotError(
                 "assembler evidence output identity does not match the attestation"
