@@ -26,6 +26,11 @@ from docker.versioning.effective import resolve_build_projection
 from docker.versioning.inventory import load_inventory
 from docker.versioning.pi_assembly import PiAssemblyRequest, materialize_pi
 from docker.versioning.pi_release import PiReleaseSource, derive_pi_release_urls
+from docker.versioning.host_progress import (
+    HostDiagnosticEvent, HostDiagnosticStream, HostPhase, HostPhaseEvent,
+    HostPhaseState,
+)
+from docker.npm_environment.streaming import StreamChunk
 from docker.npm_environment.errors import LockedNpmError
 from docker.npm_environment.preflight import _parse_install_package
 from docker.npm_environment import (
@@ -124,6 +129,105 @@ class TestMaterializePiOrchestration(unittest.TestCase):
         self.assertEqual(result.tree_digest, result.result.tree_digest)
         self.assertEqual(len(result.launcher_evidence_digest), 64)
         self.assertIn(PI_BIN_TARGET, result.launcher_plan.contents.decode())
+
+    def test_materialization_emits_ordered_host_phase_events(self):
+        package = pi_install_package_bytes()
+        lock = pi_install_lock_bytes()
+        source = PiReleaseSource(PI_PACKAGE, "earendil-works/pi", "v")
+        transport = FakePiReleaseTransport(
+            derive_pi_release_urls(source, "0.84.4"), package=package, lock=lock
+        )
+        events = []
+
+        def fake_assemble(**kwargs):
+            env_root = assembled_pi_tree()
+            return SimpleNamespace(
+                environment_root=env_root,
+                tree_digest=build_tree_manifest(env_root).digest,
+                evidence_digest="e" * 64,
+                output_identity="o" * 64,
+                evidence_path=Path(tempfile.mkdtemp()) / "evidence.json",
+            )
+
+        with patch.object(pi_assembly, "assemble_environment", side_effect=fake_assemble):
+            materialize_pi(PiAssemblyRequest(
+                projection=_projection(), transport=transport,
+                cache_root=Path(tempfile.mkdtemp()), executor=SimpleNamespace(),
+                event_sink=events.append,
+            ))
+
+        phases = [event for event in events if isinstance(event, HostPhaseEvent)]
+        self.assertEqual(phases, [
+            HostPhaseEvent(HostPhase.RELEASE_ACQUISITION, HostPhaseState.STARTED),
+            HostPhaseEvent(HostPhase.RELEASE_ACQUISITION, HostPhaseState.SUCCEEDED),
+            HostPhaseEvent(HostPhase.LOCKED_ASSEMBLY, HostPhaseState.STARTED),
+            HostPhaseEvent(HostPhase.LOCKED_ASSEMBLY, HostPhaseState.SUCCEEDED),
+            HostPhaseEvent(HostPhase.DERIVED_VALIDATION, HostPhaseState.STARTED),
+            HostPhaseEvent(HostPhase.DERIVED_VALIDATION, HostPhaseState.SUCCEEDED),
+        ])
+
+    def test_diagnostics_are_typed_and_precede_assembly_terminal(self):
+        package = pi_install_package_bytes()
+        lock = pi_install_lock_bytes()
+        source = PiReleaseSource(PI_PACKAGE, "earendil-works/pi", "v")
+        transport = FakePiReleaseTransport(
+            derive_pi_release_urls(source, "0.84.4"), package=package, lock=lock
+        )
+        events = []
+
+        def fake_assemble(**kwargs):
+            kwargs["sink"](StreamChunk("stderr", "already-redacted EOF partial"))
+            env_root = assembled_pi_tree()
+            return SimpleNamespace(
+                environment_root=env_root,
+                tree_digest=build_tree_manifest(env_root).digest,
+                evidence_digest="e" * 64,
+                output_identity="o" * 64,
+                evidence_path=Path(tempfile.mkdtemp()) / "evidence.json",
+            )
+
+        with patch.object(pi_assembly, "assemble_environment", side_effect=fake_assemble):
+            materialize_pi(PiAssemblyRequest(
+                projection=_projection(), transport=transport,
+                cache_root=Path(tempfile.mkdtemp()), executor=SimpleNamespace(),
+                event_sink=events.append,
+            ))
+
+        diagnostic = HostDiagnosticEvent(
+            HostPhase.LOCKED_ASSEMBLY, HostDiagnosticStream.STDERR,
+            "already-redacted EOF partial",
+        )
+        self.assertIn(diagnostic, events)
+        self.assertLess(events.index(diagnostic), events.index(HostPhaseEvent(
+            HostPhase.LOCKED_ASSEMBLY, HostPhaseState.SUCCEEDED,
+        )))
+
+    def test_failed_assembly_has_one_terminal_and_starts_no_later_phase(self):
+        package = pi_install_package_bytes()
+        lock = pi_install_lock_bytes()
+        source = PiReleaseSource(PI_PACKAGE, "earendil-works/pi", "v")
+        transport = FakePiReleaseTransport(
+            derive_pi_release_urls(source, "0.84.4"), package=package, lock=lock
+        )
+        events = []
+        with patch.object(
+            pi_assembly, "assemble_environment", side_effect=RuntimeError("secret")
+        ):
+            with self.assertRaises(RuntimeError):
+                materialize_pi(PiAssemblyRequest(
+                    projection=_projection(), transport=transport,
+                    cache_root=Path(tempfile.mkdtemp()), executor=SimpleNamespace(),
+                    event_sink=events.append,
+                ))
+        self.assertEqual(1, events.count(HostPhaseEvent(
+            HostPhase.LOCKED_ASSEMBLY, HostPhaseState.FAILED,
+        )))
+        self.assertFalse(any(
+            isinstance(event, HostPhaseEvent)
+            and event.phase is HostPhase.DERIVED_VALIDATION
+            for event in events
+        ))
+        self.assertNotIn("secret", repr(events))
 
     def test_npm_policy_never_enables_bin_links_or_engine_strict(self):
         self.assertIn("--no-bin-links", npm_policy_flags())

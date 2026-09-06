@@ -1,6 +1,7 @@
 """Regression coverage for Docker build output policies and rendering."""
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import subprocess
@@ -18,6 +19,8 @@ from docker.versioning.build_orchestration import (
     BuildRequest, BuildResult, PublishResult, SubprocessBuildExecutor, orchestrate_build,
 )
 from docker.versioning.dispatch_types import ExitKind
+from docker.versioning.host_progress import HostPhase, HostPhaseEvent, HostPhaseState
+from docker.versioning.pi_assembly import PiAssemblyError
 
 
 class RecordingExecutor:
@@ -103,6 +106,46 @@ class TestSubprocessBuildExecutor(unittest.TestCase):
                          (result.return_code, result.stdout, result.stderr, result.output_policy))
 
 class TestBuildFailuresAndProgress(unittest.TestCase):
+    def test_transition_is_terminal_before_docker_and_keeps_progress_argument(self):
+        events = []
+
+        class OrderingRunner(RecordingExecutor):
+            def run(self, argv):
+                self.events_at_run = tuple(events)
+                return super().run(argv)
+
+        runner = OrderingRunner(ProcessResult(
+            ("docker",), 0, "", "", BuildOutputPolicy.STREAMED
+        ))
+        request = dataclasses.replace(
+            _request(BuildOutputPolicy.STREAMED, runner, progress="plain"),
+            event_sink=events.append,
+        )
+        result = orchestrate_build(request)
+        transition = (
+            HostPhaseEvent(HostPhase.DOCKER_TRANSITION, HostPhaseState.STARTED),
+            HostPhaseEvent(HostPhase.DOCKER_TRANSITION, HostPhaseState.SUCCEEDED),
+        )
+        self.assertEqual(transition, runner.events_at_run[-2:])
+        position = result.build_args.index("--progress")
+        self.assertEqual("plain", result.build_args[position + 1])
+
+    def test_host_materialization_failure_never_invokes_docker(self):
+        runner = RecordingExecutor(ProcessResult(
+            ("docker",), 0, "", "", BuildOutputPolicy.STREAMED
+        ))
+
+        def failed_materializer(*_args, **_kwargs):
+            raise PiAssemblyError("host failure")
+
+        request = dataclasses.replace(
+            _request(BuildOutputPolicy.STREAMED, runner),
+            _materialize_pi=failed_materializer,
+        )
+        result = orchestrate_build(request)
+        self.assertIs(ExitKind.OPERATIONAL, result.exit_kind)
+        self.assertEqual([], runner.calls)
+
     def test_streamed_failure_reports_code_without_replaying_stderr(self):
         runner = RecordingExecutor(ProcessResult(("docker",), 23, "", "shown once", BuildOutputPolicy.STREAMED))
         result = orchestrate_build(_request(BuildOutputPolicy.STREAMED, runner))

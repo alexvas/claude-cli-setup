@@ -33,6 +33,16 @@ from docker.npm_environment import (
     preflight,
 )
 from docker.versioning.build_materialization import StreamingTransport
+from docker.versioning.host_progress import (
+    HostDiagnosticEvent,
+    HostDiagnosticStream,
+    HostEventSink,
+    HostPhase,
+    HostPhaseEvent,
+    HostPhaseState,
+    emit,
+    guard_sink,
+)
 from docker.versioning.model import EffectiveBuildProjection, PiReleaseSource
 from docker.versioning.pi_consumer import (
     LauncherEvidence,
@@ -70,6 +80,10 @@ class PiAssemblyRequest:
     proxy_url: str | None = None
     proxy_no_proxy: str | None = None
     corporate_trust_bundle: str | None = None
+    event_sink: HostEventSink | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "event_sink", guard_sink(self.event_sink))
 
 
 @dataclass(frozen=True)
@@ -109,13 +123,18 @@ def materialize_pi(request: PiAssemblyRequest) -> PiMaterialization:
     )
 
     # 1. Exact release-asset URLs and checksum-verified acquisition.
+    emit(request.event_sink, HostPhaseEvent(HostPhase.RELEASE_ACQUISITION, HostPhaseState.STARTED))
     urls = derive_pi_release_urls(source, projection.pi_version)
     try:
         package_bytes, lock_bytes = acquire_install_assets(
             urls, lambda url: download_bytes(request.transport, url)
         )
-    except PiReleaseError as exc:
-        raise PiAssemblyError(f"Pi release acquisition failed: {exc}") from exc
+    except BaseException as exc:
+        emit(request.event_sink, HostPhaseEvent(HostPhase.RELEASE_ACQUISITION, HostPhaseState.FAILED))
+        if isinstance(exc, PiReleaseError):
+            raise PiAssemblyError(f"Pi release acquisition failed: {exc}") from exc
+        raise
+    emit(request.event_sink, HostPhaseEvent(HostPhase.RELEASE_ACQUISITION, HostPhaseState.SUCCEEDED))
 
     # 2. Side-effect-free preflight with the exact official lock bytes and
     # the exact official install-package bytes (both are bound assembler
@@ -142,27 +161,43 @@ def materialize_pi(request: PiAssemblyRequest) -> PiMaterialization:
         policy_digest=npm_policy_digest(),
         platform=_ASSEMBLER_PLATFORM,
     )
-    result = assemble_environment(
-        validated=validated,
-        assembler=assembler,
-        cache_root=request.cache_root,
-        executor=request.executor,
-        uid=request.uid,
-        gid=request.gid,
-        corporate_network=_corporate_network(request),
-    )
-
-    # 5. Consumer launcher plan + evidence (containment verified).
-    launcher_plan = plan_launcher(metadata, environment_root=result.environment_root)
-    evidence = launcher_evidence(launcher_plan)
-
-    # 6. Re-verify the published tree against the attested canonical digest
-    # before admitting it to the BuildKit snapshot.
-    recomputed_tree_digest = build_tree_manifest(result.environment_root).digest
-    if recomputed_tree_digest != result.tree_digest:
-        raise PiAssemblyError(
-            "assembled Pi tree digest does not match the attested value"
+    emit(request.event_sink, HostPhaseEvent(HostPhase.LOCKED_ASSEMBLY, HostPhaseState.STARTED))
+    try:
+        result = assemble_environment(
+            validated=validated,
+            assembler=assembler,
+            cache_root=request.cache_root,
+            executor=request.executor,
+            uid=request.uid,
+            gid=request.gid,
+            corporate_network=_corporate_network(request),
+            sink=(
+                lambda chunk: emit(
+                    request.event_sink,
+                    HostDiagnosticEvent(
+                        HostPhase.LOCKED_ASSEMBLY,
+                        HostDiagnosticStream(chunk.stream), chunk.text,
+                    ),
+                )
+            ) if request.event_sink is not None else None,
         )
+    except BaseException:
+        emit(request.event_sink, HostPhaseEvent(HostPhase.LOCKED_ASSEMBLY, HostPhaseState.FAILED))
+        raise
+    emit(request.event_sink, HostPhaseEvent(HostPhase.LOCKED_ASSEMBLY, HostPhaseState.SUCCEEDED))
+
+    # 5–6. Consumer launcher/evidence and the attested-tree verification.
+    emit(request.event_sink, HostPhaseEvent(HostPhase.DERIVED_VALIDATION, HostPhaseState.STARTED))
+    try:
+        launcher_plan = plan_launcher(metadata, environment_root=result.environment_root)
+        evidence = launcher_evidence(launcher_plan)
+        recomputed_tree_digest = build_tree_manifest(result.environment_root).digest
+        if recomputed_tree_digest != result.tree_digest:
+            raise PiAssemblyError("assembled Pi tree digest does not match the attested value")
+    except BaseException:
+        emit(request.event_sink, HostPhaseEvent(HostPhase.DERIVED_VALIDATION, HostPhaseState.FAILED))
+        raise
+    emit(request.event_sink, HostPhaseEvent(HostPhase.DERIVED_VALIDATION, HostPhaseState.SUCCEEDED))
 
     return PiMaterialization(
         result=result,

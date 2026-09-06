@@ -87,6 +87,9 @@ from docker.versioning.pi_assembly import (
     materialize_pi,
 )
 from docker.versioning.pi_consumer import PiConsumerError
+from docker.versioning.host_progress import (
+    HostEventSink, HostPhase, HostPhaseEvent, HostPhaseState, emit, guard_sink,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -254,6 +257,9 @@ class BuildRequest:
     _assembler_executor: object | None = None
     """Injectable assembler ``RunExecutor`` (defaults to DockerRunExecutor)."""
 
+    event_sink: HostEventSink | None = None
+    """Optional facade-owned host materialization presentation sink."""
+
     def __post_init__(self) -> None:
         """Normalize ``overrides`` to an immutable mapping.
 
@@ -263,6 +269,7 @@ class BuildRequest:
         ``MappingProxyType``."""
         if not isinstance(self.output_policy, BuildOutputPolicy):
             raise ValueError("output_policy must be a BuildOutputPolicy")
+        object.__setattr__(self, "event_sink", guard_sink(self.event_sink))
         if not isinstance(self.overrides, MappingProxyType):
             object.__setattr__(self, "overrides", MappingProxyType(
                 dict(self.overrides),
@@ -609,8 +616,7 @@ def _materialize_pi_for_build(
     """
     try:
         if request._materialize_pi is not None:
-            return cast(PiMaterialization, request._materialize_pi(
-                projection,
+            kwargs = dict(
                 transport=transport,
                 cache_root=cache_root,
                 executor=request._assembler_executor,
@@ -625,7 +631,20 @@ def _materialize_pi_for_build(
                     str(plan.host_network_policy.ca_bundle)
                     if plan.host_network_policy.ca_bundle is not None else None
                 ),
-            ))
+            )
+            # The event protocol is optional: old injected materializers keep
+            # their existing call shape, while sink-aware implementations opt in.
+            try:
+                import inspect
+                parameters = inspect.signature(request._materialize_pi).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "event_sink" in parameters or any(
+                parameter.kind is parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            ):
+                kwargs["event_sink"] = request.event_sink
+            return cast(PiMaterialization, request._materialize_pi(projection, **kwargs))
         from docker.npm_environment.execution import DockerRunExecutor
         return materialize_pi(PiAssemblyRequest(
             projection=projection,
@@ -643,6 +662,7 @@ def _materialize_pi_for_build(
                 str(plan.host_network_policy.ca_bundle)
                 if plan.host_network_policy.ca_bundle is not None else None
             ),
+            event_sink=request.event_sink,
         ))
     except _PI_MATERIALIZATION_ERRORS as exc:
         raise SnapshotError(f"Pi materialization failed: {exc}") from exc
@@ -772,6 +792,10 @@ def execute_build(
             )
 
         runner = request.runner or SubprocessBuildExecutor(request.output_policy)
+        emit(request.event_sink, HostPhaseEvent(HostPhase.DOCKER_TRANSITION, HostPhaseState.STARTED))
+        # The host transition is complete before Docker is allowed to present
+        # native BuildKit output. Docker execution itself is not a host phase.
+        emit(request.event_sink, HostPhaseEvent(HostPhase.DOCKER_TRANSITION, HostPhaseState.SUCCEEDED))
         try:
             proc = runner.run(build_args)
         except FileNotFoundError as exc:

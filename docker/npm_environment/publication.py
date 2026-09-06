@@ -577,6 +577,7 @@ def assemble_environment(
     gid: int | None = None,
     secrets: Sequence[str] = (),
     corporate_network: CorporateNetworkPolicy | None = None,
+    sink=None,
 ) -> AssemblyResult:
     """Assemble (or reuse) one locked npm environment and publish it.
 
@@ -623,6 +624,7 @@ def assemble_environment(
             gid=gid,
             secrets=secrets,
             corporate_network=corporate_network,
+            sink=sink,
         )
         try:
             return publish_environment(

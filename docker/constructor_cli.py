@@ -41,6 +41,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 from docker.versioning.dispatch_types import CommandResult, ExitKind
 from docker.versioning.immutable import deep_freeze
 from docker.versioning.model import HostAccessPolicy
+from docker.versioning.host_progress import HostDiagnosticEvent, HostPhaseEvent
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -459,6 +460,7 @@ def _real_dispatcher(
     _create_projection: Any = None,
     _project_selector: Any = None,
     _progress_renderer: Any = None,
+    _host_event_sink: Any = None,
 ) -> CommandResult:
     """Thin facade wrapper that delegates to the internal services.
 
@@ -546,6 +548,7 @@ def _real_dispatcher(
             gid=c_args.get("gid") if c_args.get("gid") is not None else None,
             confirmed=_to_bool(c_args.get("yes", False)),
             dry_run=dry_run,
+            event_sink=_host_event_sink,
         )
 
         result = orchestrate_build(build_request)
@@ -1474,6 +1477,23 @@ def _compact_target(path: str) -> str:
     if path.startswith(prefix):
         return path[len(prefix):]
     return path
+
+
+class _HostEventRenderer:
+    """Facade-owned, line-oriented presentation for host build events."""
+
+    def __init__(self, stream: Any = None) -> None:
+        self._stream = stream if stream is not None else sys.stderr
+
+    def __call__(self, event: Any) -> None:
+        if isinstance(event, HostPhaseEvent):
+            text = f"Pi {event.phase.value.replace('_', ' ')}: {event.state.value}"
+        elif isinstance(event, HostDiagnosticEvent):
+            text = f"Pi {event.phase.value} [{event.stream.value}]: {event.text}"
+        else:
+            return
+        self._stream.write(text if text.endswith("\n") else f"{text}\n")
+        self._stream.flush()
 
 
 class _ProgressRenderer:
@@ -2418,6 +2438,14 @@ def main(
     # text-output check-updates whose stderr is a TTY.  JSON output and
     # non-TTY stderr install no renderer and therefore emit no progress.
     progress_renderer: _ProgressRenderer | None = None
+    host_event_sink: _HostEventRenderer | None = None
+    if (
+        args.command == "build"
+        and args.output == "text"
+        and _stderr_tty
+        and not bool(getattr(args, "dry_run", False))
+    ):
+        host_event_sink = _HostEventRenderer()
     if (
         args.command == "check-updates"
         and args.output == "text"
@@ -2437,6 +2465,7 @@ def main(
                 _create_projection=_create_projection,
                 _project_selector=_project_selector,
                 _progress_renderer=progress_renderer,
+                _host_event_sink=host_event_sink,
             )
         )
     else:
