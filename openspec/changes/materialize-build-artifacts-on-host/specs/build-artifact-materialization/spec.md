@@ -106,17 +106,25 @@ The constructor SHALL permit at most one active image build transaction per cano
 - **AND** SHALL leave verified blobs available as uncommitted cache entries
 
 ### Requirement: Retain one committed build live set
-After and only after a successful Docker build, the constructor SHALL atomically replace the selected external project namespace's committed build manifest with the complete selected build-input digest set. It SHALL then immediately delete every blob removed from the previous committed build set. Shared XDG runtime artifacts SHALL have separate ownership and SHALL NOT be consulted, protected, or deleted by build-cache retention. Existing Docker images SHALL remain independent of source artifact retention, and no image label or historical build generation SHALL be required.
+After and only after Docker successfully builds the image and the constructor successfully removes that transaction's snapshot, the constructor SHALL atomically replace the selected external project namespace's committed build manifest with the complete selected build-input digest set. It SHALL then immediately delete every blob removed from the previous committed build set. Snapshot cleanup failure SHALL prevent commit and post-commit garbage collection, preserve the prior committed build manifest and its blobs, and leave newly verified blobs reusable as uncommitted entries. Shared XDG runtime artifacts SHALL have separate ownership and SHALL NOT be consulted, protected, or deleted by build-cache retention. Existing Docker images SHALL remain independent of source artifact retention, and no image label or historical build generation SHALL be required.
 
-#### Scenario: Committing a successful changed build
+#### Scenario: Committing a successful changed build transaction
 - **WHEN** Docker successfully builds an image with a new selected artifact set
+- **AND** the constructor successfully removes that transaction's snapshot
 - **THEN** the constructor SHALL atomically commit that set
 - **AND** SHALL delete every blob superseded from the prior committed build set
 
-#### Scenario: Preserving the prior set after failure
+#### Scenario: Preserving the prior set after Docker failure
 - **WHEN** Docker build fails or is interrupted
 - **THEN** the prior committed build manifest and its blobs SHALL remain intact
 - **AND** newly verified blobs SHALL remain uncommitted
+
+#### Scenario: Preserving the prior set after snapshot cleanup failure
+- **WHEN** Docker successfully builds an image
+- **AND** removal of that transaction's snapshot fails
+- **THEN** the constructor SHALL NOT commit the selected build-input digest set or garbage-collect superseded blobs
+- **AND** the prior committed build manifest and its blobs SHALL remain intact
+- **AND** newly verified blobs SHALL remain reusable as uncommitted entries
 
 ### Requirement: Expire only abandoned verified artifacts by fixed policy
 A verified project-scoped build blob that is not referenced by the selected constructor project's committed build set and was never superseded through a successful build commit SHALL be retained as uncommitted for a fixed 30 days (2,592,000 seconds) from its verified publication. Expired uncommitted build blobs and markers SHALL be removed during later build-cache maintenance. The TTL SHALL NOT be configurable through reviewed inventory, local configuration, or command options, and SHALL NOT govern shared XDG runtime artifacts.
