@@ -233,12 +233,14 @@ class BuildRequest:
     """Deprecated compatibility injection; builds never invoke it."""
 
     repo_root: str | None = None
-    """Repository root for the fixed corporate trust bundle.
+    """Legacy generated-state plumbing pending Phase 3.
 
-    Mandatory whenever corporate trust is enabled.  It is never inferred
-    from the inventory path; a direct caller that enables corporate trust
-    without supplying it fails closed with a CONFIG error before Docker.
+    This field must never select inventory companions or other project-owned
+    inputs.
     """
+
+    project_root: str | None = None
+    """Selected constructor-project root owning companions and ``.docker-local``."""
 
     # ── injectable projection boundary (faked in tests) ──────────────
     _publish_projection: Callable[..., PublishResult] | None = None
@@ -467,6 +469,9 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
     """
     # 1. Load inventory (CONFIG on missing / invalid TOML / bad schema)
     inv_path = Path(request.inventory_path)
+    local_project_root = (
+        Path(request.project_root) if request.project_root is not None else None
+    )
     try:
         inventory = load_inventory(inv_path)
     except (VersionConfigError, OSError, ValueError, KeyError) as exc:
@@ -483,9 +488,7 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
     try:
         local = resolve_local_corporate_settings(
             inv_path,
-            repository_root=(
-                Path(request.repo_root) if request.repo_root else None
-            ),
+            repository_root=local_project_root,
         )
     except InventoryError as exc:
         return BuildTransactionPlan(
@@ -576,8 +579,9 @@ def plan_build(request: BuildRequest) -> BuildTransactionPlan:
         host_network_policy=HostNetworkPolicy(
             proxy_url=local.network_proxy.url,
             ca_bundle=(
-                Path(request.repo_root) / ".docker-local" / "corporate-ca-bundle.crt"
-                if local.corporate_trust.enabled and request.repo_root else None
+                local_project_root / ".docker-local" / "corporate-ca-bundle.crt"
+                if local.corporate_trust.enabled
+                and local_project_root is not None else None
             ),
         ),
         cache_root=cache_root,

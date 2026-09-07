@@ -622,11 +622,11 @@ class TestExternalAddressEndToEnd(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 6.4  Custom inventory + custom local companion + cache
+# 6.4  Custom inventory path + fixed local companion + cache
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestCustomInventoryWithCache(unittest.TestCase):
-    """6.4: Custom inventory, custom local companion, reviewed cache
+    """6.4: Custom inventory path, fixed local companion, reviewed cache
     TTL, and local cache directory — no repository-state fallback."""
 
     def test_custom_inventory_with_local_cache(self):
@@ -659,8 +659,8 @@ class TestCustomInventoryWithCache(unittest.TestCase):
                 'mode = "docker-gateway"\n',
             )
 
-            # Custom local companion beside the custom inventory
-            local = repo_root / f"{stem}.local.toml"
+            # The fixed local companion beside the custom inventory.
+            local = repo_root / "docker-constructor.local.toml"
             local.write_text(
                 f'[host-access]\naddress = "{custom_address}"\n'
                 f'[cache]\ndir = "{custom_cache_dir}"\n',
@@ -676,8 +676,8 @@ class TestCustomInventoryWithCache(unittest.TestCase):
 
             # ── Assertions ──────────────────────────────────────────
 
-            # 0. resolve_local_companion_path points at the custom
-            #    companion, not the repository-root one
+            # 0. resolve_local_companion_path points at the fixed
+            #    companion, not the parent-directory one
             from docker.versioning.inventory import (
                 resolve_local_companion_path,
             )
@@ -685,8 +685,8 @@ class TestCustomInventoryWithCache(unittest.TestCase):
             resolved = resolve_local_companion_path(inv)
             self.assertEqual(
                 local.resolve(), resolved.resolve(),
-                "companion path must be <stem>.local.toml beside"
-                " the custom inventory, not the repo root",
+                "companion path must use the fixed basename beside"
+                " the custom inventory, not its parent directory.",
             )
             self.assertNotEqual(
                 repo_local.resolve(), resolved.resolve(),
@@ -709,8 +709,8 @@ class TestCustomInventoryWithCache(unittest.TestCase):
                 "reviewed cache.dir must not exist",
             )
 
-            # 2. load_local_config_for_inventory uses only the
-            #    custom-stem companion, not the repository-root one
+            # 2. load_local_config_for_inventory uses only the fixed
+            #    same-directory companion, not the parent-directory one
             from docker.versioning.inventory import (
                 load_local_config_for_inventory,
             )

@@ -345,12 +345,11 @@ def _resolve_verify_corporate_network(
     )
 
 
-def _read_env_key(key: str) -> str | None:
-    """Read a single value from the installation ``.env`` file.
+def _read_env_key(key: str, env_path: Path) -> str | None:
+    """Read a single value from the selected project's ``.env`` file.
 
     Returns ``None`` when the file is missing or the key is absent.
     """
-    env_path = _INSTALLATION_ROOT / ".env"
     if not env_path.is_file():
         return None
     try:
@@ -495,6 +494,14 @@ def _real_dispatcher(
             orchestrate_build,
         )
 
+        inv_path = _resolve_inventory_path(request)
+        dockerfile = request.constructor_project.dockerfile
+        if not dockerfile.is_file():
+            return CommandResult(
+                exit_kind=ExitKind.CONFIG,
+                message=f"Dockerfile not found: {dockerfile}",
+            )
+
         dry_run = bool(request.command_args.get("dry_run", False))
         yes = bool(request.command_args.get("yes", False))
 
@@ -512,15 +519,6 @@ def _real_dispatcher(
 
         c_args = _deep_freeze_command_args(c_args)
 
-        # Resolve inventory path
-        try:
-            inv_path = _resolve_inventory_path(request)
-        except OSError as exc:
-            return CommandResult(
-                exit_kind=ExitKind.CONFIG,
-                message=f"cannot resolve inventory path: {exc}",
-            )
-
         # Build typed DTO
         raw_overrides = c_args.get("overrides")
         if isinstance(raw_overrides, Mapping):
@@ -531,6 +529,9 @@ def _real_dispatcher(
         build_request = BuildRequest(
             inventory_path=str(inv_path),
             repo_root=str(_INSTALLATION_ROOT),
+            project_root=str(request.constructor_project.root),
+            context=str(request.constructor_project.root),
+            dockerfile=str(dockerfile),
             platform=str(c_args.get("platform", "linux-amd64")),
             tag=c_args.get("tag") if c_args.get("tag") is not None else None,
             overrides=overrides,
@@ -765,7 +766,9 @@ def _real_dispatcher(
                 # Resolve base-project-dir: CLI > .env > None
                 _base_dir = c_args.get("base_project_dir")
                 if _base_dir is None:
-                    _base_dir = _read_env_key("BASE_PROJECT_DIR")
+                    _base_dir = _read_env_key(
+                        "BASE_PROJECT_DIR", request.constructor_project.dotenv
+                    )
                 if _base_dir is not None:
                     _base_dir = _os_builtin.path.expanduser(str(_base_dir))
                 elif tui:
@@ -832,6 +835,7 @@ def _real_dispatcher(
         run_request = RunRequest(
             inventory_path=str(inv_path),
             repo_root=str(_INSTALLATION_ROOT),
+            project_root=str(request.constructor_project.root),
             image=image,
             selection=selection,
             pi_home_host=str(Path.home() / ".pi"),
@@ -987,7 +991,7 @@ def _real_dispatcher(
                 _verify_proxy_no_proxy,
                 _verify_net_err,
             ) = _resolve_verify_corporate_network(
-                str(inv_path), _INSTALLATION_ROOT
+                str(inv_path), request.constructor_project.root
             )
             if _verify_net_err is not None:
                 return CommandResult(

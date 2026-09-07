@@ -27,7 +27,7 @@ class CacheRootPropagationTests(unittest.TestCase):
     def test_local_cache_dir_is_carried_by_build_plan(self):
         inventory = self.root / "constructor.toml"; inventory.write_bytes(Path(INVENTORY_PATH).read_bytes())
         cache = self.root / "configured-cache"
-        inventory.with_name("constructor.local.toml").write_text(f'[cache]\ndir = "{cache}"\n')
+        inventory.with_name("docker-constructor.local.toml").write_text(f'[cache]\ndir = "{cache}"\n')
         plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project)))
         self.assertEqual(plan.exit_kind, ExitKind.SUCCESS)
         self.assertEqual(plan.cache_root, cache)
@@ -45,7 +45,7 @@ class CacheRootPropagationTests(unittest.TestCase):
     def test_dry_run_plan_leaves_absent_cache_completely_untouched(self):
         inventory = self.root / "constructor.toml"; inventory.write_bytes(Path(INVENTORY_PATH).read_bytes())
         cache = self.root / "absent-cache"
-        inventory.with_name("constructor.local.toml").write_text(f'[cache]\ndir = "{cache}"\n')
+        inventory.with_name("docker-constructor.local.toml").write_text(f'[cache]\ndir = "{cache}"\n')
         plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project), dry_run=True))
         self.assertEqual(plan.exit_kind, ExitKind.SUCCESS)
         self.assertFalse(cache.exists())

@@ -128,7 +128,7 @@ class _BuildOrchestrationRed(unittest.TestCase):
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL)
             if companion is not None:
-                (root_path / "inventory.local.toml").write_text(companion)
+                (root_path / "docker-constructor.local.toml").write_text(companion)
             if bundle is not None:
                 bundle_dir = root_path / ".docker-local"
                 bundle_dir.mkdir()
@@ -136,7 +136,7 @@ class _BuildOrchestrationRed(unittest.TestCase):
             effects: list[str] = []
             result = orchestrate_build(BuildRequest(
                 inventory_path=str(inventory),
-                repo_root=str(root_path),
+                repo_root=str(root_path), project_root=str(root_path),
                 confirmed=False,
                 dry_run=True,
                 runner=_recording_build_executor(effects),

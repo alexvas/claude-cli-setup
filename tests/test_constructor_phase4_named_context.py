@@ -110,7 +110,7 @@ class TestPhase4Plans(unittest.TestCase):
             Materialized("relative/snapshot", NoDerivedEnvironment)
 
     def test_dry_plan_has_no_argv_or_side_effects(self):
-        plan = plan_build(BuildRequest(inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), dry_run=True))
+        plan = plan_build(BuildRequest(inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), project_root=str(ROOT), dry_run=True))
         self.assertEqual((), plan.build_args)
         self.assertIsInstance(plan.render_inputs.named_context, Prospective) # type: ignore[union-attr]
 
@@ -127,7 +127,7 @@ class TestPhase4Capability(unittest.TestCase):
     def test_missing_named_context_fails_before_materialization_or_docker(self):
         effects = []
         result = orchestrate_build(BuildRequest(
-            inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), confirmed=True,
+            inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), project_root=str(ROOT), confirmed=True,
             _named_context_supported=lambda: False,
             _materialize_artifacts=lambda *_a, **_kw: effects.append("download"),
             _materialize_pi=fake_pi_materialization,
@@ -144,7 +144,7 @@ class TestPhase4Cleanup(unittest.TestCase):
 
     def _request(self, root: Path, *, publish=None, runner=None):
         return BuildRequest(
-            inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), confirmed=True,
+            inventory_path=str(ROOT / "docker-constructor.toml"), repo_root=str(ROOT), project_root=str(ROOT), confirmed=True,
             _named_context_supported=lambda: True,
             _materialize_artifacts=lambda *_a, **_kw: tuple(root / f"{name}.blob" for name in ("rustup", "uv", "rtk", "fd")),
             _materialize_pi=fake_pi_materialization,

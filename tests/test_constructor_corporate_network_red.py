@@ -216,14 +216,14 @@ class TestCorporateTrustLocalRed(_LocalTest):
 class TestCompanionResolutionRed(_LocalTest):
     """Task 1.1: the companion resolves beside the selected inventory only."""
 
-    def test_canonical_and_custom_paths_resolve_their_own_companion(self) -> None:
+    def test_companion_always_has_the_fixed_basename(self) -> None:
         self.assertEqual(
             resolve_local_companion_path(Path("docker-constructor.toml")),
             Path("docker-constructor.local.toml"),
         )
         self.assertEqual(
             resolve_local_companion_path(Path("/path/custom.toml")),
-            Path("/path/custom.local.toml"),
+            Path("/path/docker-constructor.local.toml"),
         )
 
     def test_corporate_trust_loads_from_companion_beside_canonical_inventory(self) -> None:
@@ -239,7 +239,7 @@ class TestCompanionResolutionRed(_LocalTest):
             local = load_local_config_for_inventory(inventory)
             self.assertTrue(local.corporate_trust.enabled)
 
-    def test_corporate_trust_loads_from_custom_companion_without_repository_fallback(
+    def test_corporate_trust_loads_from_fixed_companion_without_repository_fallback(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -258,7 +258,7 @@ class TestCompanionResolutionRed(_LocalTest):
             _write_toml(
                 "[corporate-trust]\nenabled = false\n",
                 directory=workspace,
-                name="custom.local.toml",
+                name="docker-constructor.local.toml",
             )
 
             local = load_local_config_for_inventory(
@@ -266,9 +266,9 @@ class TestCompanionResolutionRed(_LocalTest):
             )
             self.assertFalse(local.corporate_trust.enabled)
 
-            # Removing the custom companion must produce absent local state,
+            # Removing the fixed companion must produce absent local state,
             # never the injected repository-local fallback value.
-            (workspace / "custom.local.toml").unlink()
+            (workspace / "docker-constructor.local.toml").unlink()
             absent = load_local_config_for_inventory(
                 inventory, repository_root=repository
             )
@@ -495,7 +495,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             workspace.mkdir()
             inventory = workspace / "custom.toml"
             inventory.write_text(_CANONICAL)
-            (workspace / "custom.local.toml").write_text(
+            (workspace / "docker-constructor.local.toml").write_text(
                 "[corporate-trust]\nenabled = true\n"
             )
             bundle_dir = repository / ".docker-local"
@@ -506,7 +506,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
 
             build = orchestrate_build(BuildRequest(
                 inventory_path=str(inventory),
-                repo_root=str(repository),
+                repo_root=str(repository), project_root=str(repository),
                 confirmed=False,
                 dry_run=True,
                 runner=_recording_build_executor(effects),
@@ -520,7 +520,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             ):
                 run = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
-                    repo_root=str(repository),
+                    repo_root=str(repository), project_root=str(repository),
                     image="pi-cli-pi:latest",
                     selection=ProjectSelection(main_project="/work/project"),
                     pi_home_host="/home/user/.pi",
@@ -545,7 +545,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL)
-            (root_path / "inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 "[corporate-trust]\nenabled = true\n"
             )
             bundle_dir = root_path / ".docker-local"
@@ -560,7 +560,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
 
             result = orchestrate_build(BuildRequest(
                 inventory_path=str(inventory),
-                repo_root=str(root_path),
+                repo_root=str(root_path), project_root=str(root_path),
                 confirmed=True,
                 dry_run=False,
                 runner=_recording_build_executor(effects),
@@ -581,7 +581,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL)
-            (root_path / "inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 "[corporate-trust]\nenabled = true\n"
             )
             bundle_dir = root_path / ".docker-local"
@@ -601,7 +601,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             ):
                 result = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
-                    repo_root=str(root_path),
+                    repo_root=str(root_path), project_root=str(root_path),
                     image="pi-cli-pi:latest",
                     selection=ProjectSelection(main_project="/work/project"),
                     pi_home_host="/home/user/.pi",
@@ -616,7 +616,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             self.assertIn("corporate-ca-bundle.crt", result.message or "")
             self.assertEqual([], effects)
 
-    def test_direct_caller_without_repo_root_cannot_validate_beside_inventory(self) -> None:
+    def test_direct_caller_without_repo_root_fails_closed(self) -> None:
         from unittest import mock
 
         from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
@@ -626,12 +626,11 @@ class TestCorporateTrustBundleRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "custom-inventory.toml"
             inventory.write_text(_CANONICAL)
-            (root_path / "custom-inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 "[corporate-trust]\nenabled = true\n"
             )
-            # A valid bundle beside the custom inventory is the old,
-            # forbidden fallback location.  With no repo_root the fixed-root
-            # contract must fail closed instead of validating it.
+            # The fixed companion and bundle beside the inventory path do not
+            # require an installation-root fallback.
             bundle_dir = root_path / ".docker-local"
             bundle_dir.mkdir()
             (bundle_dir / "corporate-ca-bundle.crt").write_text(_VALID_PEM)
@@ -660,7 +659,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
                 ))
 
             self.assertEqual(ExitKind.CONFIG, result.exit_kind)
-            self.assertRegex(result.message or "", r"repository root|corporate-ca-bundle.crt")
+            self.assertRegex(result.message or "", r"project_root|corporate-ca-bundle.crt")
             self.assertEqual([], effects)
 
     def test_direct_build_caller_without_repo_root_fails_closed(self) -> None:
@@ -675,7 +674,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "custom-inventory.toml"
             inventory.write_text(_CANONICAL)
-            (root_path / "custom-inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 "[corporate-trust]\nenabled = true\n"
             )
             bundle_dir = root_path / ".docker-local"
@@ -697,7 +696,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             ))
 
             self.assertEqual(ExitKind.CONFIG, result.exit_kind)
-            self.assertRegex(result.message or "", r"repository root|corporate-ca-bundle.crt")
+            self.assertRegex(result.message or "", r"project_root|corporate-ca-bundle.crt")
             self.assertEqual([], effects)
 
 
@@ -725,7 +724,7 @@ class TestLocalCompanionFailClosedCommandsRed(_LocalTest):
         inventory.write_text(_CANONICAL)
         result = orchestrate_build(BuildRequest(
             inventory_path=str(inventory),
-            repo_root=str(root),
+            repo_root=str(root), project_root=str(root),
             confirmed=True,
             dry_run=False,
             runner=_recording_build_executor(effects),
@@ -754,7 +753,7 @@ class TestLocalCompanionFailClosedCommandsRed(_LocalTest):
         ):
             result = orchestrate_run(RunRequest(
                 inventory_path=str(inventory),
-                repo_root=str(root),
+                repo_root=str(root), project_root=str(root),
                 image="pi-cli-pi:latest",
                 selection=ProjectSelection(main_project="/work/project"),
                 pi_home_host="/home/user/.pi",
@@ -770,7 +769,7 @@ class TestLocalCompanionFailClosedCommandsRed(_LocalTest):
     def _assert_both_paths_config(self, companion: str, regex: str) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
-            (root_path / "inventory.local.toml").write_text(companion)
+            (root_path / "docker-constructor.local.toml").write_text(companion)
 
             build_effects: list[str] = []
             self.assertRegex(
@@ -970,7 +969,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL)  # no [runtime.host-access]
-            (root_path / "inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 '[network.proxy]\nurl = "http://proxy.corp.example:3128"\n'
             )
 
@@ -1012,7 +1011,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL)  # no [runtime.host-access]
-            (root_path / "inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 '[network.proxy]\nurl = "http://user:pass@proxy.corp.example:3128"\n'
             )
 
@@ -1057,7 +1056,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
             root_path = Path(root)
             inventory = root_path / "inventory.toml"
             inventory.write_text(_CANONICAL + "\n" + policy)
-            (root_path / "inventory.local.toml").write_text(
+            (root_path / "docker-constructor.local.toml").write_text(
                 '[host-access]\naddress = "192.0.2.10"\n'
             )
 

@@ -2365,10 +2365,10 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
         captured, restore_sel = self._patch_selector()
         orig_read = mod._read_env_key
 
-        def _fake_read(key):
+        def _fake_read(key, env_path):
             if key == "BASE_PROJECT_DIR":
                 return "/from/env/file"
-            return orig_read(key)
+            return orig_read(key, env_path)
 
         mod._read_env_key = _fake_read
         try:
@@ -2388,10 +2388,10 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
         captured, restore_sel = self._patch_selector()
         orig_read = mod._read_env_key
 
-        def _fake_read(key):
+        def _fake_read(key, env_path):
             if key == "BASE_PROJECT_DIR":
                 return "/from/env/file"
-            return orig_read(key)
+            return orig_read(key, env_path)
 
         mod._read_env_key = _fake_read
         try:
@@ -2412,7 +2412,7 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
         captured, restore_sel = self._patch_selector()
         orig_read = mod._read_env_key
 
-        def _fake_read(key):
+        def _fake_read(key, env_path):
             return None  # No env value
 
         mod._read_env_key = _fake_read

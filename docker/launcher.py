@@ -380,12 +380,14 @@ class RunRequest:
     """Host path to the Pi home directory."""
 
     repo_root: str | None = None
-    """Repository root for the fixed corporate trust bundle.
+    """Legacy generated-state plumbing pending Phase 3.
 
-    Mandatory whenever corporate trust is enabled.  It is never inferred
-    from the inventory path; a direct caller that enables corporate trust
-    without supplying it fails closed with a CONFIG error before Docker.
+    This field must never select inventory companions or other project-owned
+    inputs.
     """
+
+    project_root: str | None = None
+    """Selected constructor-project root owning companions and ``.docker-local``."""
 
     overrides: Mapping[str, str] = field(
         default_factory=lambda: MappingProxyType({}),
@@ -587,12 +589,13 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         if getattr(host_access_policy, "enabled", False)
         else None
     )
+    local_project_root = (
+        Path(request.project_root) if request.project_root is not None else None
+    )
     try:
         local_corporate = resolve_local_corporate_settings(
             Path(request.inventory_path),
-            repository_root=(
-                Path(request.repo_root) if request.repo_root else None
-            ),
+            repository_root=local_project_root,
             host_access_mode=host_access_mode,
         )
     except InventoryError as exc:
@@ -604,9 +607,9 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # Corporate trust bundle host path — resolved only on the enabled path
     # (the fixed repository-local bundle was already validated above).
     corporate_trust_bundle: str | None = None
-    if local_corporate.corporate_trust.enabled and request.repo_root:
+    if local_corporate.corporate_trust.enabled and local_project_root is not None:
         corporate_trust_bundle = os.path.abspath(
-            resolve_corporate_trust_bundle_path(Path(request.repo_root))
+            resolve_corporate_trust_bundle_path(local_project_root)
         )
     proxy_url = local_corporate.network_proxy.url
     proxy_no_proxy = local_corporate.network_proxy.no_proxy

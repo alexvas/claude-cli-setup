@@ -178,7 +178,7 @@ class _RunOrchestrationRed(unittest.TestCase):
                 _CANONICAL + (inventory_policy or "")
             )
             if companion is not None:
-                (root_path / "inventory.local.toml").write_text(companion)
+                (root_path / "docker-constructor.local.toml").write_text(companion)
             if bundle is not None:
                 bundle_dir = root_path / ".docker-local"
                 bundle_dir.mkdir()
@@ -189,7 +189,7 @@ class _RunOrchestrationRed(unittest.TestCase):
                 image="pi-cli-pi:latest",
                 selection=ProjectSelection(main_project="/work/project"),
                 pi_home_host="/home/user/.pi",
-                repo_root=str(root_path),
+                repo_root=str(root_path), project_root=str(root_path),
                 dry_run=True,
                 executor=_bomb_executor(effects),
                 inspector=_bomb_inspector(effects),

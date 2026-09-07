@@ -50,29 +50,29 @@ Rules:
 
 ### RED
 
-- [ ] P2.R1 Add command-dispatch tests proving `validate`, `show`, and `check-updates` use the CWD-selected or explicitly selected project's fixed inventory.
-- [ ] P2.R2 Add build tests for the exact selected-project context and root `Dockerfile` argument vector.
-- [ ] P2.R3 Add a build test proving a missing root `Dockerfile` fails with a path-specific CONFIG error before projection publication or Docker execution.
-- [ ] P2.R4 Add non-build tests proving commands with a valid inventory do not require `Dockerfile`.
-- [ ] P2.R5 Add local-companion tests proving `doctor` and every local-config consumer use only `<project-directory>/docker-constructor.local.toml`.
-- [ ] P2.R6 Add cross-project tests proving launcher dotenv resolution ignores the installation checkout and uses only `<project-directory>/.env`.
-- [ ] P2.R7 Add cross-project corporate-trust tests proving only `<project-directory>/.docker-local/corporate-ca-bundle.crt` is considered.
+- [x] P2.R1 Add command-dispatch tests proving `validate`, `show`, and `check-updates` use the CWD-selected or explicitly selected project's fixed inventory.
+- [x] P2.R2 Add build tests for the exact selected-project context and root `Dockerfile` argument vector.
+- [x] P2.R3 Add a build test proving a missing root `Dockerfile` fails with a path-specific CONFIG error before projection publication or Docker execution.
+- [x] P2.R4 Add non-build tests proving commands with a valid inventory do not require `Dockerfile`.
+- [x] P2.R5 Add local-companion tests proving `doctor` and every local-config consumer use only `<project-directory>/docker-constructor.local.toml`.
+- [x] P2.R6 Add cross-project tests proving launcher dotenv resolution ignores the installation checkout and uses only `<project-directory>/.env`.
+- [x] P2.R7 Add cross-project corporate-trust tests proving only `<project-directory>/.docker-local/corporate-ca-bundle.crt` is considered.
 
 ### GREEN
 
-- [ ] P2.G1 Change `validate`, `show`, and `check-updates` dispatch to consume the fixed selected-project inventory required by P2.R1.
-- [ ] P2.G2 Change build planning to use the selected project as context and its root `Dockerfile` as required by P2.R2–P2.R4.
-- [ ] P2.G3 Change `doctor` and local-config consumers to use only the fixed selected-project inventory and companion required by P2.R5.
-- [ ] P2.G4 Change launcher dotenv resolution to use the selected project's `.env` required by P2.R6.
-- [ ] P2.G5 Change corporate-trust resolution to use the selected project's fixed `.docker-local` bundle required by P2.R7.
+- [x] P2.G1 Change `validate`, `show`, and `check-updates` dispatch to consume the fixed selected-project inventory required by P2.R1.
+- [x] P2.G2 Change build planning to use the selected project as context and its root `Dockerfile` as required by P2.R2–P2.R4.
+- [x] P2.G3 Change `doctor` and local-config consumers to use only the fixed selected-project inventory and companion required by P2.R5.
+- [x] P2.G4 Change launcher dotenv resolution to use the selected project's `.env` required by P2.R6.
+- [x] P2.G5 Change corporate-trust resolution to use the selected project's fixed `.docker-local` bundle required by P2.R7.
 
 ### INTROSPECT
 
-- [ ] P2.I1 Inspect all command input paths for custom-inventory companion derivation, alternate basenames, ancestor discovery, or installation-root fallback; remove every active path found.
+- [x] P2.I1 Inspect all command input paths for custom-inventory companion derivation, alternate basenames, ancestor discovery, or installation-root fallback; remove every active path found.
 
 ### VALIDATE
 
-- [ ] P2.V1 Run the command-dispatch, build, local-companion, dotenv, and corporate-trust tests introduced in P2.R1–P2.R7 and record that they all pass.
+- [x] P2.V1 Run the command-dispatch, build, local-companion, dotenv, and corporate-trust tests introduced in P2.R1–P2.R7 and record that they all pass.
 
 ## Phase 3 — Generated Outputs and Cache Boundaries
 

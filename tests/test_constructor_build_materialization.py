@@ -230,7 +230,7 @@ class TestMaterializationOrchestration(unittest.TestCase):
                 side_effect=digest_valid_selected_artifacts,
             ):
                 result = orchestrate_build(BuildRequest(
-                    inventory_path=str(inventory), repo_root=str(repo),
+                    inventory_path=str(inventory), repo_root=str(repo), project_root=str(repo),
                     confirmed=True, runner=Docker(),
                     _materialize_artifacts=materialize,
                     _named_context_supported=lambda: True,
@@ -264,7 +264,7 @@ class TestMaterializationOrchestration(unittest.TestCase):
                 effects.append("publish")
                 raise AssertionError("publication must not run")
             request = BuildRequest(
-                inventory_path=str(inventory), repo_root=str(root), confirmed=True,
+                inventory_path=str(inventory), repo_root=str(root), project_root=str(root), confirmed=True,
                 runner=Docker(), _materialize_artifacts=materialize,
                 _named_context_supported=lambda: True, _publish_projection=publish,
             )
@@ -296,7 +296,7 @@ class TestMaterializationOrchestration(unittest.TestCase):
             raise AssertionError("reference must not be published")
         result = orchestrate_build(BuildRequest(
             inventory_path=str(ROOT / "docker-constructor.toml"),
-            repo_root=str(ROOT), confirmed=True, runner=Docker(),
+            repo_root=str(ROOT), project_root=str(ROOT), confirmed=True, runner=Docker(),
             _materialize_artifacts=fail, _named_context_supported=lambda: True,
             _materialize_pi=fake_pi_materialization,
             _publish_projection=publish,
@@ -337,7 +337,7 @@ class TestHostTransportPolicy(unittest.TestCase):
             )
             effects = []
             result = orchestrate_build(BuildRequest(
-                inventory_path=str(inventory), repo_root=str(root), confirmed=True,
+                inventory_path=str(inventory), repo_root=str(root), project_root=str(root), confirmed=True,
                 runner=type("Docker", (), {"run": lambda self, argv: effects.append("docker")})(),
                 _materialize_artifacts=lambda *a, **k: effects.append("network"),
                 _materialize_pi=fake_pi_materialization,

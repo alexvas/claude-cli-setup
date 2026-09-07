@@ -115,7 +115,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
             with self.subTest(local_bytes=local_bytes, expected=expected_fragment), tempfile.TemporaryDirectory() as root:
                 root_path = Path(root)
                 inventory = self._inventory(root_path, policy)
-                companion = root_path / "custom.local.toml"
+                companion = root_path / "docker-constructor.local.toml"
                 if local_bytes is not None:
                     companion.write_bytes(local_bytes)
                 effects: list[str] = []
@@ -146,7 +146,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
             with self.subTest(policy=policy), tempfile.TemporaryDirectory() as root:
                 root_path = Path(root)
                 inventory = self._inventory(root_path, policy)
-                companion = root_path / "custom.local.toml"
+                companion = root_path / "docker-constructor.local.toml"
                 companion.write_bytes(local_bytes)
                 before = companion.read_bytes()
                 result = orchestrate_run(self._request(inventory, dry_run=True, effects=[]))

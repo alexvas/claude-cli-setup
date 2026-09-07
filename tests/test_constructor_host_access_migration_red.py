@@ -483,17 +483,6 @@ _README_REQUIREMENTS: tuple[
           "本地", "旁边"),),
     ),
     (
-        "custom companion: <stem>.toml → <stem>.local.toml beside inventory",
-        (".local.toml",),
-        (("custom.toml", "<stem>.toml", "custom name",
-          "произвольное", "自定义"),
-         ("custom.local.toml", "<stem>.local.toml",
-          "<основа>.local.toml", "<名称>.local.toml"),
-         ("beside", "same directory", "derived from", "next to",
-          "рядом", "в том же каталоге", "происходит от",
-          "旁边", "同一目录", "派生自"),),
-    ),
-    (
         "optional proxy-port with no protocol assumption",
         ("proxy-port",),
         (("optional", "no protocol", "port only", "HOST_PROXY_PORT",
@@ -646,57 +635,6 @@ class TestDocumentationMatcher(unittest.TestCase):
             "must fail when negative-behavior group is absent",
         )
 
-    def test_custom_companion_positive(self) -> None:
-        """custom.toml → custom.local.toml beside → match."""
-        para = (
-            "The companion for custom.toml is custom.local.toml, placed "
-            "beside the selected inventory in the same directory."
-        )
-        anchor = (".local.toml",)
-        groups = (
-            ("custom.toml", "<stem>.toml", "custom name"),
-            ("custom.local.toml", "<stem>.local.toml"),
-            ("beside", "same directory", "derived from", "next to"),
-        )
-        self.assertTrue(
-            _paragraph_satisfies(para, anchor, groups),
-            "complete custom-companion paragraph must satisfy all groups",
-        )
-
-    def test_custom_companion_stem_only_fails(self) -> None:
-        """<stem>.local.toml alone without inventory stem → no match."""
-        para = (
-            "The local companion is named <stem>.local.toml."
-        )
-        anchor = (".local.toml",)
-        groups = (
-            ("custom.toml", "<stem>.toml", "custom name"),
-            ("custom.local.toml", "<stem>.local.toml"),
-            ("beside", "same directory", "derived from", "next to"),
-        )
-        self.assertFalse(
-            _paragraph_satisfies(para, anchor, groups),
-            "<stem>.local.toml alone satisfies companion group but fails "
-            "inventory-stem and relationship groups",
-        )
-
-    def test_custom_companion_no_relationship_fails(self) -> None:
-        """custom.toml + custom.local.toml without relationship → no match."""
-        para = (
-            "For a custom inventory named custom.toml the companion is "
-            "custom.local.toml."
-        )
-        anchor = (".local.toml",)
-        groups = (
-            ("custom.toml", "<stem>.toml", "custom name"),
-            ("custom.local.toml", "<stem>.local.toml"),
-            ("beside", "same directory", "derived from", "next to"),
-        )
-        self.assertFalse(
-            _paragraph_satisfies(para, anchor, groups),
-            "must fail when relationship group is absent",
-        )
-
     def test_canonical_companion_positive(self) -> None:
         """docker-constructor.toml → docker-constructor.local.toml → match."""
         para = (
@@ -777,23 +715,20 @@ class TestReadmeParity(unittest.TestCase):
     def test_canonical_companion_documented(self) -> None:
         self._assert_requirement(_README_REQUIREMENTS[3])
 
-    def test_custom_companion_documented(self) -> None:
+    def test_optional_proxy_port_documented(self) -> None:
         self._assert_requirement(_README_REQUIREMENTS[4])
 
-    def test_optional_proxy_port_documented(self) -> None:
+    def test_external_service_binding_caveat(self) -> None:
         self._assert_requirement(_README_REQUIREMENTS[5])
 
-    def test_external_service_binding_caveat(self) -> None:
+    def test_neutral_host_access_variables(self) -> None:
         self._assert_requirement(_README_REQUIREMENTS[6])
 
-    def test_neutral_host_access_variables(self) -> None:
+    def test_doctor_docker_gateway_exclusivity(self) -> None:
         self._assert_requirement(_README_REQUIREMENTS[7])
 
-    def test_doctor_docker_gateway_exclusivity(self) -> None:
-        self._assert_requirement(_README_REQUIREMENTS[8])
-
     def test_cache_dir_migration_documented(self) -> None:
-        self._assert_requirement(_README_REQUIREMENTS[9])
+        self._assert_requirement(_README_REQUIREMENTS[8])
 
     # ── dedicated doctor assertions (task 5.6 contract) ────────────
 

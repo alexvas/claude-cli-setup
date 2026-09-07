@@ -165,7 +165,7 @@ class TestReviewedHostAccessPolicyRed(_InventoryTest):
 
 
 class TestLocalCompanionRed(_InventoryTest):
-    def test_canonical_and_custom_paths_use_their_own_companion(self) -> None:
+    def test_canonical_and_custom_paths_use_the_fixed_companion(self) -> None:
         from docker.versioning.inventory import resolve_local_companion_path
 
         self.assertEqual(
@@ -174,10 +174,10 @@ class TestLocalCompanionRed(_InventoryTest):
         )
         self.assertEqual(
             resolve_local_companion_path(Path("/path/custom.toml")),
-            Path("/path/custom.local.toml"),
+            Path("/path/docker-constructor.local.toml"),
         )
 
-    def test_custom_inventory_loads_its_companion_without_repository_fallback(self) -> None:
+    def test_custom_inventory_loads_fixed_companion_without_repository_fallback(self) -> None:
         from docker.versioning.inventory import load_local_config_for_inventory
 
         with tempfile.TemporaryDirectory() as root:
@@ -190,7 +190,7 @@ class TestLocalCompanionRed(_InventoryTest):
                         directory=repository, name="docker-constructor.local.toml")
             inventory = self.inventory(directory=workspace, name="custom.toml")
             _write_toml('[cache]\ndir = "/custom-local"\n',
-                        directory=workspace, name="custom.local.toml")
+                        directory=workspace, name="docker-constructor.local.toml")
 
             # The production default inventory root is an authoritative
             # boundary, not the process CWD.  Inject it explicitly so a
@@ -200,9 +200,9 @@ class TestLocalCompanionRed(_InventoryTest):
             )
             self.assertEqual(local.cache.dir, "/custom-local")
 
-            # Removing the custom companion must produce absent local state,
+            # Removing the fixed companion must produce absent local state,
             # never the injected repository-local fallback value.
-            (workspace / "custom.local.toml").unlink()
+            (workspace / "docker-constructor.local.toml").unlink()
             absent = load_local_config_for_inventory(
                 inventory, repository_root=repository
             )
@@ -297,9 +297,9 @@ class TestCacheAndProjectionRed(_InventoryTest):
             inventory = load_inventory(inventory_path)
             companion = _write_toml(
                 '[host-access]\naddress = "192.0.2.10"\n[cache]\ndir = "/local-cache"\n',
-                directory=directory_path, name="custom.local.toml",
+                directory=directory_path, name="docker-constructor.local.toml",
             )
-            self.assertEqual(companion, inventory_path.with_name("custom.local.toml"))
+            self.assertEqual(companion, inventory_path.with_name("docker-constructor.local.toml"))
             local = load_local_config_for_inventory(
                 inventory_path, host_access_mode="external-address"
             )
@@ -315,7 +315,7 @@ class TestCacheAndProjectionRed(_InventoryTest):
         build_values = _flatten(build_data)
         for forbidden in (
             "host_access", "host-access", "192.0.2.10", "/local-cache",
-            45678, "custom.local.toml",
+            45678, "docker-constructor.local.toml",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, runtime_values)

@@ -910,21 +910,15 @@ def load_inventory(versions_path: Path) -> Inventory:
 
 
 def resolve_local_companion_path(inventory_path: Path) -> Path:
-    """Return the only local companion permitted for an inventory path."""
-    path = Path(inventory_path)
-    return path.with_name(f"{path.stem}.local.toml")
+    """Return the fixed-basename companion beside an inventory path.
+
+    The companion always has the basename ``docker-constructor.local.toml``.
+    """
+    return Path(inventory_path).with_name("docker-constructor.local.toml")
 
 
 def resolve_corporate_trust_bundle_path(repository_root: Path | str) -> Path:
-    """Return the only permitted corporate trust source for a repository.
-
-    The authoritative root is the repository root (the directory that
-    contains ``docker/`` and ``docker-constructor.toml``).  It is not the
-    directory of a custom ``--inventory``: a custom inventory still reads
-    its local companion beside that inventory, but its corporate trust
-    bundle remains the repository-local ``.docker-local/
-    corporate-ca-bundle.crt`` file.
-    """
+    """Return the fixed corporate trust source for a constructor project."""
     return Path(repository_root) / ".docker-local" / "corporate-ca-bundle.crt"
 
 
@@ -1255,8 +1249,8 @@ def load_local_config_for_inventory(
     repository_root: Path | None = None,
     host_access_mode: str | None = None,
 ) -> LocalConfig:
-    """Load only the selected inventory's companion; never repository fallback."""
-    del repository_root  # explicit boundary: custom inventory controls its companion
+    """Load only the fixed companion beside the selected project inventory."""
+    del repository_root  # retained compatibility parameter; no fallback is allowed
     companion = resolve_local_companion_path(inventory_path)
     if not companion.exists():
         return LocalConfig()
@@ -1275,10 +1269,9 @@ def resolve_local_corporate_settings(
     local-companion schema validation as :func:`load_local_config`, so unknown
     top-level keys, invalid ``[host-access]`` values, and invalid ``[cache]``
     values fail closed with an ``InventoryError`` before build/run execution.
-    When corporate trust is enabled, the fixed repository-local bundle is
-    additionally validated before any Docker invocation.  The repository
-    root is mandatory in that case: it must be supplied by the build/run
-    boundary and is never inferred from the inventory path.
+    When corporate trust is enabled, the fixed constructor-project bundle is
+    additionally validated before any Docker invocation. The selected root
+    must be supplied by the build/run boundary and is never discovered.
     """
     companion = resolve_local_companion_path(inventory_path)
     if not companion.exists():
@@ -1287,9 +1280,9 @@ def resolve_local_corporate_settings(
     if local.corporate_trust.enabled:
         if repository_root is None:
             raise InventoryError(
-                "corporate trust is enabled but no repository root was "
-                "supplied; cannot resolve the fixed "
-                ".docker-local/corporate-ca-bundle.crt"
+                "corporate trust is enabled but project_root is absent; "
+                "cannot resolve <project-root>/.docker-local/"
+                "corporate-ca-bundle.crt"
             )
         validate_corporate_trust_bundle(
             resolve_corporate_trust_bundle_path(repository_root)

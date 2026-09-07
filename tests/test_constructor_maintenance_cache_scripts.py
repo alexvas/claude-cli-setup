@@ -37,7 +37,7 @@ class TestMaintenanceCachePreparation(unittest.TestCase):
     def _inventory(self, base: Path, cache_dir: Path) -> Path:
         inventory = base / "fixture.toml"
         inventory.write_text("schema = 1\n")
-        inventory.with_name("fixture.local.toml").write_text(
+        inventory.with_name("docker-constructor.local.toml").write_text(
             f"[cache]\ndir = {str(cache_dir)!r}\n"
         )
         return inventory

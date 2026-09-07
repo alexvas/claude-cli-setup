@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -96,6 +97,7 @@ def _fake_repo(mod, *, companion=None, bundle=None):
     with tempfile.TemporaryDirectory() as root:
         root_path = Path(root)
         (root_path / "docker-constructor.toml").write_text(_CANONICAL)
+        shutil.copyfile(_REPO_ROOT / "Dockerfile", root_path / "Dockerfile")
         if companion is not None:
             (root_path / "docker-constructor.local.toml").write_text(companion)
         if bundle is not None:
@@ -303,6 +305,7 @@ class TestCustomInventoryCompanionAcceptanceRed(unittest.TestCase):
                 tempfile.TemporaryDirectory() as repo_dir:
             inv_path = Path(inv_dir) / "docker-constructor.toml"
             inv_path.write_text(_CANONICAL)
+            shutil.copyfile(_REPO_ROOT / "Dockerfile", Path(inv_dir) / "Dockerfile")
             (Path(inv_dir) / "docker-constructor.local.toml").write_text(
                 f'[network.proxy]\nurl = "{_PROXY_URL}"\n'
             )
@@ -323,6 +326,7 @@ class TestCustomInventoryCompanionAcceptanceRed(unittest.TestCase):
                 tempfile.TemporaryDirectory() as repo_dir:
             inv_path = Path(inv_dir) / "docker-constructor.toml"
             inv_path.write_text(_CANONICAL)
+            shutil.copyfile(_REPO_ROOT / "Dockerfile", Path(inv_dir) / "Dockerfile")
             repo_path = Path(repo_dir)
             (repo_path / "docker-constructor.toml").write_text(_CANONICAL)
             (repo_path / "docker-constructor.local.toml").write_text(
