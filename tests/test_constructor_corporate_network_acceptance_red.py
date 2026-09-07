@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shlex
 import tempfile
@@ -101,8 +102,13 @@ def _fake_repo(mod, *, companion=None, bundle=None):
             bundle_dir = root_path / ".docker-local"
             bundle_dir.mkdir()
             (bundle_dir / "corporate-ca-bundle.crt").write_text(bundle)
-        with mock.patch.object(mod, "_REPO_ROOT", root_path):
-            yield root_path
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(root_path)
+            with mock.patch.object(mod, "_INSTALLATION_ROOT", root_path):
+                yield root_path
+        finally:
+            os.chdir(original_cwd)
 
 
 # ── dry-run safety fakes ────────────────────────────────────────────────
@@ -295,17 +301,17 @@ class TestCustomInventoryCompanionAcceptanceRed(unittest.TestCase):
     def test_custom_companion_resolved_beside_custom_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as inv_dir, \
                 tempfile.TemporaryDirectory() as repo_dir:
-            inv_path = Path(inv_dir) / "custom.toml"
+            inv_path = Path(inv_dir) / "docker-constructor.toml"
             inv_path.write_text(_CANONICAL)
-            (Path(inv_dir) / "custom.local.toml").write_text(
+            (Path(inv_dir) / "docker-constructor.local.toml").write_text(
                 f'[network.proxy]\nurl = "{_PROXY_URL}"\n'
             )
             repo_path = Path(repo_dir)
             (repo_path / "docker-constructor.toml").write_text(_CANONICAL)
-            with mock.patch.object(self.m, "_REPO_ROOT", repo_path):
+            with mock.patch.object(self.m, "_INSTALLATION_ROOT", repo_path):
                 rc, out, _ = _run(
                     self.m,
-                    ["--output", "json", "--inventory", str(inv_path),
+                    ["--output", "json", "--project-directory", str(Path(inv_path).parent),
                      "build", "--dry-run"],
                 )
             self.assertEqual(0, rc, out)
@@ -315,17 +321,17 @@ class TestCustomInventoryCompanionAcceptanceRed(unittest.TestCase):
     def test_custom_inventory_does_not_fall_back_to_repo_root_companion(self) -> None:
         with tempfile.TemporaryDirectory() as inv_dir, \
                 tempfile.TemporaryDirectory() as repo_dir:
-            inv_path = Path(inv_dir) / "custom.toml"
+            inv_path = Path(inv_dir) / "docker-constructor.toml"
             inv_path.write_text(_CANONICAL)
             repo_path = Path(repo_dir)
             (repo_path / "docker-constructor.toml").write_text(_CANONICAL)
             (repo_path / "docker-constructor.local.toml").write_text(
                 f'[network.proxy]\nurl = "{_PROXY_URL}"\n'
             )
-            with mock.patch.object(self.m, "_REPO_ROOT", repo_path):
+            with mock.patch.object(self.m, "_INSTALLATION_ROOT", repo_path):
                 rc, out, _ = _run(
                     self.m,
-                    ["--output", "json", "--inventory", str(inv_path),
+                    ["--output", "json", "--project-directory", str(Path(inv_path).parent),
                      "build", "--dry-run"],
                 )
             self.assertEqual(0, rc, out)

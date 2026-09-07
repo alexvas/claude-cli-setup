@@ -579,7 +579,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             ):
                 rc, out, err = self._run_cli(
                     mod,
-                    ["--inventory", str(inv),
+                    ["--project-directory", str(Path(inv).parent),
                      "verify", "--scope", "runtime",
                      "--container", "pi-test",
                      "--project", "/home/dev/p1"],
@@ -664,7 +664,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             ):
                 rc, out, err = self._run_cli(
                     mod,
-                    ["--inventory", str(inv),
+                    ["--project-directory", str(Path(inv).parent),
                      "verify", "--scope", "runtime",
                      "--container", "pi-test",
                      "--project", "/home/dev/p1"],
@@ -680,8 +680,8 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             self.assertIsNone(req.host_access_address,
                               "address must be None when disabled")
 
-    def test_facade_custom_inventory_resolves_own_companion(self) -> None:
-        """Custom inventory resolves its own .local companion."""
+    def test_facade_project_inventory_resolves_fixed_companion(self) -> None:
+        """The selected project's fixed inventory resolves its companion."""
         import tempfile
         from unittest import mock
 
@@ -689,13 +689,12 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            inv = root / "custom.toml"
+            inv = root / "docker-constructor.toml"
             inv.write_text('schema = 1\n')
             from docker.versioning.project_state import resolve_project_state
             cache = root / "constructor-cache"
             cache.mkdir(mode=0o700)
-            # A custom inventory resolves its own .local companion.
-            (root / "custom.local.toml").write_text(
+            (root / "docker-constructor.local.toml").write_text(
                 f"[cache]\ndir = {str(cache)!r}\n"
             )
             state = resolve_project_state(root, cache_root=cache)
@@ -755,7 +754,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             ):
                 rc, out, err = self._run_cli(
                     mod,
-                    ["--inventory", str(inv),
+                    ["--project-directory", str(Path(inv).parent),
                      "verify", "--scope", "runtime",
                      "--container", "pi-test",
                      "--project", "/home/dev/p1"],
@@ -769,10 +768,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             self.assertIsNotNone(req.host_access)
             self.assertEqual("external-address", req.host_access.mode)
             self.assertEqual("203.0.113.99", req.host_access_address)
-            # Must resolve using the correct inv_path (custom.toml)
-            self.assertEqual(str(inv),
-                             str(captured_inv_path[0]),
-                             "_resolve_verify_host_access must receive --inventory path")
+            self.assertEqual(str(inv), str(captured_inv_path[0]))
 
 
 class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
@@ -814,7 +810,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             # Malformed TOML
-            bad = root / "bad.toml"
+            bad = root / "docker-constructor.toml"
             bad.write_text("not valid toml [[[")
 
             from docker.launcher import ProcessResult
@@ -831,7 +827,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
 
             rc, out, err = self._run_cli(
                 mod,
-                ["--inventory", str(bad),
+                ["--project-directory", str(Path(bad).parent),
                  "verify", "--scope", "runtime",
                  "--container", "pi-test",
                  "--project", "/home/dev/p1"],
@@ -888,7 +884,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
 
             rc, out, err = self._run_cli(
                 mod,
-                ["--inventory", str(inv),
+                ["--project-directory", str(Path(inv).parent),
                  "verify", "--scope", "runtime",
                  "--container", "pi-test",
                  "--project", "/home/dev/p1"],
@@ -942,7 +938,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
 
             rc, out, err = self._run_cli(
                 mod,
-                ["--inventory", str(inv),
+                ["--project-directory", str(Path(inv).parent),
                  "verify", "--scope", "runtime",
                  "--container", "pi-test",
                  "--project", "/home/dev/p1"],

@@ -21,6 +21,10 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from unittest.mock import patch
 
+from docker.versioning.constructor_project import ConstructorProject
+
+_TEST_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # ── helpers ────────────────────────────────────────────────────────────
 
 
@@ -62,11 +66,14 @@ def _run(
             handle = original_create_projection(_projection, parent_dir=parent_dir)
             handle.path = str(Path(parent_dir) / "fake-projection.toml")
             return handle
+    effective_argv = list(argv)
+    if "--project-directory" not in effective_argv and "--inventory" not in effective_argv:
+        effective_argv = ["--project-directory", str(_TEST_PROJECT_ROOT), *effective_argv]
     out = io.StringIO()
     err = io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
         rc = mod.main(
-            list(argv),
+            effective_argv,
             dispatcher=dispatcher,
             stdout_isatty=lambda: stdout_isatty,
             stderr_isatty=lambda: stderr_isatty,
@@ -1000,16 +1007,27 @@ class TestDispatchRecording(unittest.TestCase):
         self.assertEqual(1, len(fake.calls))
         self.assertEqual("validate", fake.calls[0][0])
 
-    def test_receives_inventory_path(self) -> None:
+    def test_receives_constructor_project(self) -> None:
         fake = _make_recording_fake(self.m)
-        _run(self.m, ["--inventory", "/tmp/custom.toml", "show"],
-             dispatcher=fake)
-        self.assertEqual("/tmp/custom.toml", fake.calls[0][1].inventory)
+        _run(
+            self.m,
+            ["--project-directory", str(_TEST_PROJECT_ROOT), "show"],
+            dispatcher=fake,
+        )
+        project = fake.calls[0][1].constructor_project
+        self.assertEqual(_TEST_PROJECT_ROOT.resolve(), project.root)
+        self.assertEqual(
+            _TEST_PROJECT_ROOT.resolve() / "docker-constructor.toml",
+            project.inventory,
+        )
 
-    def test_omitted_inventory_is_none(self) -> None:
+    def test_removed_inventory_option_is_rejected(self) -> None:
         fake = _make_recording_fake(self.m)
-        _run(self.m, ["show"], dispatcher=fake)
-        self.assertIsNone(fake.calls[0][1].inventory)
+        rc, _, _ = _run(
+            self.m, ["--inventory", "/tmp/custom.toml", "show"], dispatcher=fake
+        )
+        self.assertEqual(2, rc)
+        self.assertEqual([], fake.calls)
 
     def test_receives_output_mode(self) -> None:
         fake = _make_recording_fake(self.m)
@@ -1047,14 +1065,14 @@ class TestDispatchRecording(unittest.TestCase):
         CR = self.m.CommandRequest
         req = CR(
             command="validate",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
             command_args={"scope": "build"},
         )
         with self.assertRaises(Exception):
-            req.inventory = "/hacked"  # type: ignore[misc]
+            req.constructor_project = ConstructorProject(Path("/hacked"))  # type: ignore[misc]
         with self.assertRaises(Exception):
             req.output = "json"  # type: ignore[misc]
         with self.assertRaises(TypeError):
@@ -1069,7 +1087,7 @@ class TestDispatchRecording(unittest.TestCase):
         CR = self.m.CommandRequest
         req = CR(
             command="run",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1110,7 +1128,7 @@ class TestDispatchRecording(unittest.TestCase):
         CR = self.m.CommandRequest
         req = CR(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1128,7 +1146,7 @@ class TestDispatchRecording(unittest.TestCase):
         CR = self.m.CommandRequest
         req = CR(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1152,7 +1170,7 @@ class TestDispatchRecording(unittest.TestCase):
         pre_frozen = MappingProxyType({"items": [1, 2, 3]})
         req = CR(
             command="run",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1436,7 +1454,7 @@ class TestDoctorStructuredData(unittest.TestCase):
         command_args, skipping prompt (yes=True)."""
         CR = self.m.CommandRequest
         req = CR(
-            command="doctor", inventory=None, output="text",
+            command="doctor", constructor_project=ConstructorProject(Path.cwd().resolve()), output="text",
             verbose=False, color="auto",
             command_args={"yes": True, **cmd_args},
         )
@@ -1481,7 +1499,7 @@ class TestDoctorStructuredData(unittest.TestCase):
             result = self.m._real_dispatcher(
                 "doctor",
                 CR(
-                    command="doctor", inventory=None, output="text",
+                    command="doctor", constructor_project=ConstructorProject(Path.cwd().resolve()), output="text",
                     verbose=False, color="auto",
                     command_args={"apply_override": True, "yes": True},
                 ),
@@ -1550,7 +1568,7 @@ class TestDoctorStructuredData(unittest.TestCase):
             result = self.m._real_dispatcher(
                 "doctor",
                 CR(
-                    command="doctor", inventory=None, output="text",
+                    command="doctor", constructor_project=ConstructorProject(Path.cwd().resolve()), output="text",
                     verbose=False, color="auto",
                     command_args={"yes": True},
                 ),
@@ -1613,7 +1631,7 @@ class TestDoctorStructuredData(unittest.TestCase):
             result = self.m._real_dispatcher(
                 "doctor",
                 CR(
-                    command="doctor", inventory=None, output="text",
+                    command="doctor", constructor_project=ConstructorProject(Path.cwd().resolve()), output="text",
                     verbose=False, color="auto",
                     command_args={"apply_override": True, "yes": True},
                 ),
@@ -1666,7 +1684,7 @@ class TestBuildConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1686,7 +1704,7 @@ class TestBuildConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1703,7 +1721,7 @@ class TestBuildConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1722,7 +1740,7 @@ class TestBuildConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1740,7 +1758,7 @@ class TestBuildConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="build",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1767,7 +1785,7 @@ class TestDoctorConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="doctor",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1784,7 +1802,7 @@ class TestDoctorConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="doctor",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1800,7 +1818,7 @@ class TestDoctorConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="doctor",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -1817,7 +1835,7 @@ class TestDoctorConfirmation(unittest.TestCase):
         from docker.constructor_cli import CommandRequest
         req = CommandRequest(
             command="doctor",
-            inventory=None,
+            constructor_project=ConstructorProject(Path.cwd().resolve()),
             output="text",
             verbose=False,
             color="auto",
@@ -2514,7 +2532,7 @@ class TestVerifyBuildWiring(unittest.TestCase):
         --version`` for each contract tool."""
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "build", "--image", "test-img:1"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -2537,7 +2555,7 @@ class TestVerifyBuildWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "build", "--image", "ok-img:v1"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -2554,7 +2572,7 @@ class TestVerifyBuildWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "build", "--image", "bad-img:v2"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -2571,7 +2589,7 @@ class TestVerifyBuildWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "--output", "json",
              "verify", "--scope", "build", "--image", "json-img:v3"],
             _process_runner=runner,
@@ -2675,7 +2693,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime", "--image", "no-such-img:v0"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -2696,7 +2714,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime", "--image", "good-img:v1"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -2717,7 +2735,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime", "--image", "bad-img:v2"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -2737,7 +2755,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime", "--image", "nosock-img:v3"],
             _process_runner=_OSErrorRunner(),
             _prompt_user=lambda _: True,
@@ -2788,7 +2806,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-custom",
              "--runtime-projection", str(custom_rp)],
@@ -2807,7 +2825,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-multi",
              "--project", "/home/dev/p1",
@@ -2834,7 +2852,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-discover"],
             _process_runner=runner,
@@ -2856,7 +2874,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-empty"],
             _process_runner=runner,
@@ -2875,7 +2893,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-order"],
             _process_runner=runner,
@@ -2899,7 +2917,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-gap"],
             _process_runner=runner,
@@ -2915,7 +2933,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-offby"],
             _process_runner=runner,
@@ -2936,7 +2954,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-noproj"],
             _process_runner=runner,
@@ -2951,7 +2969,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-1"],
             _process_runner=runner,
@@ -2971,7 +2989,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "all",
              "--container", "pi-1", "--image", "img:v99"],
             _process_runner=runner,
@@ -3055,7 +3073,7 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "build", "--collect-evidence",
              "--image", "ev-img:v1"],
             _process_runner=runner,
@@ -3074,7 +3092,7 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "--output", "json",
              "verify", "--scope", "build", "--collect-evidence",
              "--image", "ev-img:v2"],
@@ -3095,7 +3113,7 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "--output", "json",
              "verify", "--scope", "runtime", "--collect-evidence",
              "--container", "pi-2"],
@@ -3118,7 +3136,7 @@ class TestVerifyEvidenceWiring(unittest.TestCase):
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(self._inv_path.parent),
              "--output", "json",
              "verify", "--scope", "runtime", "--collect-evidence",
              "--dry-run", "--container", "pi-dry"],

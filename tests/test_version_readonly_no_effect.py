@@ -71,7 +71,7 @@ class TestSuggestIsNonMutating(unittest.TestCase):
                         _stub_providers(),
                     ):
                         rc = constructor_cli.main(
-                            ["--inventory", str(inv_path),
+                            ["--project-directory", str(pathlib.Path(inv_path).parent),
                              "check-updates", "--suggest"],
                             stdout_isatty=lambda: False,
                             stderr_isatty=lambda: False,

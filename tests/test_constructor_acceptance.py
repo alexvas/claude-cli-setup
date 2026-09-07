@@ -1419,7 +1419,7 @@ class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
         )
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(Path(self._inv_path).parent),
              "verify", "--scope", "build", "--image", "mis-img:v9"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -1444,7 +1444,7 @@ class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
         evidence_dir = str(self._td / "evidence")
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(Path(self._inv_path).parent),
              "--output", "json",
              "verify", "--scope", "build", "--image", "empty-img:v1",
              "--collect-evidence", "--output-dir", evidence_dir],
@@ -1491,7 +1491,7 @@ class TestVerifyBuildMismatchDiagnostics(unittest.TestCase):
         runner, calls = _make_recording_runner(return_code=0, stdout="")
         rc, out, err = _run(
             self.m,
-            ["--inventory", str(self._inv_path),
+            ["--project-directory", str(Path(self._inv_path).parent),
              "verify", "--scope", "build", "--image", "specific-img:v2.5"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
@@ -1545,7 +1545,7 @@ class TestVerifyRuntimeMountDiagnostics(unittest.TestCase):
     def _base_argv(self) -> list[str]:
         """CLI arguments shared by all runtime verification tests."""
         return [
-            "--inventory", self._inv_path,
+            "--project-directory", str(Path(self._inv_path).parent),
             "verify", "--scope", "runtime",
             "--container", "test-ctr",
             "--runtime-projection", self._proj_path,
@@ -2082,7 +2082,7 @@ class TestEvidenceCompleteness(unittest.TestCase):
             rc, out, err = _run(
                 self.m,
                 ["--output", "json",
-                 "--inventory", inv_path,
+                 "--project-directory", str(Path(inv_path).parent),
                  "verify", "--scope", "runtime",
                  "--container", "ev-ctr",
                  "--runtime-projection", proj_path,

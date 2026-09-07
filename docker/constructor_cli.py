@@ -38,13 +38,16 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
+from docker.versioning.constructor_project import (
+    ConstructorProject,
+    resolve_constructor_project,
+)
 from docker.versioning.dispatch_types import CommandResult, ExitKind
 from docker.versioning.immutable import deep_freeze
 from docker.versioning.model import HostAccessPolicy
 from docker.versioning.host_progress import HostDiagnosticEvent, HostPhaseEvent
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
+_INSTALLATION_ROOT = Path(__file__).resolve().parent.parent
 
 _EXIT_CODES: dict[ExitKind, int] = {
     ExitKind.SUCCESS: 0,
@@ -111,7 +114,7 @@ class CommandRequest:
     """
 
     command: str
-    inventory: str | None
+    constructor_project: ConstructorProject
     output: str          # "text" | "json"
     verbose: bool
     color: str           # "auto" | "always" | "never"
@@ -141,15 +144,8 @@ class CommandDispatcher(Protocol):
 
 
 def _resolve_inventory_path(request: CommandRequest) -> Path:
-    """Resolve the inventory path from request or repo root.
-
-    Explicit ``--inventory`` paths are accepted regardless of basename.
-    The default is ``docker-constructor.toml`` in the repository root
-    (parent of the ``docker/`` directory containing this module).
-    """
-    if request.inventory:
-        return Path(request.inventory)
-    return _REPO_ROOT / "docker-constructor.toml"
+    """Return the fixed inventory path for the selected project."""
+    return request.constructor_project.inventory
 
 
 def _resolve_runtime_projection(
@@ -350,11 +346,11 @@ def _resolve_verify_corporate_network(
 
 
 def _read_env_key(key: str) -> str | None:
-    """Read a single value from the repo ``.env`` file.
+    """Read a single value from the installation ``.env`` file.
 
     Returns ``None`` when the file is missing or the key is absent.
     """
-    env_path = _REPO_ROOT / ".env"
+    env_path = _INSTALLATION_ROOT / ".env"
     if not env_path.is_file():
         return None
     try:
@@ -534,7 +530,7 @@ def _real_dispatcher(
 
         build_request = BuildRequest(
             inventory_path=str(inv_path),
-            repo_root=str(_REPO_ROOT),
+            repo_root=str(_INSTALLATION_ROOT),
             platform=str(c_args.get("platform", "linux-amd64")),
             tag=c_args.get("tag") if c_args.get("tag") is not None else None,
             overrides=overrides,
@@ -835,7 +831,7 @@ def _real_dispatcher(
 
         run_request = RunRequest(
             inventory_path=str(inv_path),
-            repo_root=str(_REPO_ROOT),
+            repo_root=str(_INSTALLATION_ROOT),
             image=image,
             selection=selection,
             pi_home_host=str(Path.home() / ".pi"),
@@ -990,7 +986,9 @@ def _real_dispatcher(
                 _verify_proxy_url,
                 _verify_proxy_no_proxy,
                 _verify_net_err,
-            ) = _resolve_verify_corporate_network(str(inv_path), _REPO_ROOT)
+            ) = _resolve_verify_corporate_network(
+                str(inv_path), _INSTALLATION_ROOT
+            )
             if _verify_net_err is not None:
                 return CommandResult(
                     exit_kind=ExitKind.CONFIG,
@@ -1891,11 +1889,10 @@ def _render(
 
 def _add_global_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--inventory",
+        "--project-directory",
         default=None,
-        metavar="PATH",
-        help="Path to docker-constructor.toml (default: docker-constructor.toml"
-             " in repo root)",
+        metavar="DIR",
+        help="Constructor project directory (default: current directory)",
     )
     parser.add_argument(
         "--output",
@@ -1954,7 +1951,7 @@ def _dispatch_command(
     # Collect command-owned arguments into command_args
     cmd_args: dict[str, object] = {}
     for attr in vars(args):
-        if attr in ("command", "func", "inventory", "output", "verbose",
+        if attr in ("command", "func", "project_directory", "output", "verbose",
                      "color", "details"):
             continue
         value = getattr(args, attr)
@@ -1995,9 +1992,10 @@ def _dispatch_command(
                 message="--probe-image must not be empty",
             )
 
+    constructor_project = resolve_constructor_project(args.project_directory)
     request = CommandRequest(
         command=args.command,
-        inventory=args.inventory,
+        constructor_project=constructor_project,
         output=args.output,
         verbose=args.verbose,
         color=args.color,

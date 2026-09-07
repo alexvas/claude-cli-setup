@@ -23,24 +23,24 @@ Rules:
 
 ### RED
 
-- [ ] P1.R1 Add resolver tests for default CWD selection, relative selection, absolute selection, symlink normalization, missing paths, non-directory paths, and absence of parent or installation-root fallback.
-- [ ] P1.R2 Add path-derivation tests for project-owned inputs `docker-constructor.toml`, `docker-constructor.local.toml`, `Dockerfile`, `.env`, and `.docker-local/` beneath one normalized root; external generated-state consumption remains owned by Phase 3.
-- [ ] P1.R3 Add parser tests that accept global `--project-directory` and reject `--inventory` without an alias.
-- [ ] P1.R4 Add a dispatcher-boundary test proving one resolved constructor-project value is reused for the complete invocation.
+- [x] P1.R1 Add resolver tests for default CWD selection, relative selection, absolute selection, symlink normalization, missing paths, non-directory paths, and absence of parent or installation-root fallback.
+- [x] P1.R2 Add path-derivation tests for project-owned inputs `docker-constructor.toml`, `docker-constructor.local.toml`, `Dockerfile`, `.env`, and `.docker-local/` beneath one normalized root; external generated-state consumption remains owned by Phase 3.
+- [x] P1.R3 Add parser tests that accept global `--project-directory` and reject `--inventory` without an alias.
+- [x] P1.R4 Add a dispatcher-boundary test proving one resolved constructor-project value is reused for the complete invocation.
 
 ### GREEN
 
-- [ ] P1.G1 Implement the immutable constructor-project path value and physical-directory resolver required by P1.R1 and P1.R2.
-- [ ] P1.G2 Replace the global inventory request field and parser option with `--project-directory` as required by P1.R3.
-- [ ] P1.G3 Resolve the constructor project once in the facade and pass it through the dispatcher boundary as required by P1.R4.
+- [x] P1.G1 Implement the immutable constructor-project path value and physical-directory resolver required by P1.R1 and P1.R2.
+- [x] P1.G2 Replace the global inventory request field and parser option with `--project-directory` as required by P1.R3.
+- [x] P1.G3 Resolve the constructor project once in the facade and pass it through the dispatcher boundary as required by P1.R4.
 
 ### INTROSPECT
 
-- [ ] P1.I1 Inspect project-selection code for process-CWD rereads, parent discovery, custom inventory derivation, and `_REPO_ROOT` use for project-owned state; remove every occurrence found.
+- [x] P1.I1 Inspect project-selection code for process-CWD rereads, parent discovery, custom inventory derivation, and `_REPO_ROOT` use for project-owned state; remove every occurrence found.
 
 ### VALIDATE
 
-- [ ] P1.V1 Run the resolver, path-model, parser, and dispatcher tests introduced in P1.R1–P1.R4 and record that they all pass.
+- [x] P1.V1 Run the resolver, path-model, parser, and dispatcher tests introduced in P1.R1–P1.R4 and record that they all pass.
 
 ## Phase 2 — Fixed Project-Owned Inputs and Build Contract
 

@@ -2479,12 +2479,11 @@ class TestInventoryImmutability(unittest.TestCase):
         import tempfile
         repo_root = pathlib.Path(__file__).resolve().parent.parent
         canonical = repo_root / "docker-constructor.toml"
-        f = tempfile.NamedTemporaryFile(
-            mode="wb", suffix=".toml", delete=False,
-        )
-        f.write(canonical.read_bytes())
-        f.close()
-        return f.name
+        project = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, project, True)
+        inventory = project / "docker-constructor.toml"
+        inventory.write_bytes(canonical.read_bytes())
+        return str(inventory)
 
     # ── no fake — expects real dispatcher (RED until 8.4) ──────────
 
@@ -2494,7 +2493,7 @@ class TestInventoryImmutability(unittest.TestCase):
         try:
             before = path.read_bytes()
             rc, out, _ = _run(
-                self.m, ["--inventory", str(path), "validate"],
+                self.m, ["--project-directory", str(pathlib.Path(path).parent), "validate"],
             )
             after = path.read_bytes()
             # RED: default dispatcher returns "unavailable" (exit 2);
@@ -2513,7 +2512,7 @@ class TestInventoryImmutability(unittest.TestCase):
         try:
             before = path.read_bytes()
             rc, out, _ = _run(
-                self.m, ["--inventory", str(path),
+                self.m, ["--project-directory", str(pathlib.Path(path).parent),
                          "show", "--scope", "build"],
             )
             after = path.read_bytes()
@@ -2531,7 +2530,7 @@ class TestInventoryImmutability(unittest.TestCase):
         try:
             before = path.read_bytes()
             rc, out, _ = _run(
-                self.m, ["--inventory", str(path),
+                self.m, ["--project-directory", str(pathlib.Path(path).parent),
                          "show", "--scope", "build", "--effective"],
             )
             after = path.read_bytes()
@@ -2554,7 +2553,7 @@ class TestInventoryImmutability(unittest.TestCase):
             with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
                               fake_providers):
                 rc, out, _ = _run(
-                    self.m, ["--inventory", str(path), "check-updates"],
+                    self.m, ["--project-directory", str(pathlib.Path(path).parent), "check-updates"],
                 )
             after = path.read_bytes()
             self.assertEqual(0, rc,
@@ -2576,7 +2575,7 @@ class TestInventoryImmutability(unittest.TestCase):
             with patch.object(docker.versioning.updates, "_DEFAULT_PROVIDERS",
                               fake_providers):
                 rc, out, _ = _run(
-                    self.m, ["--inventory", str(path),
+                    self.m, ["--project-directory", str(pathlib.Path(path).parent),
                              "check-updates", "--suggest"],
                 )
             after = path.read_bytes()
@@ -2612,7 +2611,7 @@ class TestInventoryImmutability(unittest.TestCase):
                     with ctx:
                         rc, out, _ = _run(
                             self.m,
-                            ["--inventory", str(path)] + argv,
+                            ["--project-directory", str(pathlib.Path(path).parent)] + argv,
                         )
                     # RED until 8.4: default dispatcher returns "unavailable"
                     self.assertEqual(0, rc,
@@ -2626,8 +2625,8 @@ class TestInventoryImmutability(unittest.TestCase):
                 os.chdir(orig)
                 path.unlink(missing_ok=True)
 
-    def test_custom_inventory_path_also_unchanged(self) -> None:
-        """An explicit --inventory PATH must be preserved byte-for-byte."""
+    def test_selected_project_inventory_also_unchanged(self) -> None:
+        """A selected project's fixed inventory remains byte-for-byte unchanged."""
         import contextlib
         import pathlib
         import docker.versioning.updates
@@ -2646,7 +2645,7 @@ class TestInventoryImmutability(unittest.TestCase):
                 with ctx:
                     rc, out, _ = _run(
                         self.m,
-                        ["--inventory", str(path)] + argv,
+                        ["--project-directory", str(pathlib.Path(path).parent)] + argv,
                     )
                 # RED until 8.4
                 self.assertEqual(0, rc,
@@ -2654,7 +2653,7 @@ class TestInventoryImmutability(unittest.TestCase):
                 after = path.read_bytes()
                 self.assertEqual(
                     before, after,
-                    f"{argv} mutated --inventory {path}",
+                    f"{argv} mutated project inventory {path}",
                 )
         finally:
             path.unlink(missing_ok=True)

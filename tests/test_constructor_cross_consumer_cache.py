@@ -245,11 +245,11 @@ class TestCrossConsumerCacheRoot(unittest.TestCase):
                 )
                 from docker import constructor_cli
                 stdout, stderr = io.StringIO(), io.StringIO()
-                with mock.patch.object(constructor_cli, "_REPO_ROOT", checkout), \
+                with mock.patch.object(constructor_cli, "_INSTALLATION_ROOT", checkout), \
                      mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(xdg)}, clear=False), \
                      redirect_stdout(stdout), redirect_stderr(stderr):
                     code = constructor_cli.main(
-                        ["--inventory", str(checkout / "docker-constructor.toml"),
+                        ["--project-directory", str(Path(checkout / "docker-constructor.toml").parent),
                          "--output", "json", "verify", "--scope", "build",
                          "--collect-evidence", "--dry-run", "--container", "pi-test"],
                         _process_runner=_EvidenceRunner(),
