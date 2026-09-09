@@ -58,7 +58,7 @@ Both modes make the configured address available as `host.docker.internal` and `
 Use this mode when Docker's gateway is the correct route to the host. Run doctor once to diagnose the gateway and save its selected concrete address:
 
 ```bash
-./docker/docker-constructor.py doctor --inventory docker-constructor.toml
+./docker/docker-constructor.py doctor
 ```
 
 Doctor writes `[host-access].address` to `docker-constructor.local.toml`, beside `docker-constructor.toml`. If the address later becomes stale, run doctor again. A missing address makes `run` fail with instructions to run doctor; ordinary `run` never probes Docker or changes local state. Doctor performs gateway diagnosis, persistence, and repair only in `docker-gateway` mode: it does not diagnose, overwrite, persist, or repair state for `external-address` or disabled host access.
@@ -80,9 +80,9 @@ address = "192.0.2.10"
 
 `address` must be an IP address in this mode; `host-gateway` is not accepted. A service reached through `HOST_ACCESS_ADDRESS` must listen on an interface reachable from that address. A loopback-only service can remain unreachable, and firewall rules still apply.
 
-### Local companion and custom inventories
+### Constructor project and local companion
 
-The local companion contains machine-specific state only; it cannot override reviewed policy, dependencies, or `cache.ttl`. The canonical inventory `docker-constructor.toml` uses `docker-constructor.local.toml`. A selected custom inventory such as `--inventory /work/custom.toml` uses `/work/custom.local.toml` beside it in the same directory; it never falls back to repository-root local state.
+Every command selects one constructor project: the current working directory by default, or `--project-directory DIR`. Its fixed layout is `docker-constructor.toml`, optional `docker-constructor.local.toml`, `Dockerfile`, optional `.env`, and `.docker-local/` directly beneath that directory. The local companion contains machine-specific state only and cannot override reviewed policy, dependencies, or `cache.ttl`.
 
 ### Optional proxy port and environment variables
 
@@ -104,7 +104,7 @@ dir = "/home/dev/.cache/pi-docker"
 
 `cache.ttl` belongs in reviewed `docker-constructor.toml`; `cache.dir` belongs only in `docker-constructor.local.toml`. `--no-cache` bypasses HTTP caching for one update check without changing the reviewed TTL.
 
-Without `[cache].dir`, the persistent root is `${XDG_CACHE_HOME}/docker-constructor` when `XDG_CACHE_HOME` is non-empty and absolute, otherwise `~/.cache/docker-constructor`. HTTP responses use `versioning/`; verified artifacts, locks, and temporary state use `runtime-artifacts/blobs`, `runtime-artifacts/locks`, and `runtime-artifacts/tmp`. Runtime projections and evidence remain checkout-local under `.docker-generated/`.
+Without `[cache].dir`, the persistent root is `${XDG_CACHE_HOME}/docker-constructor` when `XDG_CACHE_HOME` is non-empty and absolute, otherwise `~/.cache/docker-constructor`. HTTP responses use `versioning/`; verified artifacts, locks, and temporary state use `runtime-artifacts/blobs`, `runtime-artifacts/locks`, and `runtime-artifacts/tmp`. Runtime projections and default evidence are stored in the external project-state namespace keyed by the selected constructor project's canonical path; no implicit `.docker-generated` directory is created in the constructor project or a workspace.
 
 A local `cache.dir` must be an absolute, dedicated constructor-owned root. Do not select `/`, the home directory, `XDG_CACHE_HOME` itself, or its ancestor. Constructor-owned directories are secured to `0700`, HTTP entries to `0600`, and verified blobs to `0444`; existing parent directories, including `XDG_CACHE_HOME`, are not chmodded. If a selected cache path has foreign ownership or cannot be secured, restore its ownership or remove that stale constructor subtree and retry. Host access does not need to be enabled.
 
@@ -131,18 +131,18 @@ This feature does not configure or control the Docker client or daemon proxy/tru
 
 ## 2. Launch the environment
 
-Open the interactive project selector:
+Open the interactive workspace selector:
 
 ```bash
 ./docker/docker-constructor.py run --tui
 ```
 
-The selected main project becomes the container working directory and is bind-mounted at the same absolute path. Additional projects are mounted 1:1 with consecutive `PROJECT_PATH_2`, `PROJECT_PATH_3`, … numbering — no fixed limit. Host `~/.pi` is mounted at `/home/dev/.pi`. Set optional `BASE_PROJECT_DIR` in `.env` or pass `--base-project-dir` to choose the TUI tree root.
+The selected primary workspace becomes the container working directory and is bind-mounted at the same absolute path. Extra workspaces are mounted 1:1 with consecutive `WORKSPACE_PATH_2`, `WORKSPACE_PATH_3`, … numbering — no fixed limit. Host `~/.pi` is mounted at `/home/dev/.pi`. Set optional `WORKSPACE_ROOT` in the selected constructor project's `.env` or pass `--workspace-root` to choose the TUI tree root.
 
-Direct launch with explicit projects:
+Direct launch with explicit workspaces:
 
 ```bash
-./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
+./docker/docker-constructor.py run --workspace /path/to/primary --extra-workspace /path/to/extra
 ```
 
 ### Runtime extension artifacts
@@ -161,7 +161,7 @@ The container receives neither artifact URLs nor the cache directory. It receive
    ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` is **non-mutating**: its output is a complete manual replacement block, never an automatic edit or TOML to append. In the canonical `docker-constructor.toml`, locate the matching `# --- pi-tools.pi ---` header and replace that entire block through the next `# --- ... ---` header. The fragment retains unchanged source, update-policy, override, validation, and configured platform-artifact fields; review them together with the candidate values. Headers are visual-only and optional in custom inventories, so use the full TOML table path there instead.
+2. `--suggest` is **non-mutating**: its output is a complete manual replacement block, never an automatic edit or TOML to append. In the canonical `docker-constructor.toml`, locate the matching `# --- pi-tools.pi ---` header and replace that entire block through the next `# --- ... ---` header. The fragment retains unchanged source, update-policy, override, validation, and configured platform-artifact fields; review them together with the candidate values. Headers are visual-only; use the full TOML table path when locating a reviewed entry.
 3. Validate and review the exact repository change:
 
    ```bash
@@ -227,7 +227,7 @@ The unittest suite uses only the Python standard library and does not invoke Doc
 After changing `runtime.pi-extensions`, launch with the intended Pi home mounted — the entrypoint will automatically run the idempotent installer via `docker.runtime_installer`:
 
 ```bash
-./docker/docker-constructor.py run
+./docker/docker-constructor.py run --workspace /path/to/primary
 ```
 
 ### Repair host ownership and permissions

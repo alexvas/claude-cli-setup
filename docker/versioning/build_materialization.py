@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 from docker.versioning.build_cache import (
-    BLOB_EXTENSION, BuildCacheError, CheckoutBuildLock, build_blob_path,
+    BLOB_EXTENSION, BuildCacheError, ConstructorProjectBuildLock, build_blob_path,
     mark_uncommitted_blob, prepare_build_cache,
 )
 from docker.versioning.digest_identity import DigestIdentity
@@ -108,12 +108,12 @@ def _verify_hit(path: Path, identity: DigestIdentity) -> bool:
 
 
 def materialize_artifact(
-    selected: SelectedBuildArtifact, *, checkout_root: str | Path,
+    selected: SelectedBuildArtifact, *, constructor_project_root: str | Path,
     transport: StreamingTransport, cache_root: str | Path | None = None,
-    project_state: ProjectState | None = None, lock: CheckoutBuildLock | None = None,
+    project_state: ProjectState | None = None, lock: ConstructorProjectBuildLock | None = None,
 ) -> Path:
     """Reuse a verified hit or stream, verify, and atomically publish a miss."""
-    paths = prepare_build_cache(checkout_root, cache_root=cache_root, project_state=project_state)
+    paths = prepare_build_cache(constructor_project_root, cache_root=cache_root, project_state=project_state)
     destination = build_blob_path(paths.blobs_root, selected.identity)
     if _verify_hit(destination, selected.identity):
         return destination
@@ -146,7 +146,7 @@ def materialize_artifact(
         if lock is not None:
             try:
                 mark_uncommitted_blob(
-                    selected.identity, checkout_root, lock=lock,
+                    selected.identity, constructor_project_root, lock=lock,
                     cache_root=cache_root, project_state=project_state,
                 )
             except BaseException:
@@ -166,14 +166,14 @@ def materialize_artifact(
 
 
 def materialize_build_artifacts(
-    projection: EffectiveBuildProjection, *, checkout_root: str | Path,
+    projection: EffectiveBuildProjection, *, constructor_project_root: str | Path,
     transport: StreamingTransport, cache_root: str | Path | None = None,
-    project_state: ProjectState | None = None, lock: CheckoutBuildLock | None = None,
+    project_state: ProjectState | None = None, lock: ConstructorProjectBuildLock | None = None,
 ) -> tuple[Path, ...]:
     results: list[Path] = []
     for selected in select_build_artifacts(projection):
         results.append(materialize_artifact(
-            selected, checkout_root=checkout_root, transport=transport,
+            selected, constructor_project_root=constructor_project_root, transport=transport,
             cache_root=cache_root, project_state=project_state, lock=lock,
         ))
     return tuple(results)

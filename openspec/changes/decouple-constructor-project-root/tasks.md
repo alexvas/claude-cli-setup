@@ -175,26 +175,26 @@ Rules:
 
 ### RED
 
-- [ ] P6.R1 Add semantic migration checks that reject active `--inventory`, custom inventory, removed workspace aliases, `BASE_PROJECT_DIR`, and `PROJECT_PATH_*` while permitting historical archived OpenSpec artifacts.
-- [ ] P6.R2 Add documentation contract checks for constructor-project/workspace terminology, fixed project layout, CWD/`--project-directory` usage, and the breaking migration mapping.
-- [ ] P6.R3 Add translation-equivalence checks for the supported workflows in the Russian, English, and Chinese READMEs.
+- [x] P6.R1 Add semantic migration checks that reject active `--inventory`, custom inventory, removed workspace aliases, `BASE_PROJECT_DIR`, and `PROJECT_PATH_*` while permitting historical archived OpenSpec artifacts.
+- [x] P6.R2 Add documentation contract checks for constructor-project/workspace terminology, fixed project layout, and CWD/`--project-directory` usage.
+- [x] P6.R3 Add translation-equivalence checks for the supported workflows in the Russian, English, and Chinese READMEs.
 
 ### GREEN
 
-- [ ] P6.G1 Update runtime artifact collection and evidence shell scripts to use fixed project-local inventory discovery and the new project/workspace options.
-- [ ] P6.G2 Update all repository-owned command examples to use `--project-directory`, `--workspace`, and `--extra-workspace` where applicable.
-- [ ] P6.G3 Update code comments, module documentation, help text, error messages, maintained fixtures, and tests to remove obsolete active terminology.
-- [ ] P6.G4 Update the Russian README with constructor-project/workspace terminology, fixed layout, generated-output behavior, and migration guidance.
-- [ ] P6.G5 Update the English README to be behaviorally equivalent to the Russian README required by P6.G4.
-- [ ] P6.G6 Update the Chinese README to be behaviorally equivalent to the Russian README required by P6.G4.
+- [x] P6.G1 Update runtime artifact collection and evidence shell scripts to use fixed project-local inventory discovery and the new project/workspace options.
+- [x] P6.G2 Update all repository-owned command examples to use `--project-directory`, `--workspace`, and `--extra-workspace` where applicable.
+- [x] P6.G3 Update code comments, module documentation, help text, error messages, maintained fixtures, and tests to remove obsolete active terminology.
+- [x] P6.G4 Update the Russian README with constructor-project/workspace terminology, fixed layout, and generated-output behavior.
+- [x] P6.G5 Update the English README to be behaviorally equivalent to the Russian README required by P6.G4.
+- [x] P6.G6 Update the Chinese README to be behaviorally equivalent to the Russian README required by P6.G4.
 
 ### INTROSPECT
 
-- [ ] P6.I1 Review scripts, examples, diagnostics, fixtures, and all three translations against the active specs; resolve every semantic or translation mismatch found.
+- [x] P6.I1 Review scripts, examples, diagnostics, fixtures, and all three translations against the active specs; resolve every semantic or translation mismatch found.
 
 ### VALIDATE
 
-- [ ] P6.V1 Run the semantic migration and documentation checks introduced in P6.R1–P6.R3 and record that they all pass.
+- [x] P6.V1 Run the semantic migration and documentation checks introduced in P6.R1–P6.R3 and record that they all pass.
 
 ## Phase 7 — End-to-End Acceptance
 

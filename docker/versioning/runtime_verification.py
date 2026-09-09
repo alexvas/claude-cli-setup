@@ -29,7 +29,7 @@ Checks
 +--------------------------+-----------------------------------------------------------+
 | ``working.directory``    | The container working directory equals ``WORKSPACE_PATH_1``.   |
 +--------------------------+-----------------------------------------------------------+
-| ``ownership.dev``        | ``/home/dev/.pi`` and every project path are owned            |
+| ``ownership.dev``        | ``/home/dev/.pi`` and every workspace path are owned          |
 |                          | by ``dev:dev`` (UID/GID 1000:1000).                          |
 +--------------------------+-----------------------------------------------------------+
 | ``pi-home.setup``        | ``~/.pi`` exists and is writable by dev.                     |

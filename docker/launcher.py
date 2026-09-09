@@ -626,8 +626,8 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     proxy_no_proxy = local_corporate.network_proxy.no_proxy
 
     # All persistent runtime-artifact state lives beneath the shared,
-    # secured constructor cache root; checkout-local generated output is
-    # reserved for projections and evidence.
+    # secured constructor cache root; projections and evidence use the
+    # selected constructor project's external generated-state namespace.
     from docker.versioning.cache_storage import (
         prepare_resolved_root, resolve_effective_root,
         runtime_artifacts_blobs_child, runtime_artifacts_locks_child,
@@ -866,17 +866,16 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     # ── Step 4: create projection ───────────────────────────
     factory = request._create_projection
     if factory is None:
-        # The real factory generates its own unique non-existent
-        # path inside the repo's .docker-generated/runtime/.
-        # Do NOT pre-create a file — create_runtime_projection
-        # uses atomic hard-link promotion with no-clobber
-        # semantics.
+        # The real factory generates a unique non-existent path inside the
+        # selected constructor project's external runtime namespace. Do NOT
+        # pre-create a file — create_runtime_projection uses atomic hard-link
+        # promotion with no-clobber semantics.
         def _real_factory(
             projection: EffectiveRuntimeProjection, *, parent_dir: str
         ) -> RuntimeProjectionHandle:
-            # Keep generated projections checkout-local even when persistent
-            # cache roots are redirected.  Supply a unique non-existent path
-            # so create_runtime_projection retains atomic no-clobber publish.
+            # Keep generated projections in the selected constructor project's
+            # external namespace even when persistent cache roots are redirected.
+            # Supply a unique non-existent path for atomic no-clobber publish.
             import uuid
             from docker.versioning.effective import Filesystem
             return create_runtime_projection(

@@ -85,21 +85,12 @@ CLI parsing, run-vector rendering, image entrypoint behavior, verification, acce
 
 ## Risks / Trade-offs
 
-- **[Existing automation breaks immediately]** → Document an explicit old-to-new mapping and update all repository-owned scripts and examples in the same change.
+- **[Existing automation breaks immediately]** → Update all repository-owned scripts and examples in the same change; compatibility aliases remain intentionally unsupported.
 - **[A command accidentally retains `_REPO_ROOT`]** → Add cross-command tests from a foreign CWD with an explicit project directory, plus semantic scans for project-owned `_REPO_ROOT` and removed names.
 - **[Generated files and lookup inputs are split across roots]** → Derive build/runtime projection creation paths, the default runtime-projection lookup, and the default evidence path from the external namespace keyed by the single immutable constructor-project value, while preserving explicit evidence `--output-dir` and verify `--runtime-projection PATH` as caller-directed paths; assert external default placement, no constructor-project/workspace mutation, and both explicit redirection boundaries in orchestration tests.
 - **[Symlink handling crosses path-domain boundaries]** → Apply physical resolution only to the constructor-project root and its derived project-owned paths. Preserve workspace paths using the existing lexical absolute-path normalization without resolving workspace symlinks, so workspace bind and display paths retain their established spelling; test both path domains independently.
 - **[A standalone Dockerfile lacks current repository scripts]** → Require the selected project to supply every `COPY` input in its context and let Docker report missing project-owned assets; do not silently source files from the installation.
 - **[Large rename obscures functional regressions]** → Stage implementation by project-root plumbing, then host workspace DTO/rendering, then container contract, followed by docs and semantic cleanup.
-
-## Migration Plan
-
-1. Update repository-owned definitions and scripts so the repository root remains a valid constructor project under the fixed layout.
-2. Replace invocations using `--inventory` with `--project-directory <directory-containing-docker-constructor.toml>` or execute from that directory.
-3. Replace `--main-project`/`-m`, `--project`, and `--base-project-dir` with `--workspace`/`-w`, `--extra-workspace`, and `--workspace-root`.
-4. Rename project-local `.env` `BASE_PROJECT_DIR` to `WORKSPACE_ROOT`.
-5. Rebuild the image and update any external entrypoint/verification integration from `PROJECT_PATH_*` to `WORKSPACE_PATH_*`; old and new host/image contracts are intentionally not interoperable.
-6. Rollback requires reverting the host CLI and image together because no compatibility aliases exist.
 
 ## Open Questions
 

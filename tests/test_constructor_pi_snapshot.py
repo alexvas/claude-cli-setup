@@ -115,7 +115,7 @@ class _SnapshotHarness:
     def run(self):
         snapshot = create_artifact_snapshot(
             (x[0] for x in self.pairs), (x[1] for x in self.pairs),
-            checkout_root=self.root, project_state=self.state,
+            constructor_project_root=self.root, project_state=self.state,
             derived=self.derived,
         )
         self.test.addCleanup(cleanup_artifact_snapshot, snapshot)
@@ -125,7 +125,7 @@ class _SnapshotHarness:
         with self.test.assertRaises(SnapshotError) as ctx:
             create_artifact_snapshot(
                 (x[0] for x in self.pairs), (x[1] for x in self.pairs),
-                checkout_root=self.root, project_state=self.state,
+                constructor_project_root=self.root, project_state=self.state,
                 derived=self.derived,
             )
         self.test.assertIn(message_substr, str(ctx.exception))

@@ -20,7 +20,7 @@ Options:
                          Constructor project containing docker-constructor.toml
                          (default: process working directory)
   --output-dir DIR       Evidence directory (default: external project-state namespace)
-  --main-project DIR     Main project to mount (default: process working directory)
+  --workspace DIR        Workspace to mount (default: process working directory)
   --pi-home DIR          Pi home to mount; path must end in /.pi (default: DIR/home/.pi)
   --image IMAGE          Runtime image (default: pi-cli-pi:latest)
   --override KEY=VALUE   Runtime override to pass to run (repeatable)
@@ -41,7 +41,7 @@ fi
 project_directory="$(pwd -P)"
 inventory=""
 output_dir=""
-main_project="$(pwd -P)"
+workspace="$(pwd -P)"
 pi_home=""
 pi_home_explicit=false
 image="pi-cli-pi:latest"
@@ -58,8 +58,8 @@ while (($#)); do
       output_dir=${2:?--output-dir requires a directory}
       shift 2
       ;;
-    --main-project)
-      main_project=${2:?--main-project requires a directory}
+    --workspace)
+      workspace=${2:?--workspace requires a directory}
       shift 2
       ;;
     --pi-home)
@@ -106,11 +106,11 @@ if [[ ! -f "$inventory" ]]; then
   printf 'Constructor project inventory does not exist: %s\n' "$inventory" >&2
   exit 2
 fi
-if [[ ! -d "$main_project" ]]; then
-  printf 'Main project directory does not exist: %s\n' "$main_project" >&2
+if [[ ! -d "$workspace" ]]; then
+  printf 'Workspace directory does not exist: %s\n' "$workspace" >&2
   exit 2
 fi
-main_project="$(cd "$main_project" && pwd -P)"
+workspace="$(cd "$workspace" && pwd -P)"
 if [[ -n "$output_dir" ]]; then
   mkdir -p "$output_dir"
   output_dir="$(cd "$output_dir" && pwd)"
@@ -182,7 +182,7 @@ done
 docker info >/dev/null
 
 printf '%s\n' "$image" >"$output_dir/image.txt"
-printf '%s\n' "$main_project" >"$output_dir/main-project.txt"
+printf '%s\n' "$workspace" >"$output_dir/workspace.txt"
 printf '%s\n' "$pi_home" >"$output_dir/pi-home.txt"
 printf '%s\n' "$cache_root" >"$output_dir/cache-root.txt"
 printf '%s\n' "$duration" >"$output_dir/inspection-duration-seconds.txt"
@@ -206,7 +206,7 @@ docker ps -q --filter "ancestor=$image" | LC_ALL=C sort >"$output_dir/containers
 run_args=(
   "$repo_root/docker/docker-constructor.py" --project-directory "$project_directory" run
   --image "$image"
-  --main-project "$main_project"
+  --workspace "$workspace"
   --no-tty
   --no-interactive
   --chown-on-start 0

@@ -254,14 +254,14 @@ rm -rf -- "$PROJECT/.git" "$PROJECT/.docker-cache" "$PROJECT/.docker-generated" 
 # The real launch validates workspace and runtime-namespace behavior, not npm
 # transport availability. Use a schema-valid empty extension set so transient
 # registry/TLS behavior cannot prevent the container boundary from running.
-python3 -B - "$PROJECT/docker-constructor.toml" "$PROJECT/phase7-launch.toml" <<'PY'
+python3 -B - "$PROJECT/docker-constructor.toml" <<'PY'
 import pathlib, sys
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 marker = "# Pi extensions — installed at runtime"
 if marker not in source:
     raise SystemExit("cannot locate runtime extension section")
 prefix = source.split(marker, 1)[0]
-pathlib.Path(sys.argv[2]).write_text(prefix + "[runtime.pi-extensions]\n", encoding="utf-8")
+pathlib.Path(sys.argv[1]).write_text(prefix + "[runtime.pi-extensions]\n", encoding="utf-8")
 PY
 find "$PROJECT" -type d -exec chmod a+rx {} +
 find "$PROJECT" -type f -exec chmod a+r {} +
@@ -293,7 +293,7 @@ printf '[%s] Running linux-amd64 build from foreign-owned readable project\n' "$
   XDG_CACHE_HOME="$CACHE_HOME" PYTHONDONTWRITEBYTECODE=1 \
     timeout --signal=TERM --kill-after=30 "$TIMEOUT_SECONDS" \
     python3 -B "$PROJECT/docker/docker-constructor.py" \
-      --inventory "$PROJECT/docker-constructor.toml" --color never \
+      --project-directory "$PROJECT" --color never \
       build --platform linux-amd64 --yes --tag "$IMAGE_TAG"
 )
 
@@ -338,8 +338,8 @@ printf '[%s] Launching built image with primary and extra workspaces\n' "$(date 
     PHASE7_DOCKER_ARGV_LOG="$DOCKER_ARGV_LOG" \
     timeout --signal=TERM --kill-after=30 "$TIMEOUT_SECONDS" \
     python3 -B "$PROJECT/docker/docker-constructor.py" \
-      --inventory "$PROJECT/phase7-launch.toml" --color never \
-      run --main-project "$PRIMARY" --project "$EXTRA" \
+      --project-directory "$PROJECT" --color never \
+      run --workspace "$PRIMARY" --extra-workspace "$EXTRA" \
       --image "$IMAGE_TAG" --no-tty --no-interactive \
       --chown-on-start 0 -- pi --version
 )

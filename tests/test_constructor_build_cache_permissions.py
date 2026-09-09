@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib, os, stat, tempfile, types, unittest
 from pathlib import Path
 from unittest import mock
-from docker.versioning.build_cache import (BuildCacheError, acquire_checkout_build_lock,
+from docker.versioning.build_cache import (BuildCacheError, acquire_constructor_project_build_lock,
     maintain_uncommitted_blobs, prepare_build_cache, publish_uncommitted_blob,
-    publish_verified_blob, _verify_published_blob)
+    publish_verified_blob, _open_namespace_fd, _verify_published_blob)
 from docker.versioning.digest_identity import DigestIdentity
 from docker.versioning.project_state import resolve_project_state
 from tests.privilege_helpers import docker_dev_ids, sudo_chown_tree
@@ -62,7 +62,14 @@ class ExternalPermissions(unittest.TestCase):
         self.state=resolve_project_state(self.project,cache_root=self.cache)
     def publish(self, data=b'verified'):
         identity=DigestIdentity.from_hex('sha256',hashlib.sha256(data).hexdigest())
-        return identity,publish_verified_blob(identity,data,checkout_root=self.project,cache_root=self.cache)
+        return identity,publish_verified_blob(identity,data,constructor_project_root=self.project,cache_root=self.cache)
+
+    def test_missing_namespace_diagnostic_identifies_project_state_namespace(self):
+        missing = self.base / "missing-namespace"
+        with self.assertRaisesRegex(
+            BuildCacheError, r"project-state namespace .* does not exist",
+        ):
+            _open_namespace_fd(missing)
 
     def test_private_dirs_invoking_user_ownership_and_immutable_blobs(self):
         paths=prepare_build_cache(self.project,cache_root=self.cache); _,blob=self.publish()
@@ -130,7 +137,7 @@ class ExternalPermissions(unittest.TestCase):
         entries = sorted(p.name for p in algo_dir.iterdir())
         with self.assertRaises(BuildCacheError):
             publish_verified_blob(identity, b'algorithm-mode',
-                                  checkout_root=self.project, cache_root=self.cache)
+                                  constructor_project_root=self.project, cache_root=self.cache)
         with self.assertRaises(BuildCacheError):
             _verify_published_blob(identity, paths)
         self.assertEqual(mode(algo_dir), 0o755)  # not repaired
@@ -154,9 +161,9 @@ class ExternalPermissions(unittest.TestCase):
         identity = DigestIdentity.from_hex('sha256', hashlib.sha256(b'remove-mode').hexdigest())
         paths = prepare_build_cache(self.project, cache_root=self.cache)
         marker = paths.markers_root / f"{identity.algorithm}:{identity.hex_digest()}.json"
-        with acquire_checkout_build_lock(self.project, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.project, cache_root=self.cache) as lock:
             blob = publish_uncommitted_blob(
-                identity, b'remove-mode', checkout_root=self.project,
+                identity, b'remove-mode', constructor_project_root=self.project,
                 lock=lock, verified_at=0, cache_root=self.cache)
             algo_dir = paths.blobs_root / identity.algorithm
             algo_dir.chmod(0o755)

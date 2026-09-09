@@ -2,20 +2,20 @@
 
 Persistent build artifact state and transaction snapshots live beneath the
 invoking user's private external namespace, keyed by the canonical selected
-constructor-project path.  Constructor state is never created in a checkout
+constructor-project path.  Constructor state is never created in a constructor project
 or workspace.
 
 The module provides:
 
 * lexical, deterministic path resolution (no filesystem reads);
-* host-owner traversal validation for the checkout path (no repair);
+* host-owner traversal validation for the constructor-project path (no repair);
 * no-follow preparation of constructor-owned private ``0700`` subtrees that
   rejects symlinked, non-directory, or foreign-owned entries *before* any
   mutation;
 * atomic publication of a verified blob at its canonical content-addressed
   path with mode ``0444``, re-verified before it is returned.
 
-The constructor never chmods or chowns the checkout root, any ancestor, the
+The constructor never chmods or chowns the constructor-project root, any ancestor, the
 user's home directory, or unrelated cache paths.
 """
 
@@ -43,14 +43,14 @@ UNCOMMITTED_TTL_SECONDS = 2_592_000
 
 
 class BuildCacheError(ValueError):
-    """Invalid or unsafe checkout-local build-cache configuration."""
+    """Invalid or unsafe external constructor-project build-cache configuration."""
 
 
 @dataclass(frozen=True)
 class BuildCachePaths:
     """Resolved project identity and prepared external project-state roots."""
 
-    checkout_root: Path
+    constructor_project_root: Path
     """Normalized selected constructor-project path; never a cache path."""
 
     namespace_root: Path
@@ -80,8 +80,8 @@ _DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLL
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _normalize_checkout(checkout_root: str | Path) -> Path:
-    return Path(os.path.abspath(os.fspath(checkout_root)))
+def _normalize_constructor_project(constructor_project_root: str | Path) -> Path:
+    return Path(os.path.abspath(os.fspath(constructor_project_root)))
 
 
 def _resolve_cache_root(cache_root: str | Path | None) -> Path:
@@ -91,26 +91,26 @@ def _resolve_cache_root(cache_root: str | Path | None) -> Path:
     return resolve_default_root(os.environ.get("XDG_CACHE_HOME"), home=Path.home())
 
 
-def resolve_build_cache_root(checkout_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
+def resolve_build_cache_root(constructor_project_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
     """Return the selected project's external persistent artifact root."""
     try:
-        return resolve_project_state(checkout_root, cache_root=cache_root, create=False).build_artifacts_root
+        return resolve_project_state(constructor_project_root, cache_root=cache_root, create=False).build_artifacts_root
     except ProjectStateError as exc:
         raise BuildCacheError(str(exc)) from exc
 
 
-def resolve_build_blobs_root(checkout_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
-    return resolve_build_cache_root(checkout_root, cache_root=cache_root) / "blobs"
+def resolve_build_blobs_root(constructor_project_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
+    return resolve_build_cache_root(constructor_project_root, cache_root=cache_root) / "blobs"
 
 
-def resolve_build_tmp_root(checkout_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
-    return resolve_build_cache_root(checkout_root, cache_root=cache_root) / "tmp"
+def resolve_build_tmp_root(constructor_project_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
+    return resolve_build_cache_root(constructor_project_root, cache_root=cache_root) / "tmp"
 
 
-def resolve_build_generated_root(checkout_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
+def resolve_build_generated_root(constructor_project_root: str | Path, *, cache_root: str | Path | None = None) -> Path:
     """Return the selected project's external transaction root."""
     try:
-        return resolve_project_state(checkout_root, cache_root=cache_root, create=False).transactions_root
+        return resolve_project_state(constructor_project_root, cache_root=cache_root, create=False).transactions_root
     except ProjectStateError as exc:
         raise BuildCacheError(str(exc)) from exc
 
@@ -142,11 +142,11 @@ def validate_host_owner_traversal(path: str | Path) -> None:
             st = os.stat(current)
         except OSError as exc:
             raise BuildCacheError(
-                f"cannot access checkout traversal component {current}: {exc}"
+                f"cannot access constructor-project traversal component {current}: {exc}"
             ) from exc
         if not _stat.S_ISDIR(st.st_mode):
             raise BuildCacheError(
-                f"checkout traversal component {current} is not a directory"
+                f"constructor-project traversal component {current} is not a directory"
             )
         if not os.access(current, os.X_OK):
             raise BuildCacheError(
@@ -160,25 +160,25 @@ def validate_host_owner_traversal(path: str | Path) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _open_checkout_fd(checkout: Path) -> int:
-    """Open the checkout root no-follow and require directory + writability."""
+def _open_namespace_fd(namespace: Path) -> int:
+    """Open the external project-state namespace without following symlinks."""
     try:
-        fd = os.open(os.fspath(checkout), _DIR_FLAGS)
+        fd = os.open(os.fspath(namespace), _DIR_FLAGS)
     except FileNotFoundError as exc:
-        raise BuildCacheError(f"checkout root {checkout} does not exist") from exc
+        raise BuildCacheError(f"project-state namespace {namespace} does not exist") from exc
     except PermissionError as exc:
-        raise BuildCacheError(f"cannot access checkout root {checkout}: {exc}") from exc
+        raise BuildCacheError(f"cannot access project-state namespace {namespace}: {exc}") from exc
     except OSError as exc:
         raise BuildCacheError(
-            f"checkout root {checkout} is a symlink or not a directory: {exc}"
+            f"project-state namespace {namespace} is a symlink or not a directory: {exc}"
         ) from exc
     try:
         st = os.fstat(fd)
         if not _stat.S_ISDIR(st.st_mode):
-            raise BuildCacheError(f"checkout root {checkout} is not a directory")
-        if not os.access(checkout, os.W_OK | os.X_OK):
+            raise BuildCacheError(f"project-state namespace {namespace} is not a directory")
+        if not os.access(namespace, os.W_OK | os.X_OK):
             raise BuildCacheError(
-                f"checkout root {checkout} is not writable by the invoking user"
+                f"project-state namespace {namespace} is not writable by the invoking user"
             )
         return fd
     except BaseException:
@@ -187,19 +187,19 @@ def _open_checkout_fd(checkout: Path) -> int:
 
 
 def _open_relative_dir(
-    checkout_fd: int,
+    namespace_fd: int,
     parts: tuple[str, ...],
     *,
     create: bool,
 ) -> int | None:
-    """Open ``parts`` relative to *checkout_fd* without following symlinks.
+    """Open ``parts`` relative to *namespace_fd* without following symlinks.
 
     Returns the opened descriptor of the final component, or ``None`` when a
     component is missing and *create* is false.  Missing components are
     created descriptor-relatively with ``0700`` when *create* is true.
     Symlinked or non-directory components raise :class:`BuildCacheError`.
     """
-    current_fd = os.dup(checkout_fd)
+    current_fd = os.dup(namespace_fd)
     try:
         for component in parts:
             created = False
@@ -292,14 +292,14 @@ def _require_algorithm_dir(algorithm_fd: int, algorithm: str) -> None:
 
 
 def _validate_relative_dir(
-    checkout_fd: int,
+    namespace_fd: int,
     parts: tuple[str, ...],
     *,
     label: str,
     check_owner: bool,
 ) -> None:
     """Validate an existing build-cache component without mutating it."""
-    fd = _open_relative_dir(checkout_fd, parts, create=False)
+    fd = _open_relative_dir(namespace_fd, parts, create=False)
     if fd is None:
         return
     try:
@@ -309,7 +309,7 @@ def _validate_relative_dir(
 
 
 def _ensure_relative_dir(
-    checkout_fd: int,
+    namespace_fd: int,
     parts: tuple[str, ...],
     *,
     label: str,
@@ -317,7 +317,7 @@ def _ensure_relative_dir(
     chmod_existing: bool = True,
 ) -> None:
     """Create (if missing) and secure a build-cache component."""
-    fd = _open_relative_dir(checkout_fd, parts, create=True)
+    fd = _open_relative_dir(namespace_fd, parts, create=True)
     if fd is None:
         raise BuildCacheError(f"cannot open build-cache component {label}")
     try:
@@ -351,7 +351,7 @@ _GENERATED_PARTS = _GENERATED_PARENT_PARTS
 _MARKERS_PARTS = (_BUILD_ARTIFACTS_NAME, _MARKERS_NAME)
 
 
-def prepare_build_cache(checkout_root: str | Path, *, cache_root: str | Path | None = None,
+def prepare_build_cache(constructor_project_root: str | Path, *, cache_root: str | Path | None = None,
                         project_state: ProjectState | None = None) -> BuildCachePaths:
     """Prepare private external state for the selected constructor project.
 
@@ -359,7 +359,7 @@ def prepare_build_cache(checkout_root: str | Path, *, cache_root: str | Path | N
     relative to the verified external namespace. Existing unsafe state fails
     closed before any child is created.
     """
-    project = _normalize_checkout(checkout_root)
+    project = _normalize_constructor_project(constructor_project_root)
     validate_host_owner_traversal(project)
     try:
         state = project_state or resolve_project_state(project, cache_root=cache_root, create=True)
@@ -368,18 +368,18 @@ def prepare_build_cache(checkout_root: str | Path, *, cache_root: str | Path | N
     except ProjectStateError as exc:
         raise BuildCacheError(str(exc)) from exc
     namespace = state.namespace
-    checkout_fd = _open_checkout_fd(namespace)
+    namespace_fd = _open_namespace_fd(namespace)
     try:
         for parts in (_CACHE_PARTS, _BLOBS_PARTS, _TMP_PARTS,
                       _GENERATED_PARENT_PARTS, _MARKERS_PARTS):
-            _validate_relative_dir(checkout_fd, parts, label=str(namespace.joinpath(*parts)), check_owner=True)
+            _validate_relative_dir(namespace_fd, parts, label=str(namespace.joinpath(*parts)), check_owner=True)
         for parts in (_CACHE_PARTS, _BLOBS_PARTS, _TMP_PARTS,
                       _GENERATED_PARENT_PARTS, _MARKERS_PARTS):
-            _ensure_relative_dir(checkout_fd, parts, label=str(namespace.joinpath(*parts)), check_owner=True)
+            _ensure_relative_dir(namespace_fd, parts, label=str(namespace.joinpath(*parts)), check_owner=True)
     finally:
-        os.close(checkout_fd)
+        os.close(namespace_fd)
     return BuildCachePaths(
-        checkout_root=project,
+        constructor_project_root=project,
         namespace_root=namespace,
         persistent_root=state.build_artifacts_root,
         blobs_root=state.build_artifacts_root / "blobs",
@@ -431,14 +431,14 @@ def _open_validated_child(parent_fd: int, name: str, *, label: str) -> int:
 
 
 def open_build_cache_state(
-    checkout_root: str | Path,
+    constructor_project_root: str | Path,
     *,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
 ) -> BuildCacheState:
     """Prepare the namespace and retain verified no-follow child descriptors."""
-    paths = prepare_build_cache(checkout_root, cache_root=cache_root, project_state=project_state)
-    namespace_fd = _open_checkout_fd(paths.namespace_root)
+    paths = prepare_build_cache(constructor_project_root, cache_root=cache_root, project_state=project_state)
+    namespace_fd = _open_namespace_fd(paths.namespace_root)
     opened: list[int] = []
     try:
         persistent_fd = _open_validated_child(
@@ -495,27 +495,27 @@ def publish_verified_blob(
     identity: DigestIdentity,
     data: bytes,
     *,
-    checkout_root: str | Path,
+    constructor_project_root: str | Path,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
 ) -> Path:
     """Verify *data* and atomically publish it as an immutable ``0444`` blob.
 
     The payload digest is verified **before** any filesystem work, so a
-    mismatch leaves the checkout-local cache completely untouched.  After
+    mismatch leaves the external constructor-project cache completely untouched.  After
     atomic publication the blob is re-verified for containment, type,
     permissions, and digest before its path is returned.
     """
     _validate_publication_inputs(identity, data)
 
-    paths = prepare_build_cache(checkout_root, cache_root=cache_root, project_state=project_state)
+    paths = prepare_build_cache(constructor_project_root, cache_root=cache_root, project_state=project_state)
     blob_path = build_blob_path(paths.blobs_root, identity)
-    checkout_fd = _open_checkout_fd(paths.namespace_root)
+    namespace_fd = _open_namespace_fd(paths.namespace_root)
     blobs_fd = tmp_fd = algorithm_fd = fd = None
     temp_name = f".publish-{os.urandom(16).hex()}"
     try:
-        blobs_fd = _open_relative_dir(checkout_fd, _BLOBS_PARTS, create=False)
-        tmp_fd = _open_relative_dir(checkout_fd, _TMP_PARTS, create=False)
+        blobs_fd = _open_relative_dir(namespace_fd, _BLOBS_PARTS, create=False)
+        tmp_fd = _open_relative_dir(namespace_fd, _TMP_PARTS, create=False)
         if blobs_fd is None or tmp_fd is None:
             raise BuildCacheError("prepared build-cache directories disappeared")
         try:
@@ -564,7 +564,7 @@ def publish_verified_blob(
         except OSError: pass
         raise
     finally:
-        for value in (fd, algorithm_fd, blobs_fd, tmp_fd, checkout_fd):
+        for value in (fd, algorithm_fd, blobs_fd, tmp_fd, namespace_fd):
             if value is not None:
                 os.close(value)
     _verify_published_blob(identity, paths)
@@ -613,15 +613,15 @@ def _verify_published_blob(identity: DigestIdentity, paths: BuildCachePaths) -> 
     """Re-verify one published blob through stable no-follow descriptors.
 
     Every component is derived from *identity* and opened relative to the
-    checkout descriptor.  The verification therefore cannot be redirected by
+    namespace descriptor.  The verification therefore cannot be redirected by
     a replacement of a pathname between a preliminary check and file read.
     """
-    checkout_fd = blobs_fd = algorithm_fd = None
+    namespace_fd = blobs_fd = algorithm_fd = None
     algorithm = identity.algorithm
     filename = identity.hex_digest() + BLOB_EXTENSION
     try:
-        checkout_fd = _open_checkout_fd(paths.namespace_root)
-        blobs_fd = _open_relative_dir(checkout_fd, _BLOBS_PARTS, create=False)
+        namespace_fd = _open_namespace_fd(paths.namespace_root)
+        blobs_fd = _open_relative_dir(namespace_fd, _BLOBS_PARTS, create=False)
         if blobs_fd is None:
             raise BuildCacheError("published blob directory disappeared")
         try:
@@ -633,34 +633,34 @@ def _verify_published_blob(identity: DigestIdentity, paths: BuildCachePaths) -> 
         _require_algorithm_dir(algorithm_fd, algorithm)
         _validate_blob_descriptor(algorithm_fd, filename, identity)
     finally:
-        for fd in (algorithm_fd, blobs_fd, checkout_fd):
+        for fd in (algorithm_fd, blobs_fd, namespace_fd):
             if fd is not None:
                 os.close(fd)
 
 
 class BuildTransactionError(BuildCacheError):
-    """A checkout-local build transaction cannot safely proceed."""
+    """An external constructor-project build transaction cannot safely proceed."""
 
 
-class CheckoutBuildLock:
-    """The exclusive owner token for one checkout build transaction.
+class ConstructorProjectBuildLock:
+    """The exclusive owner token for one constructor-project build transaction.
 
     Ownership is bound to the canonical constructor-project identity and the
     selected external cache namespace.  The lock cannot be reused for another
     project or another cache root.
     """
 
-    def __init__(self, fd: int, checkout_root: Path, cache_root: Path,
+    def __init__(self, fd: int, constructor_project_root: Path, cache_root: Path,
                  namespace: Path, project_state: ProjectState) -> None:
         self._fd: int | None = fd
-        self._checkout_root = checkout_root
+        self._constructor_project_root = constructor_project_root
         self._cache_root = cache_root
         self._namespace = namespace
         self._project_state = project_state
 
     @property
-    def checkout_root(self) -> Path:
-        return self._checkout_root
+    def constructor_project_root(self) -> Path:
+        return self._constructor_project_root
 
     @property
     def cache_root(self) -> Path:
@@ -674,23 +674,23 @@ class CheckoutBuildLock:
     def project_state(self) -> ProjectState:
         return self._project_state
 
-    def assert_held_for(self, checkout_root: str | Path, *,
+    def assert_held_for(self, constructor_project_root: str | Path, *,
                         cache_root: str | Path | None = None) -> None:
         if self._fd is None:
-            raise BuildTransactionError("a live checkout build lock is required")
+            raise BuildTransactionError("a live constructor-project build lock is required")
         try:
-            canonical = Path(checkout_root).resolve(strict=True)
+            canonical = Path(constructor_project_root).resolve(strict=True)
         except OSError as exc:
             raise BuildTransactionError(
-                "the checkout build lock belongs to a different constructor project"
+                "the constructor-project build lock belongs to a different constructor project"
             ) from exc
-        if canonical != self._checkout_root:
+        if canonical != self._constructor_project_root:
             raise BuildTransactionError(
-                "the checkout build lock belongs to a different constructor project"
+                "the constructor-project build lock belongs to a different constructor project"
             )
         if _resolve_cache_root(cache_root) != self._cache_root:
             raise BuildTransactionError(
-                "the checkout build lock belongs to a different cache namespace"
+                "the constructor-project build lock belongs to a different cache namespace"
             )
 
     def release(self) -> None:
@@ -700,28 +700,28 @@ class CheckoutBuildLock:
             os.close(self._fd)
             self._fd = None
 
-    def __enter__(self) -> "CheckoutBuildLock":
+    def __enter__(self) -> "ConstructorProjectBuildLock":
         return self
 
     def __exit__(self, *_: object) -> None:
         self.release()
 
 
-def _bootstrap_lock_parent(checkout_root: str | Path, *, cache_root: str | Path | None = None) -> tuple[ProjectState, int]:
+def _bootstrap_constructor_project_lock_parent(constructor_project_root: str | Path, *, cache_root: str | Path | None = None) -> tuple[ProjectState, int]:
     """Open the lock parent, creating only missing private path components.
 
     Existing cache entries are deliberately not chmodded or otherwise
     repaired here.  Contenders must be rejected by the lock before cache
     validation/mutation is attempted; the owner validates them afterwards.
     """
-    checkout = _normalize_checkout(checkout_root)
-    validate_host_owner_traversal(checkout)
+    constructor_project = _normalize_constructor_project(constructor_project_root)
+    validate_host_owner_traversal(constructor_project)
     try:
-        state = resolve_project_state(checkout, cache_root=cache_root, create=True, validate_children=False)
+        state = resolve_project_state(constructor_project, cache_root=cache_root, create=True, validate_children=False)
     except ProjectStateError as exc:
         raise BuildTransactionError(str(exc)) from exc
-    checkout_fd = _open_checkout_fd(state.namespace)
-    current_fd = checkout_fd
+    namespace_fd = _open_namespace_fd(state.namespace)
+    current_fd = namespace_fd
     try:
         for part in _PERSISTENT_PARTS:
             try:
@@ -738,28 +738,28 @@ def _bootstrap_lock_parent(checkout_root: str | Path, *, cache_root: str | Path 
             if not _stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
                 os.close(child_fd)
                 raise BuildTransactionError(f"unsafe lock parent component: {part}")
-            if current_fd != checkout_fd:
+            if current_fd != namespace_fd:
                 os.close(current_fd)
             current_fd = child_fd
         return state, current_fd
     except BaseException:
-        if current_fd != checkout_fd:
+        if current_fd != namespace_fd:
             os.close(current_fd)
         raise
     finally:
-        os.close(checkout_fd)
+        os.close(namespace_fd)
 
 
-def acquire_checkout_build_lock(checkout_root: str | Path, *, cache_root: str | Path | None = None) -> CheckoutBuildLock:
-    """Acquire the single non-blocking checkout transaction lock first.
+def acquire_constructor_project_build_lock(constructor_project_root: str | Path, *, cache_root: str | Path | None = None) -> ConstructorProjectBuildLock:
+    """Acquire the single non-blocking constructor-project transaction lock first.
 
     The lock file lives under the selected project's external namespace and
-    is never created inside the checkout.  The returned token is bound to the
+    is never created inside the constructor project.  The returned token is bound to the
     canonical project identity and the selected cache namespace.
     """
     import fcntl
-    state, parent_fd = _bootstrap_lock_parent(checkout_root, cache_root=cache_root)
-    checkout = state.project_path
+    state, parent_fd = _bootstrap_constructor_project_lock_parent(constructor_project_root, cache_root=cache_root)
+    constructor_project = state.project_path
     fd = None
     try:
         fd = os.open(
@@ -773,19 +773,21 @@ def acquire_checkout_build_lock(checkout_root: str | Path, *, cache_root: str | 
         except BlockingIOError as exc:
             os.close(fd)
             fd = None
-            raise BuildTransactionError("checkout already has an active build") from exc
+            raise BuildTransactionError("constructor project already has an active build") from exc
         info = os.fstat(fd)
         if (
             not _stat.S_ISREG(info.st_mode)
             or info.st_uid != os.geteuid()
             or info.st_nlink != 1
         ):
-            raise BuildTransactionError("unsafe checkout build lock")
+            raise BuildTransactionError("unsafe constructor-project build lock")
         # Only the exclusive owner may repair the lock-file mode.
         os.fchmod(fd, 0o600)
         # The lock now serializes all validation and permitted cache repair.
-        prepare_build_cache(checkout, cache_root=cache_root, project_state=state)
-        return CheckoutBuildLock(fd, checkout, state.cache_root, state.namespace, state)
+        prepare_build_cache(constructor_project, cache_root=cache_root, project_state=state)
+        return ConstructorProjectBuildLock(
+            fd, constructor_project, state.cache_root, state.namespace, state,
+        )
     except BaseException:
         if fd is not None:
             os.close(fd)
@@ -903,8 +905,8 @@ def publish_uncommitted_blob(
     identity: DigestIdentity,
     data: bytes,
     *,
-    checkout_root: str | Path,
-    lock: CheckoutBuildLock,
+    constructor_project_root: str | Path,
+    lock: ConstructorProjectBuildLock,
     verified_at: float | None = None,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
@@ -915,11 +917,11 @@ def publish_uncommitted_blob(
     cannot strand a verified blob without retention state.  Every failure
     retains the marker: maintenance later removes it when no safe blob exists.
     """
-    lock.assert_held_for(checkout_root, cache_root=cache_root)
+    lock.assert_held_for(constructor_project_root, cache_root=cache_root)
     _validate_publication_inputs(identity, data)
-    mark_uncommitted_blob(identity, checkout_root, lock=lock, verified_at=verified_at,
+    mark_uncommitted_blob(identity, constructor_project_root, lock=lock, verified_at=verified_at,
                           cache_root=cache_root, project_state=project_state)
-    return publish_verified_blob(identity, data, checkout_root=checkout_root,
+    return publish_verified_blob(identity, data, constructor_project_root=constructor_project_root,
                                  cache_root=cache_root, project_state=project_state)
 
 
@@ -940,19 +942,19 @@ def _validate_marker_timestamp(value: object, *, label: str) -> float | int:
 
 def mark_uncommitted_blob(
     identity: DigestIdentity,
-    checkout_root: str | Path,
+    constructor_project_root: str | Path,
     *,
-    lock: CheckoutBuildLock,
+    lock: ConstructorProjectBuildLock,
     verified_at: float | None = None,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
 ) -> None:
     """Atomically record the publication time of a verified uncommitted blob."""
-    lock.assert_held_for(checkout_root, cache_root=cache_root)
+    lock.assert_held_for(constructor_project_root, cache_root=cache_root)
     timestamp = _validate_marker_timestamp(
         time.time() if verified_at is None else verified_at, label="verified_at",
     )
-    state = open_build_cache_state(checkout_root, cache_root=cache_root, project_state=project_state)
+    state = open_build_cache_state(constructor_project_root, cache_root=cache_root, project_state=project_state)
     try:
         _atomic_json_at(state.markers_fd, _marker_name(identity), {"verified_at": timestamp})
     finally:
@@ -1051,16 +1053,16 @@ def _remove_blob_and_marker(state: BuildCacheState, identity: DigestIdentity) ->
 
 
 def commit_build_set(
-    checkout_root: str | Path,
+    constructor_project_root: str | Path,
     identities: set[DigestIdentity],
     *,
-    lock: CheckoutBuildLock,
+    lock: ConstructorProjectBuildLock,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
 ) -> None:
     """Atomically replace the sole live set before deleting superseded blobs."""
-    lock.assert_held_for(checkout_root, cache_root=cache_root)
-    state = open_build_cache_state(checkout_root, cache_root=cache_root, project_state=project_state)
+    lock.assert_held_for(constructor_project_root, cache_root=cache_root)
+    state = open_build_cache_state(constructor_project_root, cache_root=cache_root, project_state=project_state)
     try:
         old = _read_live_set(state)
         live = set(identities)
@@ -1085,16 +1087,16 @@ def commit_build_set(
 
 
 def maintain_uncommitted_blobs(
-    checkout_root: str | Path,
+    constructor_project_root: str | Path,
     *,
-    lock: CheckoutBuildLock,
+    lock: ConstructorProjectBuildLock,
     now: float | None = None,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
 ) -> None:
     """Remove corrupt/partial and expired uncommitted state under the lock."""
-    lock.assert_held_for(checkout_root, cache_root=cache_root)
-    state = open_build_cache_state(checkout_root, cache_root=cache_root, project_state=project_state)
+    lock.assert_held_for(constructor_project_root, cache_root=cache_root)
+    state = open_build_cache_state(constructor_project_root, cache_root=cache_root, project_state=project_state)
     try:
         current_time = _validate_marker_timestamp(
             time.time() if now is None else now, label="now",
@@ -1174,13 +1176,13 @@ def _remove_snapshot_tree(parent_fd: int, name: str, *, depth: int) -> None:
 
 
 def recover_abandoned_snapshots(
-    checkout_root: str | Path, *, lock: CheckoutBuildLock,
+    constructor_project_root: str | Path, *, lock: ConstructorProjectBuildLock,
     cache_root: str | Path | None = None,
     project_state: ProjectState | None = None,
 ) -> None:
     """Remove snapshots found after exclusive ownership has been acquired."""
-    lock.assert_held_for(checkout_root, cache_root=cache_root)
-    state = open_build_cache_state(checkout_root, cache_root=cache_root, project_state=project_state)
+    lock.assert_held_for(constructor_project_root, cache_root=cache_root)
+    state = open_build_cache_state(constructor_project_root, cache_root=cache_root, project_state=project_state)
     try:
         for name in sorted(os.listdir(state.transactions_fd)):
             _remove_snapshot_tree(state.transactions_fd, name, depth=_MAX_SNAPSHOT_DEPTH)

@@ -445,7 +445,7 @@ def admit_derived_environment(staging: Path, derived: DerivedEnvironmentSource) 
 
 
 def create_artifact_snapshot(
-    selected: Iterable[SelectedBuildArtifact], blobs: Iterable[Path], *, checkout_root: str | Path,
+    selected: Iterable[SelectedBuildArtifact], blobs: Iterable[Path], *, constructor_project_root: str | Path,
     cache_root: str | Path | None = None, project_state: ProjectState | None = None,
     derived: DerivedEnvironmentSource | None = None,
 ) -> MaterializedSnapshot:
@@ -462,7 +462,7 @@ def create_artifact_snapshot(
     entries = tuple(zip(selected, blobs, strict=True))
     if {entry.name for entry, _ in entries} != set(_LOGICAL_NAMES):
         raise SnapshotError("snapshot requires exactly the selected reviewed artifacts")
-    paths = prepare_build_cache(checkout_root, cache_root=cache_root, project_state=project_state)
+    paths = prepare_build_cache(constructor_project_root, cache_root=cache_root, project_state=project_state)
     staging = Path(tempfile.mkdtemp(prefix="transaction-", dir=paths.generated_root))
     try:
         staging_fd = os.open(staging, _NOFOLLOW_DIR)

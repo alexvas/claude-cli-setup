@@ -350,7 +350,7 @@ class TestDockerBackedRegistryAcceptance(unittest.TestCase):
             contextlib.redirect_stdout(stdout),
         ):
             rc = constructor_cli.main(
-                ("--output", "json", "--inventory", str(repo / "docker-constructor.toml"),
+                ("--output", "json", "--project-directory", str(repo),
                  "build", "--yes"),
                 stdout_isatty=lambda: False, stderr_isatty=lambda: False,
             )

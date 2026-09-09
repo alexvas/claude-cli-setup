@@ -30,7 +30,7 @@ class Paths(unittest.TestCase):
 
     def test_preparation_creates_private_external_children_only(self):
         paths=prepare_build_cache(self.checkout, cache_root=self.cache)
-        self.assertEqual(paths.checkout_root, self.checkout.resolve())
+        self.assertEqual(paths.constructor_project_root, self.checkout.resolve())
         self.assertEqual(paths.namespace_root, self.state.namespace)
         for path in (paths.namespace_root, paths.persistent_root, paths.blobs_root, paths.tmp_root, paths.generated_root, paths.markers_root):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
@@ -92,11 +92,11 @@ class Paths(unittest.TestCase):
         paths=prepare_build_cache(self.checkout, cache_root=self.cache)
         self.assertEqual(build_blob_path(paths.blobs_root, first), build_blob_path(paths.blobs_root, second))
 
-    def test_checkout_root_round_trips_as_project_identity_without_nested_namespace(self):
+    def test_constructor_project_root_round_trips_as_project_identity_without_nested_namespace(self):
         from docker.versioning.build_cache import publish_verified_blob
         paths=prepare_build_cache(self.checkout, cache_root=self.cache)
         data=b'round-trip'; identity=DigestIdentity.from_hex('sha256', hashlib.sha256(data).hexdigest())
-        blob=publish_verified_blob(identity, data, checkout_root=paths.checkout_root, cache_root=self.cache)
+        blob=publish_verified_blob(identity, data, constructor_project_root=paths.constructor_project_root, cache_root=self.cache)
         self.assertTrue(blob.is_relative_to(self.state.namespace))
         self.assertEqual(list((self.cache/'projects').iterdir()), [self.state.namespace])
         self.assertFalse((self.state.namespace/'projects').exists())
@@ -104,7 +104,7 @@ class Paths(unittest.TestCase):
     def test_one_project_yields_exactly_one_namespace_and_no_nested_namespace(self):
         from docker.versioning.build_cache import publish_verified_blob
         data=b'exactly-one-namespace'; identity=DigestIdentity.from_hex('sha256', hashlib.sha256(data).hexdigest())
-        publish_verified_blob(identity, data, checkout_root=self.checkout, cache_root=self.cache)
+        publish_verified_blob(identity, data, constructor_project_root=self.checkout, cache_root=self.cache)
         projects=self.cache/'projects'
         # One constructor project creates exactly one namespace under the
         # selected cache root (never split across two namespaces).

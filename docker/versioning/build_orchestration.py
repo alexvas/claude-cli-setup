@@ -45,7 +45,7 @@ from docker.networking import (
 )
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.build_cache import (
-    BuildCacheError, CheckoutBuildLock, acquire_checkout_build_lock,
+    BuildCacheError, ConstructorProjectBuildLock, acquire_constructor_project_build_lock,
     commit_build_set, maintain_uncommitted_blobs,
     recover_abandoned_snapshots,
 )
@@ -728,14 +728,14 @@ def execute_build(
         )
     # Resolve constructor identity once; all implicit build state shares it.
     snapshot: MaterializedSnapshot | None = None
-    lock: CheckoutBuildLock | None = None
+    lock: ConstructorProjectBuildLock | None = None
     try:
         if plan.cache_root is None:
             raise SnapshotError("missing resolved constructor cache root")
         project_state = resolve_project_state(
             constructor_project, cache_root=prepare_project_root(plan.cache_root),
         )
-        lock = acquire_checkout_build_lock(
+        lock = acquire_constructor_project_build_lock(
             constructor_project, cache_root=project_state.cache_root,
         )
         recover_abandoned_snapshots(
@@ -750,7 +750,7 @@ def execute_build(
         transport_factory = request._transport_factory or UrllibStreamingTransport
         transport = transport_factory(plan.host_network_policy)
         materialized = materialize(
-            projection, checkout_root=constructor_project, cache_root=project_state.cache_root,
+            projection, constructor_project_root=constructor_project, cache_root=project_state.cache_root,
             project_state=project_state, transport=transport, lock=lock,
         )
         if not isinstance(materialized, (tuple, list)) or not all(
@@ -785,7 +785,7 @@ def execute_build(
             canonical_tree_digest=attestation.canonical_tree_digest,
         )
         snapshot = create_artifact_snapshot(
-            selected_artifacts, blobs, checkout_root=constructor_project,
+            selected_artifacts, blobs, constructor_project_root=constructor_project,
             cache_root=project_state.cache_root, project_state=project_state,
             derived=derived,
         )

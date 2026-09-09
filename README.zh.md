@@ -58,7 +58,7 @@ mode = "docker-gateway" # 或 "external-address"
 当 Docker 网关是连接主机的正确路径时使用此模式。运行一次 doctor 来诊断网关并保存选中的具体地址：
 
 ```bash
-./docker/docker-constructor.py doctor --inventory docker-constructor.toml
+./docker/docker-constructor.py doctor
 ```
 
 Doctor 会将 `[host-access].address` 写入位于 `docker-constructor.toml` 同一目录的 `docker-constructor.local.toml`。如果网络变化导致地址失效，请再次运行 doctor。地址缺失时，`run` 会失败并提示运行 doctor；普通 `run` 从不探测 Docker，也不修改本地状态。Doctor 只在 `docker-gateway` 模式执行网关诊断、保存和修复；对于 `external-address` 和禁用的主机访问，它不诊断、不覆盖、不保存也不修复状态。
@@ -80,9 +80,9 @@ address = "192.0.2.10"
 
 此模式中的 `address` 必须是 IP 地址，不能使用 `host-gateway`。通过 `HOST_ACCESS_ADDRESS` 访问的服务必须监听可从该地址到达的接口。仅绑定到 loopback 的服务可能仍无法访问，防火墙规则同样适用。
 
-### 本地伴生文件与自定义清单
+### 构造器项目与本地伴生文件
 
-本地伴生文件只包含机器相关状态，不能覆盖已审核的策略、依赖项或 `cache.ttl`。标准清单 `docker-constructor.toml` 使用 `docker-constructor.local.toml`。所选自定义清单（例如 `--inventory /work/custom.toml`）使用同一目录中的 `/work/custom.local.toml`；绝不会回退到仓库根目录的本地状态。
+每个命令选择一个构造器项目：默认使用当前工作目录，或使用 `--project-directory DIR`。其固定布局是在该目录下直接包含 `docker-constructor.toml`、可选的 `docker-constructor.local.toml`、`Dockerfile`、可选的 `.env` 和 `.docker-local/`。本地伴生文件只包含机器相关状态，不能覆盖已审核的策略、依赖项或 `cache.ttl`。
 
 ### 可选代理端口和环境变量
 
@@ -104,7 +104,7 @@ dir = "/home/dev/.cache/pi-docker"
 
 `cache.ttl` 属于已审核的 `docker-constructor.toml`；`cache.dir` 只能位于 `docker-constructor.local.toml`。`--no-cache` 只为一次更新检查绕过 HTTP 缓存，不会修改已审核的 TTL。
 
-未设置 `[cache].dir` 时，若 `XDG_CACHE_HOME` 非空且为绝对路径，持久化根目录为 `${XDG_CACHE_HOME}/docker-constructor`；否则为 `~/.cache/docker-constructor`。HTTP 响应位于 `versioning/`；已验证工件、锁和临时状态分别位于 `runtime-artifacts/blobs`、`runtime-artifacts/locks` 和 `runtime-artifacts/tmp`。运行时投影和 evidence 保持在 checkout 的 `.docker-generated/` 下。
+未设置 `[cache].dir` 时，若 `XDG_CACHE_HOME` 非空且为绝对路径，持久化根目录为 `${XDG_CACHE_HOME}/docker-constructor`；否则为 `~/.cache/docker-constructor`。HTTP 响应位于 `versioning/`；已验证工件、锁和临时状态分别位于 `runtime-artifacts/blobs`、`runtime-artifacts/locks` 和 `runtime-artifacts/tmp`。运行时投影和默认 evidence 保存在由所选构造器项目的规范路径确定的外部项目状态命名空间中；不会在构造器项目或 workspace 中隐式创建 `.docker-generated` 目录。
 
 本地 `cache.dir` 必须是绝对、专用且由构造器拥有的根目录。不得选择 `/`、主目录、`XDG_CACHE_HOME` 本身或其祖先。构造器目录使用 `0700`，HTTP entries 使用 `0600`，已验证 blobs 使用 `0444`；不会 chmod 包括 `XDG_CACHE_HOME` 在内的现有父目录。若所选路径由其他用户拥有或无法加固，请恢复其所有权或删除陈旧的构造器子树后重试。使用本地缓存目录不需要启用主机访问。
 
@@ -131,18 +131,18 @@ no_proxy = "localhost,.corp.example"
 
 ## 2. 启动环境
 
-打开交互式项目选择器：
+打开交互式 workspace 选择器：
 
 ```bash
 ./docker/docker-constructor.py run --tui
 ```
 
-选中的主项目会成为容器工作目录，并按相同绝对路径进行 1:1 bind mount。其他项目以 `PROJECT_PATH_2`、`PROJECT_PATH_3`……的形式连续编号进行 1:1 mount，无数量上限。主机 `~/.pi` 挂载到 `/home/dev/.pi`。可在 `.env` 设置 `BASE_PROJECT_DIR`，或传入 `--base-project-dir` 来选择 TUI 树根目录。
+选中的主 workspace 会成为容器工作目录，并按相同绝对路径进行 1:1 bind mount。额外 workspace 以 `WORKSPACE_PATH_2`、`WORKSPACE_PATH_3`……的形式连续编号进行 1:1 mount，无数量上限。主机 `~/.pi` 挂载到 `/home/dev/.pi`。可在所选构造器项目的 `.env` 设置 `WORKSPACE_ROOT`，或传入 `--workspace-root` 来选择 TUI 树根目录。
 
-使用显式项目直接启动：
+使用显式 workspace 直接启动：
 
 ```bash
-./docker/docker-constructor.py run -m /path/to/main --project /path/to/additional
+./docker/docker-constructor.py run --workspace /path/to/primary --extra-workspace /path/to/extra
 ```
 
 ### 运行时扩展工件
@@ -161,7 +161,7 @@ no_proxy = "localhost,.corp.example"
    ./docker/docker-constructor.py check-updates --only build.stages.pi-tools.pi --suggest
    ```
 
-2. `--suggest` 是 **non-mutating**：它输出的是完整的手动替换块，绝不会自动编辑文件，也不能追加到 TOML 末尾。在规范的 `docker-constructor.toml` 中，找到 `# --- pi-tools.pi ---` 标题，并替换该块直到下一个 `# --- ... ---` 标题。片段会保留未变更的 source、update-policy、override、validation 和所有已配置平台工件；请与候选值一并审核。标题只用于视觉定位，在自定义 inventory 中是可选的；在那里请使用完整的 TOML 表路径。
+2. `--suggest` 是 **non-mutating**：它输出的是完整的手动替换块，绝不会自动编辑文件，也不能追加到 TOML 末尾。在规范的 `docker-constructor.toml` 中，找到 `# --- pi-tools.pi ---` 标题，并替换该块直到下一个 `# --- ... ---` 标题。片段会保留未变更的 source、update-policy、override、validation 和所有已配置平台工件；请与候选值一并审核。标题只用于视觉定位；请使用完整的 TOML 表路径来定位已审核的条目。
 3. 验证并审查准确变更：
 
    ```bash
@@ -227,7 +227,7 @@ unittest 套件只使用 Python 标准库且不会调用 Docker。`scripts/check
 更改 `runtime.pi-extensions` 后，挂载目标 Pi home 并启动容器 —— 入口点将自动通过 `docker.runtime_installer` 运行幂等安装程序：
 
 ```bash
-./docker/docker-constructor.py run
+./docker/docker-constructor.py run --workspace /path/to/primary
 ```
 
 ### 修复主机所有权和权限

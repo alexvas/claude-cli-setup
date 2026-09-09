@@ -41,7 +41,7 @@ from docker.versioning.build_materialization import (
     MaterializationError, SelectedBuildArtifact, UrllibStreamingTransport,
 )
 from docker.versioning.build_cache import (
-    UNCOMMITTED_TTL_SECONDS, acquire_checkout_build_lock, build_blob_path,
+    UNCOMMITTED_TTL_SECONDS, acquire_constructor_project_build_lock, build_blob_path,
     commit_build_set, prepare_build_cache, publish_uncommitted_blob,
     publish_verified_blob,
 )
@@ -153,10 +153,10 @@ def _test_selected_artifacts(_projection):
     return digest_valid_selected_artifacts(_projection)
 
 
-def _materialize_ok(projection, *, checkout_root, cache_root=None, project_state=None, **_kwargs):
+def _materialize_ok(projection, *, constructor_project_root, cache_root=None, project_state=None, **_kwargs):
     """Publish real digest-verified blobs for orchestration fixture builds."""
     return publish_digest_valid_artifacts(
-        projection, checkout_root=checkout_root, cache_root=cache_root,
+        projection, constructor_project_root=constructor_project_root, cache_root=cache_root,
         project_state=project_state,
     )
 
@@ -1564,9 +1564,9 @@ class TestMaterializationBoundary(unittest.TestCase):
             identity = DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest())
             identities.add(identity)
             paths.append(publish_verified_blob(
-                identity, data, checkout_root=self.repo, cache_root=self.cache,
+                identity, data, constructor_project_root=self.repo, cache_root=self.cache,
             ))
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache) as lock:
             commit_build_set(self.repo, identities, lock=lock, cache_root=self.cache)
         return identities, paths
 
@@ -1590,7 +1590,7 @@ class TestMaterializationBoundary(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             orchestrate_build(request)
         self._assert_prior_live_set(old_ids, old_paths)
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache):
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache):
             pass
 
     def test_artifact_materialization_interruption_releases_lock(self):
@@ -1715,7 +1715,7 @@ class TestMaterializationBoundary(unittest.TestCase):
         pending_data = b"already-verified-uncommitted"
         pending_id = DigestIdentity.from_hex("sha256", hashlib.sha256(pending_data).hexdigest())
         pending_path = publish_verified_blob(
-            pending_id, pending_data, checkout_root=self.repo, cache_root=self.cache,
+            pending_id, pending_data, constructor_project_root=self.repo, cache_root=self.cache,
         )
         request = self._request(
             materialize=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not materialize")),
@@ -1792,9 +1792,9 @@ class TestMaterializationBoundary(unittest.TestCase):
             name="expired", url="https://test.invalid/expired",
             identity=DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest()),
         )
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache) as lock:
             path = publish_uncommitted_blob(
-                selected.identity, data, checkout_root=self.repo, cache_root=self.cache,
+                selected.identity, data, constructor_project_root=self.repo, cache_root=self.cache,
                 lock=lock, verified_at=1,
             )
         calls = []
@@ -1858,16 +1858,16 @@ class TestMaterializationBoundary(unittest.TestCase):
         for data in (b"superseded-one", b"superseded-two"):
             identity = DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest())
             old_identities.add(identity)
-            old_paths.append(publish_verified_blob(identity, data, checkout_root=self.repo, cache_root=self.cache))
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache) as lock:
+            old_paths.append(publish_verified_blob(identity, data, constructor_project_root=self.repo, cache_root=self.cache))
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache) as lock:
             commit_build_set(self.repo, old_identities, lock=lock, cache_root=self.cache)
 
         other = self.base / "other-project"
         other.mkdir()
         other_data = b"other-project-input"
         other_identity = DigestIdentity.from_hex("sha256", hashlib.sha256(other_data).hexdigest())
-        other_path = publish_verified_blob(other_identity, other_data, checkout_root=other, cache_root=self.cache)
-        with acquire_checkout_build_lock(other, cache_root=self.cache) as lock:
+        other_path = publish_verified_blob(other_identity, other_data, constructor_project_root=other, cache_root=self.cache)
+        with acquire_constructor_project_build_lock(other, cache_root=self.cache) as lock:
             commit_build_set(other, {other_identity}, lock=lock, cache_root=self.cache)
         other_state = resolve_project_state(other, cache_root=self.cache)
         other_snapshot = self._tree_snapshot(other_state.build_artifacts_root)

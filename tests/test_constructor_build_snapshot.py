@@ -32,8 +32,8 @@ class TestArtifactSnapshot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             pairs = self._selected(root)
-            one = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root)
-            two = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root)
+            one = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root)
+            two = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root)
             self.assertEqual(one.manifest.read_bytes(), two.manifest.read_bytes())
             self.assertEqual({"rustup-init", "uv.tar.gz", "rtk.deb", "fd.deb", "manifest.json"}, {p.name for p in one.path.iterdir()})
             self.assertNotIn(".docker-cache", one.manifest.read_text())
@@ -42,7 +42,7 @@ class TestArtifactSnapshot(unittest.TestCase):
     def test_prefers_hardlink_and_survives_cache_unlink(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); pairs = self._selected(root)
-            snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root)
+            snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root)
             source = pairs[0][1]; imported = snapshot.path / "rustup-init"
             self.assertEqual(source.stat().st_ino, imported.stat().st_ino)
             source.unlink()
@@ -64,7 +64,7 @@ class TestArtifactSnapshot(unittest.TestCase):
             before = (source.stat().st_uid, source.stat().st_mode & 0o777,
                       source.stat().st_ino, content, hashlib.sha256(content).hexdigest())
             with patch("docker.versioning.build_snapshot.os.link", side_effect=OSError(errno.EXDEV, "cross-device")):
-                snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
             imported = snapshot.path / "rustup-init"
             self.assertNotEqual(source.stat().st_ino, imported.stat().st_ino)
             self.assertTrue(imported.is_file())
@@ -86,7 +86,7 @@ class TestArtifactSnapshot(unittest.TestCase):
             cache = root / "cache"; cache.mkdir(mode=0o700)
             state = resolve_project_state(root, cache_root=cache)
             with patch("docker.versioning.build_snapshot.os.link", side_effect=OSError(errno.EXDEV, "cross-device")):
-                snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
             for name in ("rustup-init", "uv.tar.gz", "rtk.deb", "fd.deb", "manifest.json"):
                 self.assertEqual(0o444, (snapshot.path / name).stat().st_mode & 0o777, name)
             cleanup_artifact_snapshot(snapshot)
@@ -105,7 +105,7 @@ class TestArtifactSnapshot(unittest.TestCase):
                 calls.append(os.fspath(path))
                 return real_chmod(path, mode, *args, **kwargs)
             with patch("docker.versioning.build_snapshot.os.chmod", side_effect=spy):
-                snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
                 cleanup_artifact_snapshot(snapshot)
             hard_linked = {"rustup-init", "uv.tar.gz", "rtk.deb", "fd.deb"}
             for call in calls:
@@ -137,7 +137,7 @@ class TestArtifactSnapshot(unittest.TestCase):
                 return staging
             with patch("docker.versioning.build_snapshot.tempfile.mkdtemp", side_effect=mkdtemp_with_nested):
                 snapshot = create_artifact_snapshot(
-                    (x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                    (x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
             nested = snapshot.path / "nested" / "rustup-init"
             linked = snapshot.path / "rustup-init"
             self.assertEqual(0o444, nested.stat().st_mode & 0o777)
@@ -160,7 +160,7 @@ class TestArtifactSnapshot(unittest.TestCase):
             unsafe.chmod(0o644)
             with self.assertRaises(SnapshotError):
                 create_artifact_snapshot(
-                    (x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                    (x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
             self.assertEqual(0o644, unsafe.stat().st_mode & 0o777)
 
     def test_foreign_owner_hard_link_is_rejected_without_adoption(self):
@@ -191,7 +191,7 @@ class TestArtifactSnapshot(unittest.TestCase):
                  patch("docker.versioning.build_snapshot._copy_source_fd_to_destination") as copy:
                 with self.assertRaises(SnapshotError):
                     create_artifact_snapshot(
-                        (x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                        (x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
             copy.assert_not_called()
             self.assertNotIn(os.fspath(foreign), linked_sources)
             st = foreign.stat()
@@ -216,7 +216,7 @@ class TestArtifactSnapshot(unittest.TestCase):
                  patch("docker.versioning.build_snapshot._copy_source_fd_to_destination") as copy:
                 with self.assertRaises(SnapshotError):
                     create_artifact_snapshot(
-                        (x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root, project_state=state)
+                        (x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root, project_state=state)
             copy.assert_not_called()
             for _, blob in pairs:
                 st = blob.stat()
@@ -257,7 +257,7 @@ class TestArtifactSnapshot(unittest.TestCase):
                 with self.assertRaises(SnapshotError):
                     create_artifact_snapshot(
                         (x[0] for x in pairs), (x[1] for x in pairs),
-                        checkout_root=root, project_state=state)
+                        constructor_project_root=root, project_state=state)
             # No transaction snapshot remains in the external namespace.
             self.assertEqual([], list(state.transactions_root.glob("transaction-*")))
             # The originally validated inode survives, untouched, under its
@@ -280,14 +280,14 @@ class TestArtifactSnapshot(unittest.TestCase):
             root = Path(td); pairs = self._selected(root)
             with patch("docker.versioning.build_snapshot.validate_host_owner_traversal", side_effect=RuntimeError("traversal failed")):
                 with self.assertRaisesRegex(RuntimeError, "traversal failed"):
-                    create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root)
+                    create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root)
             generated = root / ".docker-generated/build-artifacts"
             self.assertEqual([], list(generated.glob("transaction-*")))
 
     def test_finalized_files_and_directories_are_not_writable_and_cleanup_is_unconditional(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); pairs = self._selected(root)
-            snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), checkout_root=root)
+            snapshot = create_artifact_snapshot((x[0] for x in pairs), (x[1] for x in pairs), constructor_project_root=root)
             self.assertEqual(0o444, (snapshot.path / "fd.deb").stat().st_mode & 0o777)
             self.assertEqual(0, snapshot.path.stat().st_mode & 0o222)
             cleanup_artifact_snapshot(snapshot)
@@ -337,12 +337,12 @@ class TwoBuildOwnershipMaintenanceRegression(unittest.TestCase):
             # First build: streamed misses, immutable snapshot, cleanup.
             first = Transport({a.url: p for a, p in artifacts})
             blobs1 = tuple(materialize_artifact(
-                a, checkout_root=project, cache_root=cache, project_state=state,
+                a, constructor_project_root=project, cache_root=cache, project_state=state,
                 transport=first,
             ) for a, _ in artifacts)
             self.assertEqual(len(artifacts), len(first.calls))
             snap1 = create_artifact_snapshot(
-                (a for a, _ in artifacts), blobs1, checkout_root=project, project_state=state)
+                (a for a, _ in artifacts), blobs1, constructor_project_root=project, project_state=state)
             cleanup_artifact_snapshot(snap1)
             before = {blob: (blob.stat().st_uid, blob.stat().st_mode, blob.stat().st_ino, blob.read_bytes())
                       for blob in blobs1}
@@ -359,7 +359,7 @@ class TwoBuildOwnershipMaintenanceRegression(unittest.TestCase):
             # hit whose blobs are byte-, inode-, mode-, and owner-identical.
             second = Transport({})
             blobs2 = tuple(materialize_artifact(
-                a, checkout_root=project, cache_root=cache, project_state=state,
+                a, constructor_project_root=project, cache_root=cache, project_state=state,
                 transport=second,
             ) for a, _ in artifacts)
             self.assertEqual([], second.calls)
@@ -371,7 +371,7 @@ class TwoBuildOwnershipMaintenanceRegression(unittest.TestCase):
                 self.assertEqual(st.st_ino, before[blob][2])
                 self.assertEqual(blob.read_bytes(), before[blob][3])
             snap2 = create_artifact_snapshot(
-                (a for a, _ in artifacts), blobs2, checkout_root=project, project_state=state)
+                (a for a, _ in artifacts), blobs2, constructor_project_root=project, project_state=state)
             cleanup_artifact_snapshot(snap2)
 
 

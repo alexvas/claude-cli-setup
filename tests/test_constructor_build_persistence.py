@@ -13,7 +13,7 @@ from docker.versioning.cache_storage import (
     resolve_default_root,
     resolve_effective_root,
 )
-from docker.versioning.build_cache import (BuildCacheError, BuildTransactionError, UNCOMMITTED_TTL_SECONDS, acquire_checkout_build_lock, build_blob_path, commit_build_set, maintain_uncommitted_blobs, mark_uncommitted_blob, prepare_build_cache, publish_uncommitted_blob, publish_verified_blob, recover_abandoned_snapshots)
+from docker.versioning.build_cache import (BuildCacheError, BuildTransactionError, UNCOMMITTED_TTL_SECONDS, acquire_constructor_project_build_lock, build_blob_path, commit_build_set, maintain_uncommitted_blobs, mark_uncommitted_blob, prepare_build_cache, publish_uncommitted_blob, publish_verified_blob, recover_abandoned_snapshots)
 from docker.versioning.digest_identity import DigestIdentity
 _REPO=Path(__file__).resolve().parents[1]
 
@@ -346,8 +346,8 @@ class ExternalPersistence(unittest.TestCase):
 
     def test_transaction_retains_explicit_cache_root_for_all_persistent_state(self):
         identity=self.identity(b'explicit-cache-root')
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
-            publish_uncommitted_blob(identity, b'explicit-cache-root', checkout_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
+            publish_uncommitted_blob(identity, b'explicit-cache-root', constructor_project_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
             commit_build_set(self.root, {identity}, lock=lock, cache_root=self.cache)
         paths=prepare_build_cache(self.root, cache_root=self.cache)
         self.assertEqual(paths.namespace_root, self.state.namespace)
@@ -356,7 +356,7 @@ class ExternalPersistence(unittest.TestCase):
         self.assertTrue(build_blob_path(paths.blobs_root, identity).exists())
 
     def test_lock_lives_under_external_namespace_not_checkout(self):
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             self.assertEqual(lock.namespace, self.state.namespace)
             self.assertEqual(lock.cache_root, self.cache)
             self.assertTrue((self.state.build_artifacts_root / 'build.lock').exists())
@@ -366,20 +366,20 @@ class ExternalPersistence(unittest.TestCase):
     def test_lock_identity_is_the_canonical_resolved_project(self):
         link = Path(self.tmp.name) / 'project-link'
         link.symlink_to(self.root, target_is_directory=True)
-        with acquire_checkout_build_lock(link, cache_root=self.cache) as lock:
-            self.assertEqual(lock.checkout_root, self.root.resolve())
+        with acquire_constructor_project_build_lock(link, cache_root=self.cache) as lock:
+            self.assertEqual(lock.constructor_project_root, self.root.resolve())
             # The canonical resolved path must satisfy the same lock.
             lock.assert_held_for(self.root, cache_root=self.cache)
 
     def test_lock_rejects_another_project(self):
         other = Path(self.tmp.name) / 'other'; other.mkdir()
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             with self.assertRaises(BuildTransactionError):
                 lock.assert_held_for(other, cache_root=self.cache)
 
     def test_lock_rejects_another_cache_root(self):
         other_cache = Path(self.tmp.name) / 'other-cache'; other_cache.mkdir(mode=0o700)
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             with self.assertRaises(BuildTransactionError):
                 lock.assert_held_for(self.root, cache_root=other_cache)
 
@@ -392,8 +392,8 @@ class ExternalPersistence(unittest.TestCase):
 
     def test_markers_manifests_locks_and_snapshots_are_project_state_children(self):
         state, paths=self.transaction_paths(); one=self.identity(b'one')
-        with acquire_checkout_build_lock(self.root) as lock:
-            published=publish_uncommitted_blob(one,b'one',checkout_root=self.root,lock=lock,verified_at=0)
+        with acquire_constructor_project_build_lock(self.root) as lock:
+            published=publish_uncommitted_blob(one,b'one',constructor_project_root=self.root,lock=lock,verified_at=0)
             marker=paths.markers_root/f'sha256:{one.hex_digest()}.json'
             snapshot=paths.generated_root/'interrupted'; snapshot.mkdir(); (snapshot/'partial').write_text('partial')
             self.assertTrue(published.is_relative_to(state.build_artifacts_root))
@@ -409,10 +409,10 @@ class ExternalPersistence(unittest.TestCase):
 
     def test_retention_boundary_preserves_committed_blob_and_prior_state(self):
         state, paths=self.transaction_paths(); committed=self.identity(b'committed'); stale=self.identity(b'stale')
-        with acquire_checkout_build_lock(self.root) as lock:
-            publish_uncommitted_blob(committed,b'committed',checkout_root=self.root,lock=lock,verified_at=0)
+        with acquire_constructor_project_build_lock(self.root) as lock:
+            publish_uncommitted_blob(committed,b'committed',constructor_project_root=self.root,lock=lock,verified_at=0)
             commit_build_set(self.root,{committed},lock=lock)
-            publish_uncommitted_blob(stale,b'stale',checkout_root=self.root,lock=lock,verified_at=0)
+            publish_uncommitted_blob(stale,b'stale',constructor_project_root=self.root,lock=lock,verified_at=0)
             # Exactly TTL seconds old is retained; only older-than-TTL expires.
             maintain_uncommitted_blobs(self.root,lock=lock,now=UNCOMMITTED_TTL_SECONDS)
             self.assertTrue(build_blob_path(paths.blobs_root,stale).exists())
@@ -425,9 +425,9 @@ class ExternalPersistence(unittest.TestCase):
 
     def test_interrupted_blob_publication_retains_marker_for_cleanup(self):
         state, paths=self.transaction_paths(); identity=self.identity(b'interrupted')
-        with acquire_checkout_build_lock(self.root) as lock:
+        with acquire_constructor_project_build_lock(self.root) as lock:
             with mock.patch('docker.versioning.build_cache.publish_verified_blob', side_effect=OSError('interrupted')):
-                with self.assertRaises(OSError): publish_uncommitted_blob(identity,b'interrupted',checkout_root=self.root,lock=lock,verified_at=0)
+                with self.assertRaises(OSError): publish_uncommitted_blob(identity,b'interrupted',constructor_project_root=self.root,lock=lock,verified_at=0)
             marker=paths.markers_root/f'sha256:{identity.hex_digest()}.json'
             self.assertTrue(marker.is_file())
             maintain_uncommitted_blobs(self.root,lock=lock,now=0)
@@ -437,16 +437,16 @@ class ExternalPersistence(unittest.TestCase):
 
     def test_blob_and_temporary_publication_are_confined_and_cache_hit_is_immutable(self):
         paths=prepare_build_cache(self.root,cache_root=self.cache); identity=self.identity(b'one')
-        first=publish_verified_blob(identity,b'one',checkout_root=self.root,cache_root=self.cache)
-        second=publish_verified_blob(identity,b'one',checkout_root=self.root,cache_root=self.cache)
+        first=publish_verified_blob(identity,b'one',constructor_project_root=self.root,cache_root=self.cache)
+        second=publish_verified_blob(identity,b'one',constructor_project_root=self.root,cache_root=self.cache)
         self.assertEqual(first,second); self.assertTrue(first.is_relative_to(self.state.build_artifacts_root))
         self.assertTrue(paths.tmp_root.is_relative_to(self.state.build_artifacts_root))
         self.assertEqual(list(paths.tmp_root.iterdir()), [])
 
     def test_digest_mismatch_preserves_prior_blob_and_leaves_no_temporary_state(self):
         paths=prepare_build_cache(self.root,cache_root=self.cache); identity=self.identity(b'prior')
-        prior=publish_verified_blob(identity,b'prior',checkout_root=self.root,cache_root=self.cache)
-        with self.assertRaises(BuildCacheError): publish_verified_blob(identity,b'wrong',checkout_root=self.root,cache_root=self.cache)
+        prior=publish_verified_blob(identity,b'prior',constructor_project_root=self.root,cache_root=self.cache)
+        with self.assertRaises(BuildCacheError): publish_verified_blob(identity,b'wrong',constructor_project_root=self.root,cache_root=self.cache)
         self.assertEqual(prior.read_bytes(),b'prior'); self.assertEqual(list(paths.tmp_root.iterdir()), [])
         self.assertFalse((self.root/'.docker-cache').exists()); self.assertFalse((self.root/'.docker-generated').exists())
 
@@ -473,9 +473,9 @@ class CustomCacheRootLifecycle(unittest.TestCase):
 
     def test_complete_transaction_state_confined_to_custom_cache_dir(self):
         committed=self.identity(b'custom-lifecycle-committed'); uncommitted=self.identity(b'custom-lifecycle-uncommitted')
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache_root) as lock:
-            publish_uncommitted_blob(committed, b'custom-lifecycle-committed', checkout_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
-            publish_uncommitted_blob(uncommitted, b'custom-lifecycle-uncommitted', checkout_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache_root) as lock:
+            publish_uncommitted_blob(committed, b'custom-lifecycle-committed', constructor_project_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
+            publish_uncommitted_blob(uncommitted, b'custom-lifecycle-uncommitted', constructor_project_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
             commit_build_set(self.repo, {committed}, lock=lock, cache_root=self.cache_root)
         state=resolve_project_state(self.repo, cache_root=self.cache_root)
         paths=prepare_build_cache(self.repo, cache_root=self.cache_root)
@@ -499,7 +499,7 @@ class CustomCacheRootLifecycle(unittest.TestCase):
         state=resolve_project_state(self.repo, cache_root=self.cache_root)
         snapshot=state.transactions_root/'abandoned-snapshot'; snapshot.mkdir(); (snapshot/'partial').write_text('partial')
         self.assertTrue(snapshot.is_relative_to(self.cache_root))
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache_root) as lock:
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache_root) as lock:
             recover_abandoned_snapshots(self.repo, lock=lock, cache_root=self.cache_root)
         self.assertFalse(snapshot.exists())
         self.assertFalse(self.default_root.exists())
@@ -513,7 +513,7 @@ class CustomCacheRootLifecycle(unittest.TestCase):
             raise OSError('interrupted before publish')
         with mock.patch('docker.versioning.build_cache.os.replace', side_effect=interrupting_replace):
             with self.assertRaises(OSError):
-                publish_verified_blob(identity, b'custom-temp-file', checkout_root=self.repo, cache_root=self.cache_root)
+                publish_verified_blob(identity, b'custom-temp-file', constructor_project_root=self.repo, cache_root=self.cache_root)
         self.assertTrue(staged)
         for path in staged:
             self.assertTrue(path.is_relative_to(paths.tmp_root))
@@ -525,10 +525,10 @@ class CustomCacheRootLifecycle(unittest.TestCase):
         state=resolve_project_state(self.repo, cache_root=self.cache_root)
         paths=prepare_build_cache(self.repo, cache_root=self.cache_root)
         identity=self.identity(b'custom-interrupted')
-        with acquire_checkout_build_lock(self.repo, cache_root=self.cache_root) as lock:
+        with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache_root) as lock:
             with mock.patch('docker.versioning.build_cache.publish_verified_blob', side_effect=OSError('interrupted')):
                 with self.assertRaises(OSError):
-                    publish_uncommitted_blob(identity, b'custom-interrupted', checkout_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
+                    publish_uncommitted_blob(identity, b'custom-interrupted', constructor_project_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
             marker=paths.markers_root/f'sha256:{identity.hex_digest()}.json'
             self.assertTrue(marker.exists()); self.assertTrue(marker.is_relative_to(state.build_artifacts_root))
             maintain_uncommitted_blobs(self.repo, lock=lock, now=0, cache_root=self.cache_root)
@@ -544,9 +544,9 @@ class CustomCacheRootLifecycle(unittest.TestCase):
              mock.patch('docker.versioning.project_state.prepare_default_root', forbid):
             resolve_project_state(self.repo, cache_root=self.cache_root)
             prepare_build_cache(self.repo, cache_root=self.cache_root)
-            publish_verified_blob(first, b'no-fallback-direct', checkout_root=self.repo, cache_root=self.cache_root)
-            with acquire_checkout_build_lock(self.repo, cache_root=self.cache_root) as lock:
-                publish_uncommitted_blob(second, b'no-fallback-transaction', checkout_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
+            publish_verified_blob(first, b'no-fallback-direct', constructor_project_root=self.repo, cache_root=self.cache_root)
+            with acquire_constructor_project_build_lock(self.repo, cache_root=self.cache_root) as lock:
+                publish_uncommitted_blob(second, b'no-fallback-transaction', constructor_project_root=self.repo, lock=lock, verified_at=0, cache_root=self.cache_root)
                 recover_abandoned_snapshots(self.repo, lock=lock, cache_root=self.cache_root)
                 maintain_uncommitted_blobs(self.repo, lock=lock, now=0, cache_root=self.cache_root)
                 commit_build_set(self.repo, {second}, lock=lock, cache_root=self.cache_root)
@@ -570,27 +570,27 @@ class DescriptorRelativePublicationRaces(unittest.TestCase):
 
     def test_manifest_replaced_by_symlink_is_rejected_before_reading(self):
         identity = self.identity(b'live')
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
-            publish_uncommitted_blob(identity, b'live', checkout_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
+            publish_uncommitted_blob(identity, b'live', constructor_project_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
             commit_build_set(self.root, {identity}, lock=lock, cache_root=self.cache)
         manifest = self.paths.persistent_root / 'committed-build.json'
         outside = self.base / 'outside-manifest'
         outside.write_text('must-not-be-read')
         manifest.unlink(); manifest.symlink_to(outside)
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             with self.assertRaises(BuildTransactionError):
                 commit_build_set(self.root, {identity}, lock=lock, cache_root=self.cache)
         self.assertEqual(outside.read_text(), 'must-not-be-read')
 
     def test_marker_destination_replaced_by_symlink_is_rejected_before_overwrite(self):
         identity = self.identity(b'payload')
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             mark_uncommitted_blob(identity, self.root, lock=lock, verified_at=0, cache_root=self.cache)
         marker = self.paths.markers_root / f'sha256:{identity.hex_digest()}.json'
         outside = self.base / 'outside-marker'
         outside.write_text('target-bytes')
         marker.unlink(); marker.symlink_to(outside)
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             with self.assertRaises(BuildTransactionError):
                 mark_uncommitted_blob(identity, self.root, lock=lock, verified_at=1, cache_root=self.cache)
         self.assertEqual(outside.read_text(), 'target-bytes')
@@ -606,10 +606,10 @@ class DescriptorRelativePublicationRaces(unittest.TestCase):
 
     def test_interrupted_manifest_publication_preserves_prior_and_cleans_temp(self):
         first = self.identity(b'first'); second = self.identity(b'second')
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
-            publish_uncommitted_blob(first, b'first', checkout_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
+            publish_uncommitted_blob(first, b'first', constructor_project_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
             commit_build_set(self.root, {first}, lock=lock, cache_root=self.cache)
-            publish_uncommitted_blob(second, b'second', checkout_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
+            publish_uncommitted_blob(second, b'second', constructor_project_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
             real_replace = os.replace
             def interrupt(src, dst, *args, **kwargs):
                 if dst == 'committed-build.json':
@@ -626,13 +626,13 @@ class DescriptorRelativePublicationRaces(unittest.TestCase):
 
     def test_hard_linked_manifest_is_rejected_without_deletion(self):
         identity = self.identity(b'live')
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
-            publish_uncommitted_blob(identity, b'live', checkout_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
+            publish_uncommitted_blob(identity, b'live', constructor_project_root=self.root, lock=lock, verified_at=0, cache_root=self.cache)
             commit_build_set(self.root, {identity}, lock=lock, cache_root=self.cache)
         manifest = self.paths.persistent_root / 'committed-build.json'
         original = manifest.read_text()
         os.link(manifest, self.base / 'manifest-hardlink')
-        with acquire_checkout_build_lock(self.root, cache_root=self.cache) as lock:
+        with acquire_constructor_project_build_lock(self.root, cache_root=self.cache) as lock:
             with self.assertRaises(BuildTransactionError):
                 commit_build_set(self.root, {identity}, lock=lock, cache_root=self.cache)
         self.assertEqual(manifest.read_text(), original)

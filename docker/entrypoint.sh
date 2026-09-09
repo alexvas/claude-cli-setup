@@ -32,7 +32,7 @@ fix_permissions() {
   fi
 }
 
-# Apply ownership and access repair to a mounted project path.
+# Apply ownership and access repair to a mounted workspace path.
 fix_ownership_and_permissions() {
   fix_ownership "${1}"
   fix_permissions "${1}"

@@ -292,12 +292,12 @@ def main() -> int:
             cache.mkdir(mode=0o700)
             log("Materializing and SHA-256-verifying reviewed host artifacts")
             blobs = materialize_build_artifacts(
-                projection, checkout_root=ROOT, cache_root=cache,
+                projection, constructor_project_root=ROOT, cache_root=cache,
                 transport=UrllibStreamingTransport(HostNetworkPolicy()),
             )
             log("Creating immutable named-context snapshot")
             snapshot = create_artifact_snapshot(
-                selected, blobs, checkout_root=ROOT, cache_root=cache,
+                selected, blobs, constructor_project_root=ROOT, cache_root=cache,
             )
             valid = snapshot.path
 

@@ -43,7 +43,7 @@ class TestPhase4Lifecycle(unittest.TestCase):
                 digest = DigestIdentity.from_hex("sha256", hashlib.sha256(data).hexdigest())
                 blob = checkout / f"{name}.blob"; blob.write_bytes(data); blob.chmod(0o444)
                 selected.append(SelectedBuildArtifact(name, "https://never.exposed/", digest)); blobs.append(blob)
-            snapshot = create_artifact_snapshot(selected, blobs, checkout_root=checkout)
+            snapshot = create_artifact_snapshot(selected, blobs, constructor_project_root=checkout)
             self.assertEqual(0o700, parent.stat().st_mode & 0o777)
             self.assertEqual(0o700, checkout.stat().st_mode & 0o777)
             self.assertTrue(snapshot.path.is_dir()) # host owner can import/traverse

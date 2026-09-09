@@ -113,10 +113,10 @@ class ExternalProjectStatePhase3Tests(unittest.TestCase):
             resolver_args.append(Path(project))
             return real_resolver(project, *args, **kwargs)
 
-        def record_materializer(projection, *, checkout_root, **kwargs):
-            materializer_roots.append(Path(checkout_root))
+        def record_materializer(projection, *, constructor_project_root, **kwargs):
+            materializer_roots.append(Path(constructor_project_root))
             return publish_digest_valid_artifacts(
-                projection, checkout_root=checkout_root, **kwargs,
+                projection, constructor_project_root=constructor_project_root, **kwargs,
             )
 
         def record_publisher(projection, *, repo_root):
@@ -188,7 +188,7 @@ class ExternalProjectStatePhase3Tests(unittest.TestCase):
         try:
             with patch("docker.constructor_cli._discover_runtime_projection_from_container", return_value=None), \
                  patch("docker.versioning.runtime_verification.verify_runtime", side_effect=record_and_verify):
-                main(["--project-directory", str(alias), "verify", "--scope", "runtime", "--container", "pi-test", "--extra-workspace", str(self.primary)], _process_runner=_VerifyRunner())
+                main(["--project-directory", str(alias), "verify", "--scope", "runtime", "--container", "pi-test", "--workspace", str(self.primary)], _process_runner=_VerifyRunner())
             self.assertEqual([projection], captured)
             self.assertEqual(state.namespace, resolve_project_state(alias, cache_root=self.cache).namespace)
         finally:
@@ -318,7 +318,7 @@ exit 0
                  patch("docker.versioning.project_state.resolve_project_state", side_effect=AssertionError("default lookup called")), \
                  patch("pathlib.Path.read_bytes", autospec=True, side_effect=record_read), \
                  patch("docker.versioning.runtime_verification.verify_runtime", side_effect=record_and_verify):
-                main(["--project-directory", str(self.project), "verify", "--scope", "runtime", "--container", "pi-test", "--extra-workspace", str(self.primary), "--runtime-projection", str(external)], _process_runner=_VerifyRunner())
+                main(["--project-directory", str(self.project), "verify", "--scope", "runtime", "--container", "pi-test", "--workspace", str(self.primary), "--runtime-projection", str(external)], _process_runner=_VerifyRunner())
             self.assertEqual([external], captured)
             self.assertIn(external, read_paths)
         finally:

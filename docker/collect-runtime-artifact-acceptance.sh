@@ -25,7 +25,7 @@ Options:
                          Constructor project containing docker-constructor.toml
                          (default: process working directory)
   --output-dir DIR       Evidence root (default: selected project's external project-state evidence root)
-  --main-project DIR     Main project to mount (default: process working directory)
+  --workspace DIR        Workspace to mount (default: process working directory)
   --image IMAGE          Runtime image/tag (default: pi-cli-pi:latest)
   --duration SECONDS     Per-launch inspection window (default: 30)
   --build                Build the image once before launch scenarios
@@ -54,7 +54,7 @@ collector="$repo_root/docker/collect-runtime-artifact-evidence.sh"
 project_directory="$(pwd -P)"
 inventory=""
 output_dir=""
-main_project="$(pwd -P)"
+workspace="$(pwd -P)"
 image="pi-cli-pi:latest"
 duration=30
 collect_build=false
@@ -73,8 +73,8 @@ while (($#)); do
       output_dir=${2:?--output-dir requires a directory}
       shift 2
       ;;
-    --main-project)
-      main_project=${2:?--main-project requires a directory}
+    --workspace)
+      workspace=${2:?--workspace requires a directory}
       shift 2
       ;;
     --image)
@@ -140,11 +140,11 @@ if [[ ! -f "$inventory" ]]; then
   printf 'Constructor project inventory does not exist: %s\n' "$inventory" >&2
   exit 2
 fi
-if [[ ! -d "$main_project" ]]; then
-  printf 'Main project directory does not exist: %s\n' "$main_project" >&2
+if [[ ! -d "$workspace" ]]; then
+  printf 'Workspace directory does not exist: %s\n' "$workspace" >&2
   exit 2
 fi
-main_project="$(cd "$main_project" && pwd -P)"
+workspace="$(cd "$workspace" && pwd -P)"
 if [[ -z "$output_dir" ]]; then
   output_dir="$(
     cd "$repo_root"
@@ -176,7 +176,7 @@ fi
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 printf '%s\n' "$image" >"$output_dir/image.txt"
-printf '%s\n' "$main_project" >"$output_dir/main-project.txt"
+printf '%s\n' "$workspace" >"$output_dir/workspace.txt"
 printf '%s\n' "$duration" >"$output_dir/inspection-duration-seconds.txt"
 date -u +%Y-%m-%dT%H:%M:%SZ >"$output_dir/started-at.txt"
 
@@ -188,7 +188,7 @@ run_scenario() {
     "$collector"
     --project-directory "$project_directory"
     --output-dir "$scenario_dir"
-    --main-project "$main_project"
+    --workspace "$workspace"
     --image "$image"
     --duration "$duration"
   )
@@ -247,7 +247,7 @@ if [[ -n "$offline_wrapper" ]]; then
   "$offline_wrapper" "$collector" \
     --project-directory "$project_directory" \
     --output-dir "$output_dir/02-cache-hit-offline" \
-    --main-project "$main_project" \
+    --workspace "$workspace" \
     --image "$image" \
     --duration "$duration"
 else

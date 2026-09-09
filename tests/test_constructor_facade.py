@@ -67,7 +67,7 @@ def _run(
             handle.path = str(Path(parent_dir) / "fake-projection.toml")
             return handle
     effective_argv = list(argv)
-    if "--project-directory" not in effective_argv and "--inventory" not in effective_argv:
+    if "--project-directory" not in effective_argv:
         effective_argv = ["--project-directory", str(_TEST_PROJECT_ROOT), *effective_argv]
     out = io.StringIO()
     err = io.StringIO()

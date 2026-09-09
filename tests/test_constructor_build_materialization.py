@@ -79,11 +79,11 @@ class TestStreamingMaterializer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             transport = RecordingTransport((b"pay", b"load"))
             cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
-            path = materialize_artifact(self.selected(), checkout_root=td, cache_root=cache, transport=transport)
+            path = materialize_artifact(self.selected(), constructor_project_root=td, cache_root=cache, transport=transport)
             self.assertEqual(b"payload", path.read_bytes())
             self.assertEqual(0o444, path.stat().st_mode & 0o777)
             bomb = RecordingTransport(error=AssertionError("network on hit"))
-            self.assertEqual(path, materialize_artifact(self.selected(), checkout_root=td, cache_root=cache, transport=bomb))
+            self.assertEqual(path, materialize_artifact(self.selected(), constructor_project_root=td, cache_root=cache, transport=bomb))
             self.assertEqual([], bomb.calls)
 
     def test_digest_mismatch_and_interruption_clean_temporary_files(self):
@@ -91,7 +91,7 @@ class TestStreamingMaterializer(unittest.TestCase):
             with self.subTest(transport=transport), tempfile.TemporaryDirectory() as td:
                 cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
                 with self.assertRaises(MaterializationError):
-                    materialize_artifact(self.selected(), checkout_root=td, cache_root=cache, transport=transport)
+                    materialize_artifact(self.selected(), constructor_project_root=td, cache_root=cache, transport=transport)
                 from docker.versioning.project_state import resolve_project_state
                 state = resolve_project_state(td, cache_root=cache)
                 self.assertEqual([], list((state.build_artifacts_root / "tmp").iterdir()))
@@ -110,7 +110,7 @@ class TestStreamingMaterializer(unittest.TestCase):
                     yield b"payload"
                     self_outer.assertFalse(destination.exists())
             self_outer = self
-            materialize_artifact(selected, checkout_root=td, cache_root=cache, transport=Observing())
+            materialize_artifact(selected, constructor_project_root=td, cache_root=cache, transport=Observing())
             self.assertTrue(destination.exists())
 
     def test_materialization_mutates_only_the_external_namespace(self):
@@ -118,7 +118,7 @@ class TestStreamingMaterializer(unittest.TestCase):
             checkout = Path(td) / "proj"; checkout.mkdir()
             cache = Path(td) / "cache"; cache.mkdir(mode=0o700); os.chmod(cache, 0o700)
             path = materialize_artifact(
-                self.selected(), checkout_root=checkout, cache_root=cache,
+                self.selected(), constructor_project_root=checkout, cache_root=cache,
                 transport=RecordingTransport((b"pay", b"load")),
             )
             # The project checkout receives no generated entry at all.
@@ -138,19 +138,19 @@ class TestStreamingMaterializer(unittest.TestCase):
             cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
             selected = self.selected()
             transport = RecordingTransport(chunks=(b"payload",))
-            from docker.versioning.build_cache import acquire_checkout_build_lock, prepare_build_cache
-            with acquire_checkout_build_lock(checkout, cache_root=cache) as lock, patch(
+            from docker.versioning.build_cache import acquire_constructor_project_build_lock, prepare_build_cache
+            with acquire_constructor_project_build_lock(checkout, cache_root=cache) as lock, patch(
                 "docker.versioning.build_cache.time.time", return_value=123,
             ):
-                materialize_artifact(selected, checkout_root=checkout, cache_root=cache,
+                materialize_artifact(selected, constructor_project_root=checkout, cache_root=cache,
                                      transport=transport, lock=lock)
             paths = prepare_build_cache(checkout, cache_root=cache)
             marker = paths.markers_root / f"sha256:{selected.identity.hex_digest()}.json"
             self.assertEqual({"verified_at": 123}, __import__("json").loads(marker.read_text()))
-            with acquire_checkout_build_lock(checkout, cache_root=cache) as lock, patch(
+            with acquire_constructor_project_build_lock(checkout, cache_root=cache) as lock, patch(
                 "docker.versioning.build_cache.time.time", return_value=456,
             ):
-                materialize_artifact(selected, checkout_root=checkout, cache_root=cache,
+                materialize_artifact(selected, constructor_project_root=checkout, cache_root=cache,
                                      transport=RecordingTransport(error=AssertionError()), lock=lock)
             self.assertEqual({"verified_at": 123}, __import__("json").loads(marker.read_text()))
 
@@ -159,11 +159,11 @@ class TestStreamingMaterializer(unittest.TestCase):
             checkout = Path(td) / "proj"; checkout.mkdir()
             cache = Path(td) / "cache"; cache.mkdir(mode=0o700)
             selected = self.selected()
-            from docker.versioning.build_cache import acquire_checkout_build_lock, build_blob_path, prepare_build_cache
+            from docker.versioning.build_cache import acquire_constructor_project_build_lock, build_blob_path, prepare_build_cache
             for transport in (RecordingTransport(error=InterruptedError()), RecordingTransport(chunks=(b"wrong",))):
-                with acquire_checkout_build_lock(checkout, cache_root=cache) as lock:
+                with acquire_constructor_project_build_lock(checkout, cache_root=cache) as lock:
                     with self.assertRaises(MaterializationError):
-                        materialize_artifact(selected, checkout_root=checkout, cache_root=cache,
+                        materialize_artifact(selected, constructor_project_root=checkout, cache_root=cache,
                                              transport=transport, lock=lock)
                 paths = prepare_build_cache(checkout, cache_root=cache)
                 self.assertFalse(build_blob_path(paths.blobs_root, selected.identity).exists())
@@ -182,7 +182,7 @@ class TestStreamingMaterializer(unittest.TestCase):
             os.chmod(destination, 0o444)
             bomb = RecordingTransport(error=AssertionError("network on verified hit"))
             path = materialize_artifact(
-                selected, checkout_root=checkout, cache_root=cache, transport=bomb,
+                selected, constructor_project_root=checkout, cache_root=cache, transport=bomb,
             )
             self.assertEqual(destination, path)
             self.assertEqual([], bomb.calls)

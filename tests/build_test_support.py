@@ -61,13 +61,13 @@ def digest_valid_selected_artifacts(_projection=None):
 
 
 def publish_digest_valid_artifacts(
-    projection=None, *, checkout_root, cache_root=None, project_state=None, **_kwargs,
+    projection=None, *, constructor_project_root, cache_root=None, project_state=None, **_kwargs,
 ):
     """Publish real digest-verified blobs for orchestration fixture builds."""
     return tuple(
         publish_verified_blob(
             selected.identity, DIGEST_VALID_ARTIFACT_BYTES[selected.name],
-            checkout_root=checkout_root, cache_root=cache_root,
+            constructor_project_root=constructor_project_root, cache_root=cache_root,
             project_state=project_state,
         )
         for selected in digest_valid_selected_artifacts(projection)
