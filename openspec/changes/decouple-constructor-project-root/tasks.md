@@ -204,9 +204,9 @@ Rules:
 
 ### RED
 
-- [ ] P7.R1 Add acceptance coverage invoking every facade command from outside the source checkout with `--project-directory` and asserting applicable inputs and Docker vectors use the selected constructor project while projections and default evidence use its canonical-path-keyed external namespace without mutating the constructor project, primary workspace, or any extra workspace.
-- [ ] P7.R2 Add acceptance coverage for explicit evidence `--output-dir`, including a destination beneath `XDG_CACHE_HOME`, while asserting all project-owned inputs remain under the selected constructor project and all other generated state remains beneath its external namespace.
-- [ ] P7.R3 Add acceptance coverage for the default-CWD project flow: validate, build dry-run, run dry-run, doctor planning, and verify path selection.
+- [x] P7.R1 Add acceptance coverage invoking every facade command from outside the source checkout with `--project-directory` and asserting applicable inputs and Docker vectors use the selected constructor project while projections and default evidence use its canonical-path-keyed external namespace without mutating the constructor project, primary workspace, or any extra workspace.
+- [x] P7.R2 Add acceptance coverage for explicit evidence `--output-dir`, including a destination beneath `XDG_CACHE_HOME`, while asserting all project-owned inputs remain under the selected constructor project and all other generated state remains beneath its external namespace.
+- [x] P7.R3 Add acceptance coverage for the default-CWD project flow: validate, build dry-run, run dry-run, doctor planning, and verify path selection.
 
 ### GREEN
 
