@@ -272,7 +272,7 @@ class ConstructorProjectForeignOwnership(unittest.TestCase):
         before = {p: (p.stat().st_uid, p.stat().st_gid, stat.S_IMODE(p.stat().st_mode))
                   for p in watched}
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.build_orchestration import ExitKind
 
         executor = _recording_executor()
@@ -281,9 +281,9 @@ class ConstructorProjectForeignOwnership(unittest.TestCase):
             result = orchestrate_run(RunRequest(
                 inventory_path=str(inventory),
                 image="pi-cli-pi:latest",
-                selection=ProjectSelection(
-                    main_project=str(self.project),
-                    optional_projects=(str(self.primary), str(self.extra)),
+                selection=WorkspaceSelection(
+                    workspace=str(self.project),
+                    extra_workspaces=(str(self.primary), str(self.extra)),
                 ),
                 pi_home_host="/home/user/.pi",
                 repo_root=str(self.project),

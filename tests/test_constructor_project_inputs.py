@@ -171,11 +171,11 @@ class TestFixedProjectInputs(unittest.TestCase):
     def test_launcher_dotenv_is_selected_project_owned(self) -> None:
         with tempfile.TemporaryDirectory() as selected, tempfile.TemporaryDirectory() as installed:
             selected_root, installed_root = Path(selected), Path(installed)
-            (selected_root / ".env").write_text("BASE_PROJECT_DIR=/selected/workspaces\n")
-            (installed_root / ".env").write_text("BASE_PROJECT_DIR=/installed/workspaces\n")
+            (selected_root / ".env").write_text("WORKSPACE_ROOT=/selected/workspaces\n")
+            (installed_root / ".env").write_text("WORKSPACE_ROOT=/installed/workspaces\n")
             with patch.object(constructor_cli, "_INSTALLATION_ROOT", installed_root):
                 value = constructor_cli._read_env_key(
-                    "BASE_PROJECT_DIR", selected_root / ".env"
+                    "WORKSPACE_ROOT", selected_root / ".env"
                 )
             self.assertEqual("/selected/workspaces", value)
 
@@ -219,7 +219,7 @@ class TestFixedProjectInputs(unittest.TestCase):
             )
 
     def test_run_trust_mount_uses_only_selected_project_bundle(self) -> None:
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from tests.test_constructor_corporate_network_run_red import (
             _bomb_artifact, _bomb_executor, _bomb_inspector, _bomb_projection,
             _collect_mounts,
@@ -239,7 +239,7 @@ class TestFixedProjectInputs(unittest.TestCase):
             result = orchestrate_run(RunRequest(
                 inventory_path=str(root / "docker-constructor.toml"),
                 image="pi-cli-pi:latest",
-                selection=ProjectSelection(main_project="/work/project"),
+                selection=WorkspaceSelection(workspace="/work/project"),
                 pi_home_host="/home/user/.pi", project_root=str(root),
                 repo_root=str(install_root), dry_run=True,
                 executor=_bomb_executor(effects), inspector=_bomb_inspector(effects),

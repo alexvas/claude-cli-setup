@@ -1,4 +1,4 @@
-"""Shared curses TUI for interactive project selection.
+"""Shared curses TUI for interactive workspace selection.
 
 Extracted from ``launch-pi.py`` so both the standalone launcher and
 the constructor CLI facade can reuse the maintained selection behavior
@@ -97,6 +97,16 @@ def _tui_status(stdscr: Any, text: str, color: int) -> None:
     stdscr.addstr(h - 1, 0, text.ljust(w)[: w - 1], color)
 
 
+def _selection_status_label(primary_name: str, extra_count: int) -> str:
+    """Return the workspace-oriented TUI selection status label."""
+    return (
+        "  Space:cycle  Enter:primary  "
+        "dbl-Enter/F5/r:launch  ←/→:collapse/expand  q:quit"
+        f"    primary: {primary_name}"
+        f"  extra: {extra_count}"
+    )
+
+
 def _item_key(item: FlatItem) -> tuple:
     if item.kind == "ide":
         return ("ide", item.ide_index)
@@ -143,17 +153,17 @@ def _tree_indicator(node: TreeNode) -> str:
 
 
 def run_tui(
-    projects: list[dict],
+    ide_workspaces: list[dict],
     tree_roots: list[TreeNode] | None = None,
     *,
     light_theme: bool = False,
     container_num: int = 1,
 ) -> tuple[FlatItem | None, list[FlatItem]]:
-    """Interactive curses project-selection TUI.
+    """Interactive curses workspace-selection TUI.
 
     Parameters
     ----------
-    projects:
+    ide_workspaces:
         Live IDE projects (each a dict with ``ideName``, ``port``,
         ``workspaceFolders``).
     tree_roots:
@@ -166,18 +176,18 @@ def run_tui(
 
     Returns
     -------
-    A ``(main_item, additional_items)`` tuple.  *main_item* is
+    A ``(primary_item, extra_items)`` tuple.  *primary_item* is
     ``None`` when the user cancels (q/Esc).
     """
     num = container_num
 
     # Build source list (canonical items before expand/collapse)
     source: list[FlatItem] = []
-    has_ide = len(projects) > 0
+    has_ide = len(ide_workspaces) > 0
     has_tree = tree_roots is not None and len(tree_roots) > 0
 
     if has_ide:
-        for i, proj in enumerate(projects):
+        for i, proj in enumerate(ide_workspaces):
             source.append(
                 FlatItem(kind="ide", label="", indent=0, ide_index=i)
             )
@@ -201,40 +211,40 @@ def run_tui(
     flat_items = _rebuild_flat(source)
 
     # Selection state
-    main_key: tuple | None = None
-    additional_keys: set[tuple] = set()
+    primary_key: tuple | None = None
+    extra_keys: set[tuple] = set()
     cursor = 0
     viewport_offset = 0
     status_msg = ""
     status_ttl = 0
     last_enter_time = 0.0
 
-    # Initialize: first item as main
+    # Initialize: first item as primary
     if flat_items:
         first = flat_items[0]
         if first.kind != "separator":
-            main_key = _item_key(first)
+            primary_key = _item_key(first)
             cursor = 0
         else:
             # Skip separators for initial selection
             for idx, item in enumerate(flat_items):
                 if item.kind != "separator":
-                    main_key = _item_key(item)
+                    primary_key = _item_key(item)
                     cursor = idx
                     break
 
-    def _current_main_idx() -> int | None:
-        if main_key is None:
+    def _current_primary_idx() -> int | None:
+        if primary_key is None:
             return None
         for idx, item in enumerate(flat_items):
-            if _item_key(item) == main_key:
+            if _item_key(item) == primary_key:
                 return idx
         return None
 
-    def _current_additional_set() -> set[int]:
+    def _current_extra_set() -> set[int]:
         result: set[int] = set()
         for idx, item in enumerate(flat_items):
-            if _item_key(item) in additional_keys:
+            if _item_key(item) in extra_keys:
                 result.add(idx)
         return result
 
@@ -272,8 +282,8 @@ def run_tui(
 
     def draw(stdscr: Any) -> tuple[FlatItem | None, list[FlatItem]]:
         nonlocal \
-            main_key, \
-            additional_keys, \
+            primary_key, \
+            extra_keys, \
             cursor, \
             viewport_offset, \
             status_msg, \
@@ -294,7 +304,7 @@ def run_tui(
             curses.init_pair(2, curses.COLOR_GREEN, -1)
             curses.init_pair(3, curses.COLOR_WHITE, curses.COLOR_BLUE)
 
-        COLOR_MAIN = curses.color_pair(1) | curses.A_BOLD
+        COLOR_PRIMARY = curses.color_pair(1) | curses.A_BOLD
         COLOR_EXTRA = curses.color_pair(2)
         COLOR_STATUS = curses.color_pair(3)
         COLOR_DIM = curses.A_DIM if hasattr(curses, "A_DIM") else curses.A_NORMAL
@@ -322,8 +332,8 @@ def run_tui(
             # Ensure viewport keeps cursor visible
             _ensure_cursor_visible(list_height)
 
-            main_idx = _current_main_idx()
-            additional_set = _current_additional_set()
+            primary_idx = _current_primary_idx()
+            extra_set = _current_extra_set()
 
             visible_end = min(
                 len(flat_items), viewport_offset + list_height,
@@ -332,8 +342,8 @@ def run_tui(
                 item = flat_items[vi]
                 row = list_start + (vi - viewport_offset)
 
-                is_main = vi == main_idx
-                is_additional = vi in additional_set
+                is_primary = vi == primary_idx
+                is_extra = vi in extra_set
                 is_cursor = vi == cursor
 
                 if item.kind == "separator":
@@ -354,11 +364,11 @@ def run_tui(
 
                 # Build display line
                 sel_marker = (
-                    "★" if is_main else ("✓" if is_additional else " ")
+                    "★" if is_primary else ("✓" if is_extra else " ")
                 )
 
                 if item.kind == "ide" and item.ide_index is not None:
-                    proj = projects[item.ide_index]
+                    proj = ide_workspaces[item.ide_index]
                     ide = proj["ideName"]
                     port_str = str(proj["port"])
                     ws_path = (
@@ -404,9 +414,9 @@ def run_tui(
 
                 line = line[:w]
 
-                if is_main:
-                    attr = COLOR_MAIN
-                elif is_additional:
+                if is_primary:
+                    attr = COLOR_PRIMARY
+                elif is_extra:
                     attr = COLOR_EXTRA
                 else:
                     attr = curses.A_NORMAL
@@ -425,24 +435,20 @@ def run_tui(
                     stdscr, f"  {status_msg}", COLOR_STATUS,
                 )
             else:
-                main_name = "?"
-                if main_idx is not None and main_idx < len(flat_items):
-                    mi = flat_items[main_idx]
+                primary_name = "?"
+                if primary_idx is not None and primary_idx < len(flat_items):
+                    mi = flat_items[primary_idx]
                     if mi.kind == "ide" and mi.ide_index is not None:
-                        p = projects[mi.ide_index]
-                        main_name = (
+                        p = ide_workspaces[mi.ide_index]
+                        primary_name = (
                             Path(p["workspaceFolders"][0]).name
                             if p["workspaceFolders"]
                             else "?"
                         )
                     elif mi.kind == "tree":
-                        main_name = mi.label
-                footer = (
-                    f"  Space:cycle  Enter:main  "
-                    f"dbl-Enter/F5/r:launch"
-                    f"  ←/→:collapse/expand  q:quit"
-                    f"    main: {main_name}"
-                    f"  extra: {len(additional_keys)}"
+                        primary_name = mi.label
+                footer = _selection_status_label(
+                    primary_name, len(extra_keys),
                 )
                 _tui_status(stdscr, footer, COLOR_STATUS)
 
@@ -531,32 +537,32 @@ def run_tui(
                 if item is None or item.kind == "separator":
                     continue
                 now = time.monotonic()
-                if now - last_enter_time < 0.5 and main_key is not None:
+                if now - last_enter_time < 0.5 and primary_key is not None:
                     # Launch — double-enter
-                    main_idx_final = _current_main_idx()
-                    if main_idx_final is not None:
-                        main_item = flat_items[main_idx_final]
-                        additional = [
+                    primary_idx_final = _current_primary_idx()
+                    if primary_idx_final is not None:
+                        primary_item = flat_items[primary_idx_final]
+                        extra_items = [
                             flat_items[i]
-                            for i in sorted(_current_additional_set())
+                            for i in sorted(_current_extra_set())
                             if flat_items[i].kind != "separator"
                         ]
-                        return main_item, additional
+                        return primary_item, extra_items
                 last_enter_time = now
-                # Single Enter: set as main
-                main_key = _item_key(item)
-                additional_keys.discard(_item_key(item))
+                # Single Enter: set as primary
+                primary_key = _item_key(item)
+                extra_keys.discard(_item_key(item))
             elif key in (curses.KEY_F5, ord("r")):
-                if main_key is not None:
-                    main_idx_final = _current_main_idx()
-                    if main_idx_final is not None:
-                        main_item = flat_items[main_idx_final]
-                        additional = [
+                if primary_key is not None:
+                    primary_idx_final = _current_primary_idx()
+                    if primary_idx_final is not None:
+                        primary_item = flat_items[primary_idx_final]
+                        extra_items = [
                             flat_items[i]
-                            for i in sorted(_current_additional_set())
+                            for i in sorted(_current_extra_set())
                             if flat_items[i].kind != "separator"
                         ]
-                        return main_item, additional
+                        return primary_item, extra_items
             elif key == ord(" "):
                 item = (
                     flat_items[cursor]
@@ -566,28 +572,28 @@ def run_tui(
                 if item is None or item.kind == "separator":
                     continue
                 ik = _item_key(item)
-                if ik == main_key:
-                    # main → not selected
-                    main_key = None
-                    additional_keys.discard(ik)
-                elif ik in additional_keys:
-                    if main_key is not None:
-                        # additional → main (swap)
-                        additional_keys.discard(ik)
-                        if main_key is not None:
-                            additional_keys.add(main_key)
-                        main_key = ik
+                if ik == primary_key:
+                    # primary → not selected
+                    primary_key = None
+                    extra_keys.discard(ik)
+                elif ik in extra_keys:
+                    if primary_key is not None:
+                        # extra → primary (swap)
+                        extra_keys.discard(ik)
+                        if primary_key is not None:
+                            extra_keys.add(primary_key)
+                        primary_key = ik
                     else:
-                        # additional → not selected
-                        additional_keys.discard(ik)
+                        # extra → not selected
+                        extra_keys.discard(ik)
                 else:
-                    if main_key is not None:
-                        # not selected → additional
-                        additional_keys.add(ik)
+                    if primary_key is not None:
+                        # not selected → extra
+                        extra_keys.add(ik)
                     else:
-                        # not selected → main
-                        main_key = ik
-                        additional_keys.discard(ik)
+                        # not selected → primary
+                        primary_key = ik
+                        extra_keys.discard(ik)
             elif key == curses.KEY_RESIZE:
                 pass
 

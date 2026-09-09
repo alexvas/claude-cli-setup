@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from docker.launcher import ProcessResult, ProjectSelection, RunRequest, orchestrate_run
+from docker.launcher import ProcessResult, WorkspaceSelection, RunRequest, orchestrate_run
 
 
 def _snapshot(root: Path) -> dict[str, tuple[bytes | None, int, int]]:
@@ -123,7 +123,7 @@ class TestLegacyRuntimeArtifactCacheMigration(unittest.TestCase):
                      _reject_legacy_access(legacy) as accesses:
                     result = orchestrate_run(RunRequest(
                         inventory_path=str(inventory), image="test-image",
-                        selection=ProjectSelection(main_project="/work/project"),
+                        selection=WorkspaceSelection(workspace="/work/project"),
                         pi_home_host="/home/test/.pi", repo_root=str(checkout),
                         projection_parent_dir=str(checkout / ".docker-generated" / "runtime"),
                         _artifact_fetcher=fetch, executor=_Executor(), inspector=_Inspector(),

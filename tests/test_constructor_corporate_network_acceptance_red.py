@@ -232,7 +232,7 @@ class TestConfiguredBuildRunAcceptanceRed(unittest.TestCase):
             rc, out, _ = _run(
                 self.m,
                 ["--output", "json", "run", "--dry-run",
-                 "--main-project", "/work/project"],
+                 "--workspace", "/work/project"],
                 _run_executor=_BombExecutor(),
                 _container_inspector=_BombInspector(),
                 _create_projection=_bomb_projection,
@@ -277,7 +277,7 @@ class TestDisabledCompatibilityAcceptanceRed(unittest.TestCase):
             rc, out, _ = _run(
                 self.m,
                 ["--output", "json", "run", "--dry-run",
-                 "--main-project", "/work/project"],
+                 "--workspace", "/work/project"],
                 _run_executor=_BombExecutor(),
                 _container_inspector=_BombInspector(),
                 _create_projection=_bomb_projection,
@@ -366,7 +366,7 @@ class TestBundleErrorHandlingAcceptanceRed(unittest.TestCase):
             rc, out, _ = _run(
                 self.m,
                 ["--output", "json", "run", "--dry-run",
-                 "--main-project", "/work/project"],
+                 "--workspace", "/work/project"],
                 _run_executor=_BombExecutor(),
                 _container_inspector=_BombInspector(),
                 _create_projection=_bomb_projection,
@@ -433,7 +433,7 @@ class TestProxyUriRejectionAcceptanceRed(unittest.TestCase):
             rc, out, _ = _run(
                 self.m,
                 ["--output", "json", "run", "--dry-run",
-                 "--main-project", "/work/project"],
+                 "--workspace", "/work/project"],
                 _run_executor=_BombExecutor(),
                 _container_inspector=_BombInspector(),
                 _create_projection=_bomb_projection,
@@ -456,7 +456,7 @@ class TestExplicitOnlyNoProxyAcceptanceRed(unittest.TestCase):
             rc, out, _ = _run(
                 self.m,
                 ["--output", "json", "run", "--dry-run",
-                 "--main-project", "/work/project"],
+                 "--workspace", "/work/project"],
                 _run_executor=_BombExecutor(),
                 _container_inspector=_BombInspector(),
                 _create_projection=_bomb_projection,
@@ -501,7 +501,7 @@ class TestHostAccessIndependenceAcceptanceRed(unittest.TestCase):
             rc, out, _ = _run(
                 self.m,
                 ["--output", "json", "run", "--dry-run",
-                 "--main-project", "/work/project"],
+                 "--workspace", "/work/project"],
                 _run_executor=_BombExecutor(),
                 _container_inspector=_BombInspector(),
                 _create_projection=_bomb_projection,

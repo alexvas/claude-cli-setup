@@ -55,7 +55,7 @@ def _make_projection(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         '[extensions]\n'
-        '[project_paths]\n'
+        '[workspace_paths]\n'
         'paths = []\n'
         '[pi_home]\n'
         'path = "/home/dev/.pi"\n'
@@ -127,7 +127,7 @@ class TestEnabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=HostAccessPolicy(
@@ -164,7 +164,7 @@ class TestEnabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=HostAccessPolicy(
@@ -197,7 +197,7 @@ class TestEnabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=HostAccessPolicy(
@@ -246,7 +246,7 @@ class TestProxyPortVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=HostAccessPolicy(
@@ -281,7 +281,7 @@ class TestProxyPortVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=HostAccessPolicy(
@@ -315,7 +315,7 @@ class TestProxyPortVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=HostAccessPolicy(
@@ -359,7 +359,7 @@ class TestDisabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=None,
@@ -391,7 +391,7 @@ class TestDisabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=None,
@@ -422,7 +422,7 @@ class TestDisabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=None,
@@ -453,7 +453,7 @@ class TestDisabledHostAccessVerificationRed(unittest.TestCase):
             request = VerifyRuntimeRequest(
                 container="pi-test",
                 runtime_projection_path=proj,
-                project_paths=(),
+                workspace_paths=(),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=None,
@@ -526,7 +526,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             rp = state.runtime_root / "a1b2c3d4.toml"
             rp.write_text(
                 '[extensions]\n'
-                '[project_paths]\n'
+                '[workspace_paths]\n'
                 'paths = []\n'
                 '[pi_home]\n'
                 'path = "/home/dev/.pi"\n'
@@ -582,7 +582,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
                     ["--project-directory", str(Path(inv).parent),
                      "verify", "--scope", "runtime",
                      "--container", "pi-test",
-                     "--project", "/home/dev/p1"],
+                     "--workspace", "/home/dev/p1"],
                     _process_runner=_Rec(),
                     _prompt_user=lambda _: True,
                 )
@@ -618,7 +618,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             rp = state.runtime_root / "a1b2c3d4.toml"
             rp.write_text(
                 '[extensions]\n'
-                '[project_paths]\n'
+                '[workspace_paths]\n'
                 'paths = []\n'
                 '[pi_home]\n'
                 'path = "/home/dev/.pi"\n'
@@ -667,7 +667,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
                     ["--project-directory", str(Path(inv).parent),
                      "verify", "--scope", "runtime",
                      "--container", "pi-test",
-                     "--project", "/home/dev/p1"],
+                     "--workspace", "/home/dev/p1"],
                     _process_runner=_Rec(),
                     _prompt_user=lambda _: True,
                 )
@@ -701,7 +701,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
             rp = state.runtime_root / "a1b2c3d4.toml"
             rp.write_text(
                 '[extensions]\n'
-                '[project_paths]\n'
+                '[workspace_paths]\n'
                 'paths = []\n'
                 '[pi_home]\n'
                 'path = "/home/dev/.pi"\n'
@@ -757,7 +757,7 @@ class TestFacadeVerifyHostAccessRed(unittest.TestCase):
                     ["--project-directory", str(Path(inv).parent),
                      "verify", "--scope", "runtime",
                      "--container", "pi-test",
-                     "--project", "/home/dev/p1"],
+                     "--workspace", "/home/dev/p1"],
                     _process_runner=_Rec(),
                     _prompt_user=lambda _: True,
                 )
@@ -830,7 +830,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
                 ["--project-directory", str(Path(bad).parent),
                  "verify", "--scope", "runtime",
                  "--container", "pi-test",
-                 "--project", "/home/dev/p1"],
+                 "--workspace", "/home/dev/p1"],
                 _process_runner=_rec,
                 _prompt_user=lambda _: True,
             )
@@ -887,7 +887,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
                 ["--project-directory", str(Path(inv).parent),
                  "verify", "--scope", "runtime",
                  "--container", "pi-test",
-                 "--project", "/home/dev/p1"],
+                 "--workspace", "/home/dev/p1"],
                 _process_runner=_rec,
                 _prompt_user=lambda _: True,
             )
@@ -941,7 +941,7 @@ class TestVerifyHostAccessConfigErrorsRed(unittest.TestCase):
                 ["--project-directory", str(Path(inv).parent),
                  "verify", "--scope", "runtime",
                  "--container", "pi-test",
-                 "--project", "/home/dev/p1"],
+                 "--workspace", "/home/dev/p1"],
                 _process_runner=_rec,
                 _prompt_user=lambda _: True,
             )

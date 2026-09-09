@@ -143,7 +143,7 @@ class TestNoUnconditionalRunMapping(unittest.TestCase):
         "image": "test:latest",
         "container_name": "test",
         "pi_home_host": "/home/dev/.pi",
-        "main_project": "/tmp/main",
+        "workspace": "/tmp/main",
         "tty": False,
     }
 

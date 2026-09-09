@@ -179,8 +179,8 @@ expectations."""
     The ``projection.identity`` check hashes this file and compares
     the container-side copy — the hash is derived from this path,
     not caller-supplied."""
-    project_paths: tuple[Path, ...]
-    """Project paths **inside the container** that should be present
+    workspace_paths: tuple[Path, ...]
+    """Workspace paths **inside the container** that should be present
     as ``PROJECT_PATH_1..N``."""
     container_pi_home: Path
     """Pi home path **inside the container** (e.g. ``"/home/dev/.pi"``).
@@ -234,7 +234,7 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
     runner = request.runner
     container = request.container
     pi_home = str(request.container_pi_home)
-    pp = request.project_paths
+    pp = request.workspace_paths
 
     # ── Load projection + compute host hash ──────────────────────────
     try:
@@ -377,7 +377,7 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
                  f"working directory: expected {expected_wd!r}, got {wd!r}", r)
     else:
         _add("working.directory", True,
-             "no project paths — nothing to verify")
+             "no workspace paths — nothing to verify")
 
     # ── ownership.dev ────────────────────────────────────────────────
     # Pi home
@@ -388,7 +388,7 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
     else:
         _add("ownership.dev", False,
              f"{pi_home} owned by {owner!r}, expected dev:dev", r)
-    # Project paths
+    # Workspace paths
     for i, p in enumerate(pp, start=1):
         sp = str(p)
         r = _exec(("stat", "-c", "%U:%G", sp))

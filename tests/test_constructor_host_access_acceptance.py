@@ -155,7 +155,7 @@ class TestDisabledHostAccess(unittest.TestCase):
             # No local companion at all — disabled should work without it
 
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             with mock.patch(
                 "docker.versioning.build_orchestration.orchestrate_doctor",
@@ -171,7 +171,7 @@ class TestDisabledHostAccess(unittest.TestCase):
                     RunRequest(
                         inventory_path=str(inv),
                         image="pi-cli-pi:latest",
-                        selection=ProjectSelection(main_project="/work/project"),
+                        selection=WorkspaceSelection(workspace="/work/project"),
                         pi_home_host="/home/user/.pi",
                         dry_run=True,
                         executor=_bomb_docker(),
@@ -206,7 +206,7 @@ class TestDisabledHostAccess(unittest.TestCase):
             inv = _write_inventory(root_path)
 
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             with mock.patch(
                 "docker.versioning.build_orchestration.orchestrate_doctor",
@@ -222,7 +222,7 @@ class TestDisabledHostAccess(unittest.TestCase):
                     RunRequest(
                         inventory_path=str(inv),
                         image="pi-cli-pi:latest",
-                        selection=ProjectSelection(main_project="/work/project"),
+                        selection=WorkspaceSelection(workspace="/work/project"),
                         pi_home_host="/home/user/.pi",
                         dry_run=True,
                         executor=_bomb_docker(),
@@ -403,13 +403,13 @@ class TestDockerGatewayEndToEnd(unittest.TestCase):
 
             # ── Run (dry) — consumes the persisted address ──
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             run_result = orchestrate_run(
                 RunRequest(
                     inventory_path=str(inv),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_bomb_docker(),
@@ -457,7 +457,7 @@ class TestDockerGatewayEndToEnd(unittest.TestCase):
             proj = root_path / "runtime-projection.toml"
             proj_content = (
                 "[extensions]\n"
-                "[project_paths]\n"
+                "[workspace_paths]\n"
                 'paths = ["/work/project"]\n'
             )
             proj.write_text(proj_content)
@@ -483,7 +483,7 @@ class TestDockerGatewayEndToEnd(unittest.TestCase):
                 VerifyRuntimeRequest(
                     container=container,
                     runtime_projection_path=proj,
-                    project_paths=(Path("/work/project"),),
+                    workspace_paths=(Path("/work/project"),),
                     container_pi_home=Path(pi_home),
                     runner=runner,
                     host_access=ha,
@@ -528,7 +528,7 @@ class TestExternalAddressEndToEnd(unittest.TestCase):
             )
 
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             with mock.patch(
                 "docker.versioning.build_orchestration.orchestrate_doctor",
@@ -550,7 +550,7 @@ class TestExternalAddressEndToEnd(unittest.TestCase):
                     RunRequest(
                         inventory_path=str(inv),
                         image="pi-cli-pi:latest",
-                        selection=ProjectSelection(main_project="/work/project"),
+                        selection=WorkspaceSelection(workspace="/work/project"),
                         pi_home_host="/home/user/.pi",
                         dry_run=True,
                         executor=_bomb_docker(),
@@ -738,13 +738,13 @@ class TestCustomInventoryWithCache(unittest.TestCase):
 
             # 3. Run resolves the custom companion, not the repo one
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             run_result = orchestrate_run(
                 RunRequest(
                     inventory_path=str(inv),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_bomb_docker(),
@@ -870,7 +870,7 @@ class TestInvalidLocalStateSafety(unittest.TestCase):
             companion.write_text("{{{ not toml }}}\n")
 
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             effects: list[str] = []
 
@@ -896,7 +896,7 @@ class TestInvalidLocalStateSafety(unittest.TestCase):
                     RunRequest(
                         inventory_path=str(inv),
                         image="pi-cli-pi:latest",
-                        selection=ProjectSelection(main_project="/work/project"),
+                        selection=WorkspaceSelection(workspace="/work/project"),
                         pi_home_host="/home/user/.pi",
                         dry_run=False,
                         executor=self._RecordingExecutor(effects),
@@ -930,7 +930,7 @@ class TestInvalidLocalStateSafety(unittest.TestCase):
             companion.write_text("[cache]\ndir = \"/tmp/cache\"\n")
 
             from docker.launcher import orchestrate_run
-            from docker.launcher import ProjectSelection
+            from docker.launcher import WorkspaceSelection
 
             effects: list[str] = []
 
@@ -956,7 +956,7 @@ class TestInvalidLocalStateSafety(unittest.TestCase):
                     RunRequest(
                         inventory_path=str(inv),
                         image="pi-cli-pi:latest",
-                        selection=ProjectSelection(main_project="/work/project"),
+                        selection=WorkspaceSelection(workspace="/work/project"),
                         pi_home_host="/home/user/.pi",
                         dry_run=False,
                         executor=self._RecordingExecutor(effects),

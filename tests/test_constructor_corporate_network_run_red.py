@@ -28,7 +28,7 @@ import unittest
 from pathlib import Path
 
 from docker.launcher import (
-    ProjectSelection,
+    WorkspaceSelection,
     RunRequest,
     RunResult,
     orchestrate_run,
@@ -77,7 +77,7 @@ def _render(
         projection_host_path="/tmp/.docker-generated/runtime/projection.toml",
         projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
         pi_home_host="/home/user/.pi",
-        main_project="/work/project",
+        workspace="/work/project",
         corporate_trust_bundle=corporate_trust_bundle,
         proxy_url=proxy_url,
         proxy_no_proxy=proxy_no_proxy,
@@ -187,7 +187,7 @@ class _RunOrchestrationRed(unittest.TestCase):
             result = orchestrate_run(RunRequest(
                 inventory_path=str(inventory),
                 image="pi-cli-pi:latest",
-                selection=ProjectSelection(main_project="/work/project"),
+                selection=WorkspaceSelection(workspace="/work/project"),
                 pi_home_host="/home/user/.pi",
                 repo_root=str(root_path), project_root=str(root_path),
                 dry_run=True,
@@ -451,7 +451,7 @@ class TestRuntimeVerificationContractRed(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container="pi-cli-pi-1",
                 runtime_projection_path=proj,
-                project_paths=(Path("/work/project"),),
+                workspace_paths=(Path("/work/project"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 runner=runner,
                 host_access=None,

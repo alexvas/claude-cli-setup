@@ -251,7 +251,7 @@ def _passing_handlers(
     *,
     expected_hash: str,
     expected_addr: str = "192.168.65.254",
-    project_paths: tuple[str, ...] = ("/tmp/p1",),
+    workspace_paths: tuple[str, ...] = ("/tmp/p1",),
     extensions: dict[str, tuple[str, str]] | None = None,
 ) -> dict[tuple[str, ...], tuple[int, str, str]]:
     """Return handlers for a fully passing verification run.
@@ -275,7 +275,7 @@ def _passing_handlers(
         ("test", "-w", "/run/pi-cli/docker-constructor.runtime.toml"):
             (1, "", ""),
         # working.directory
-        ("pwd",): (0, f"{project_paths[0]}\n", ""),
+        ("pwd",): (0, f"{workspace_paths[0]}\n", ""),
         # ownership.dev — pi-home
         ("stat", "-c", "%U:%G", "/home/dev/.pi"):
             (0, "dev:dev\n", ""),
@@ -293,14 +293,14 @@ def _passing_handlers(
     for pkg, (ver, pkg_json) in sorted(extensions.items()):
         path = f"/home/dev/.pi/agent/npm/node_modules/{pkg}/package.json"
         handlers[("cat", path)] = (0, pkg_json, "")
-    for i, pp in enumerate(project_paths, start=1):
+    for i, pp in enumerate(workspace_paths, start=1):
         # projects.present — directory accessible AND env-var exact
         handlers[("test", "-d", pp)] = (0, "", "")
         handlers[("printenv", f"PROJECT_PATH_{i}")] = (0, f"{pp}\n", "")
         # ownership.dev — per-project
         handlers[("stat", "-c", "%U:%G", pp)] = (0, "dev:dev\n", "")
     # No unexpected next entry
-    handlers[("printenv", f"PROJECT_PATH_{len(project_paths) + 1}")] = (1, "", "")
+    handlers[("printenv", f"PROJECT_PATH_{len(workspace_paths) + 1}")] = (1, "", "")
     return handlers
 
 
@@ -380,7 +380,7 @@ class TestRuntimeProjectionIdentity(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -399,7 +399,7 @@ class TestRuntimeProjectionIdentity(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -419,7 +419,7 @@ class TestRuntimeProjectionIdentity(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -442,7 +442,7 @@ class TestRuntimeReadonlyMount(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -463,7 +463,7 @@ class TestRuntimeReadonlyMount(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -488,7 +488,7 @@ class TestRuntimeReadonlyMount(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -510,7 +510,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -536,7 +536,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -560,7 +560,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -590,7 +590,7 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=alt_handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -619,18 +619,18 @@ class TestRuntimeProjects(unittest.TestCase):
     def test_project_env_contract(self) -> None:
         """Each PROJECT_PATH_N has the exact expected value,
         numbering is 1..N, and PROJECT_PATH_{N+1} is unset."""
-        project_paths = ("/tmp/p1", "/tmp/p2")
+        workspace_paths = ("/tmp/p1", "/tmp/p2")
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            project_paths=project_paths,
+            workspace_paths=workspace_paths,
         )
         runner = _DispatchRunner(_CONTAINER, handlers)
         with handle:
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=tuple(Path(p) for p in project_paths),
+                workspace_paths=tuple(Path(p) for p in workspace_paths),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -644,11 +644,11 @@ class TestRuntimeProjects(unittest.TestCase):
 
     def test_wrong_env_value_detected(self) -> None:
         """PROJECT_PATH_1 is set but to a different path → fail."""
-        project_paths = ("/tmp/p1",)
+        workspace_paths = ("/tmp/p1",)
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            project_paths=project_paths,
+            workspace_paths=workspace_paths,
         )
         handlers[("printenv", "PROJECT_PATH_1")] = (
             0, "/some/other/dir\n", "")
@@ -657,7 +657,7 @@ class TestRuntimeProjects(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=tuple(Path(p) for p in project_paths),
+                workspace_paths=tuple(Path(p) for p in workspace_paths),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -668,11 +668,11 @@ class TestRuntimeProjects(unittest.TestCase):
 
     def test_missing_env_variable_detected(self) -> None:
         """PROJECT_PATH_2 is unset when it should exist → fail."""
-        project_paths = ("/tmp/p1", "/tmp/p2")
+        workspace_paths = ("/tmp/p1", "/tmp/p2")
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            project_paths=project_paths,
+            workspace_paths=workspace_paths,
         )
         handlers[("printenv", "PROJECT_PATH_2")] = (1, "", "")
         runner = _DispatchRunner(_CONTAINER, handlers)
@@ -680,7 +680,7 @@ class TestRuntimeProjects(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=tuple(Path(p) for p in project_paths),
+                workspace_paths=tuple(Path(p) for p in workspace_paths),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -691,11 +691,11 @@ class TestRuntimeProjects(unittest.TestCase):
 
     def test_unexpected_next_entry_detected(self) -> None:
         """PROJECT_PATH_3 is set but only 2 projects declared → fail."""
-        project_paths = ("/tmp/p1", "/tmp/p2")
+        workspace_paths = ("/tmp/p1", "/tmp/p2")
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            project_paths=project_paths,
+            workspace_paths=workspace_paths,
         )
         handlers[("printenv", "PROJECT_PATH_3")] = (
             0, "/unexpected/path\n", "")
@@ -704,7 +704,7 @@ class TestRuntimeProjects(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=tuple(Path(p) for p in project_paths),
+                workspace_paths=tuple(Path(p) for p in workspace_paths),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -716,11 +716,11 @@ class TestRuntimeProjects(unittest.TestCase):
     def test_directory_missing_but_env_set(self) -> None:
         """PROJECT_PATH_1 is set correctly but the directory does not
         exist → fail (both checks are independent)."""
-        project_paths = ("/tmp/p1",)
+        workspace_paths = ("/tmp/p1",)
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
-            project_paths=project_paths,
+            workspace_paths=workspace_paths,
         )
         # Env var is correct, but directory is missing.
         handlers[("test", "-d", "/tmp/p1")] = (1, "", "")
@@ -729,7 +729,7 @@ class TestRuntimeProjects(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=tuple(Path(p) for p in project_paths),
+                workspace_paths=tuple(Path(p) for p in workspace_paths),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -750,7 +750,7 @@ class TestRuntimeWorkingDirectory(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -769,7 +769,7 @@ class TestRuntimeWorkingDirectory(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -790,7 +790,7 @@ class TestRuntimeOwnership(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -809,7 +809,7 @@ class TestRuntimeOwnership(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -833,7 +833,7 @@ class TestRuntimePiHome(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -852,7 +852,7 @@ class TestRuntimePiHome(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -878,7 +878,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=self._GATEWAY,
                 runner=runner,
@@ -903,7 +903,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=self._GATEWAY,
                 runner=runner,
@@ -925,7 +925,7 @@ class TestRuntimeGatewayMapping(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=self._GATEWAY,
                 runner=runner,
@@ -946,7 +946,7 @@ class TestRuntimeForbiddenPaths(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -966,7 +966,7 @@ class TestRuntimeForbiddenPaths(unittest.TestCase):
             result = verify_runtime(VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -987,7 +987,7 @@ class TestRuntimeVerificationStub(unittest.TestCase):
             req = VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,
@@ -1057,7 +1057,7 @@ class TestVerifyRuntimeRequestModel(unittest.TestCase):
             req = VerifyRuntimeRequest(
                 container=_CONTAINER,
                 runtime_projection_path=handle.path,
-                project_paths=(Path("/tmp/p1"),),
+                workspace_paths=(Path("/tmp/p1"),),
                 container_pi_home=Path("/home/dev/.pi"),
                 host_access=_ENABLED_POLICY, host_access_address=_DEFAULT_ADDR,
                 runner=runner,

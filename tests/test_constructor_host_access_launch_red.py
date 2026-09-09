@@ -12,7 +12,7 @@ _BASE = dict(
     image="pi-cli-pi:latest", container_name="pi-1",
     projection_host_path="/tmp/projects/constructor-identity/runtime/projection.toml",
     projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-    pi_home_host="/home/user/.pi", main_project="/work/project",
+    pi_home_host="/home/user/.pi", workspace="/work/project",
 )
 
 
@@ -68,7 +68,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
         return path
 
     def _request(self, inventory: Path, *, dry_run: bool, effects: list[str]):
-        from docker.launcher import ProjectSelection, RunRequest
+        from docker.launcher import WorkspaceSelection, RunRequest
 
         class BombExecutor:
             def run(self, _args, *, interactive=False):
@@ -91,7 +91,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
 
         return RunRequest(
             inventory_path=str(inventory), image="pi-cli-pi:latest",
-            selection=ProjectSelection(main_project="/work/project"),
+            selection=WorkspaceSelection(workspace="/work/project"),
             pi_home_host="/home/user/.pi", dry_run=dry_run,
             executor=BombExecutor(), inspector=BombInspector(),
             _create_projection=bomb_projection, _artifact_fetcher=bomb_artifact,

@@ -332,13 +332,13 @@ class RunRenderInputs:
     asymmetric because the container user is always ``dev``.
     """
 
-    main_project: str
-    """Host path to the main project.  Bound as ``PROJECT_PATH_1`` and
+    workspace: str
+    """Host path to the primary workspace.  Bound as ``PROJECT_PATH_1`` and
     set as the container working directory.
     """
 
-    optional_projects: tuple[str, ...] = ()
-    """Additional host project paths bound as ``PROJECT_PATH_2``,
+    extra_workspaces: tuple[str, ...] = ()
+    """Extra host workspace paths bound as ``PROJECT_PATH_2``,
     ``PROJECT_PATH_3``, etc.
     """
 
@@ -603,35 +603,35 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
     for label, value in (
         ("image", inputs.image),
         ("container_name", inputs.container_name),
-        ("main_project", inputs.main_project),
+        ("workspace", inputs.workspace),
     ):
         if not value.strip():
             raise ValueError(f"{label} must not be empty")
 
-    # Optional projects must not contain empty entries.
-    for i, p in enumerate(inputs.optional_projects):
+    # Extra workspaces must not contain empty entries.
+    for i, p in enumerate(inputs.extra_workspaces):
         if not p.strip():
-            raise ValueError(f"optional_projects[{i}] is empty")
+            raise ValueError(f"extra_workspaces[{i}] is empty")
 
-    # Duplicate project paths (main vs optional, or among optionals).
-    all_projects = [inputs.main_project] + list(inputs.optional_projects)
+    # Duplicate workspace paths (primary versus extra, or among extras).
+    all_projects = [inputs.workspace] + list(inputs.extra_workspaces)
     seen: set[str] = set()
     for p in all_projects:
         if p in seen:
-            raise ValueError(f"duplicate project path: {p}")
+            raise ValueError(f"duplicate workspace path: {p}")
         seen.add(p)
 
-    # Project and Pi-home paths must be absolute.
+    # Workspace and Pi-home paths must be absolute.
     for label, value in (
-        ("main_project", inputs.main_project),
+        ("workspace", inputs.workspace),
         ("pi_home_host", inputs.pi_home_host),
     ):
         if not value.startswith("/"):
             raise ValueError(f"{label} must be an absolute path, got {value!r}")
-    for i, p in enumerate(inputs.optional_projects):
+    for i, p in enumerate(inputs.extra_workspaces):
         if not p.startswith("/"):
             raise ValueError(
-                f"optional_projects[{i}] must be an absolute path, got {p!r}"
+                f"extra_workspaces[{i}] must be an absolute path, got {p!r}"
             )
 
     # Projection container path must be canonical.
@@ -654,7 +654,7 @@ def _validate_run_inputs(inputs: RunRenderInputs) -> None:
     for p in all_projects:
         if p in all_dsts:
             raise ValueError(
-                f"project path {p!r} collides with a fixed mount destination"
+                f"workspace path {p!r} collides with a fixed mount destination"
             )
         all_dsts.add(p)
 
@@ -950,7 +950,7 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     if inputs.stdin_open:
         args.append("--interactive")
 
-    # Mounts — ordered: Pi home, projection, main project, optional projects.
+    # Mounts — ordered: Pi home, projection, primary workspace, extra workspaces.
     _emit_run_mount(args, "bind", inputs.pi_home_host, _CONTAINER_PI_HOME)
     _emit_run_mount(
         args, "bind",
@@ -958,8 +958,8 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
         inputs.projection_container_path,
         readonly=True,
     )
-    _emit_run_mount(args, "bind", inputs.main_project, inputs.main_project)
-    for p in inputs.optional_projects:
+    _emit_run_mount(args, "bind", inputs.workspace, inputs.workspace)
+    for p in inputs.extra_workspaces:
         _emit_run_mount(args, "bind", p, p)
     for mount in sorted(inputs.artifact_mounts, key=lambda item: item.container_target):
         _emit_run_mount(
@@ -976,10 +976,10 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
         )
 
     # Working directory
-    args.extend(("--workdir", inputs.main_project))
+    args.extend(("--workdir", inputs.workspace))
 
     # Environment: PROJECT_PATH_*
-    all_projects = (inputs.main_project,) + inputs.optional_projects
+    all_projects = (inputs.workspace,) + inputs.extra_workspaces
     for i, proj_path in enumerate(all_projects, start=1):
         args.extend(("--env", f"PROJECT_PATH_{i}={proj_path}"))
 

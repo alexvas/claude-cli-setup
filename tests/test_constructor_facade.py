@@ -55,10 +55,10 @@ def _run(
     _container_inspector: Any = None,
     _run_executor: Any = None,
     _create_projection: Any = None,
-    _project_selector: Any = None,
+    _workspace_selector: Any = None,
 ) -> tuple[int, str, str]:
     for index, value in enumerate(argv[:-1]):
-        if value == "--main-project" and str(argv[index + 1]).startswith("/tmp/"):
+        if value == "--workspace" and str(argv[index + 1]).startswith("/tmp/"):
             Path(argv[index + 1]).mkdir(parents=True, exist_ok=True)
     if _create_projection is not None:
         original_create_projection = _create_projection
@@ -82,7 +82,7 @@ def _run(
             _container_inspector=_container_inspector,
             _run_executor=_run_executor,
             _create_projection=_create_projection,
-            _project_selector=_project_selector,
+            _workspace_selector=_workspace_selector,
         )
     return rc, out.getvalue(), err.getvalue()
 
@@ -1091,25 +1091,25 @@ class TestDispatchRecording(unittest.TestCase):
             output="text",
             verbose=False,
             color="auto",
-            command_args={"projects": ["/a", "/b"], "dry_run": False},
+            command_args={"extra_workspaces": ["/a", "/b"], "dry_run": False},
         )
-        self.assertIsInstance(req.command_args["projects"], tuple)
-        self.assertEqual(("/a", "/b"), req.command_args["projects"])
+        self.assertIsInstance(req.command_args["extra_workspaces"], tuple)
+        self.assertEqual(("/a", "/b"), req.command_args["extra_workspaces"])
         with self.assertRaises(TypeError):
-            req.command_args["projects"][0] = "/hacked"  # type: ignore[index]
+            req.command_args["extra_workspaces"][0] = "/hacked"  # type: ignore[index]
 
     def test_nested_list_from_real_parser_is_frozen(self) -> None:
-        """--project /a --project /b → tuple, not list."""
+        """--extra-workspace /a --extra-workspace /b → tuple, not list."""
         fake = _make_recording_fake(self.m)
-        _run(self.m, ["run", "--project", "/a", "--project", "/b"],
+        _run(self.m, ["run", "--extra-workspace", "/a", "--extra-workspace", "/b"],
              dispatcher=fake)
         self.assertEqual(1, len(fake.calls))
         req = fake.calls[0][1]
-        projects = req.command_args["projects"]
-        self.assertIsInstance(projects, tuple)
-        self.assertEqual(("/a", "/b"), projects)
+        extra_workspaces = req.command_args["extra_workspaces"]
+        self.assertIsInstance(extra_workspaces, tuple)
+        self.assertEqual(("/a", "/b"), extra_workspaces)
         with self.assertRaises(TypeError):
-            projects[0] = "/hacked"  # type: ignore[index]
+            extra_workspaces[0] = "/hacked"  # type: ignore[index]
 
     def test_only_filter_list_frozen_via_real_parser(self) -> None:
         """--only x --only y becomes a frozen tuple."""
@@ -1945,7 +1945,7 @@ class TestRunExecutionBoundaries(unittest.TestCase):
 
         The test creates fake ProcessRunner, ContainerNameInspector,
         and RunExecutor.  Each records every call made to it.  When
-        the facade runs ``run --main-project /tmp/t --dry-run`` the
+        the facade runs ``run --workspace /tmp/t --dry-run`` the
         dry-run path should NOT invoke the executor or inspector —
         we prove that by asserting zero call records.
 
@@ -1983,7 +1983,7 @@ class TestRunExecutionBoundaries(unittest.TestCase):
         # ── Dry-run: boundaries must NOT be invoked ────────────
         rc1, out1, _err1 = _run(
             self.m,
-            ["run", "--main-project", "/tmp/test", "--dry-run"],
+            ["run", "--workspace", "/tmp/test", "--dry-run"],
             dispatcher=None,
             _process_runner=fake_runner,
             _container_inspector=inspector,
@@ -2013,7 +2013,7 @@ class TestRunExecutionBoundaries(unittest.TestCase):
         ):
             rc2, out2, _err2 = _run(
                 self.m,
-                ["run", "--main-project", "/tmp/test"],
+                ["run", "--workspace", "/tmp/test"],
                 dispatcher=None,
                 _process_runner=fake_runner2,
                 _container_inspector=inspector2,
@@ -2083,7 +2083,7 @@ class TestRunExecutionBoundaries(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["run", "--main-project", "/tmp/test", "--dry-run"],
+            ["run", "--workspace", "/tmp/test", "--dry-run"],
             dispatcher=None,
             _process_runner=runner,
             _container_inspector=FakeInspector(),
@@ -2100,7 +2100,7 @@ class TestRunExecutionBoundaries(unittest.TestCase):
 
 
 class TestTUISelectorWiring(unittest.TestCase):
-    """Prove --tui delegates to an injectable ProjectSelector boundary.
+    """Prove --tui delegates to an injectable WorkspaceSelector boundary.
 
     All tests are daemon-independent — they inject fakes and assert
     behaviour through the facade without touching Docker or files.
@@ -2155,18 +2155,18 @@ class TestTUISelectorWiring(unittest.TestCase):
         return runner, FakeInspector(runner), FakeExecutor(runner), factory
 
     def test_tui_with_fake_selector_selects_projects(self) -> None:
-        """--tui with an injected ProjectSelector uses the selector
-        result as the main and optional projects."""
-        from docker.launcher import ProjectSelection
+        """--tui with an injected WorkspaceSelector uses the selector
+        result as the primary and extra workspaces."""
+        from docker.launcher import WorkspaceSelection
 
         class RecordingSelector:
             def __init__(self) -> None:
                 self.select_called = False
             def select(self) -> Any:
                 self.select_called = True
-                return ProjectSelection(
-                    main_project="/work/tui-main",
-                    optional_projects=("/work/tui-opt1", "/work/tui-opt2"),
+                return WorkspaceSelection(
+                    workspace="/work/tui-main",
+                    extra_workspaces=("/work/tui-opt1", "/work/tui-opt2"),
                 )
 
         selector = RecordingSelector()
@@ -2182,7 +2182,7 @@ class TestTUISelectorWiring(unittest.TestCase):
             _container_inspector=inspector,
             _run_executor=executor,
             _create_projection=proj_factory,
-            _project_selector=selector,
+            _workspace_selector=selector,
         )
         self.assertEqual(0, rc, f"rc={rc} out={out!r} err={err!r}")
         self.assertTrue(selector.select_called,
@@ -2190,9 +2190,9 @@ class TestTUISelectorWiring(unittest.TestCase):
         # The display string should mention the TUI-selected projects
         self.assertIn("/work/tui-main", out)
 
-    def test_tui_cancelled_maps_to_no_main_project(self) -> None:
+    def test_tui_cancelled_maps_to_no_workspace(self) -> None:
         """When the TUI selector returns None (user cancelled), the
-        facade maps it to a CONFIG-level NoMainProjectError."""
+        facade maps it to a CONFIG-level NoWorkspaceError."""
         class CancelledSelector:
             def select(self) -> None:
                 return None
@@ -2210,39 +2210,39 @@ class TestTUISelectorWiring(unittest.TestCase):
             _container_inspector=inspector,
             _run_executor=executor,
             _create_projection=proj_factory,
-            _project_selector=selector,
+            _workspace_selector=selector,
         )
         self.assertEqual(
             3,  # ExitKind.CONFIG → exit code 3
             rc,
             f"Expected CONFIG exit (3); got rc={rc} out={out!r} err={err!r}",
         )
-        self.assertIn("No main project", err)
+        self.assertIn("No primary workspace", err)
 
-    def test_tui_without_selector_and_without_main_project_fails(self) -> None:
+    def test_tui_without_selector_and_without_workspace_fails(self) -> None:
         """--tui without an injected selector and without
-        --main-project raises NoMainProjectError.  The curses TUI
-        is created when neither _project_selector nor --main-project
+        --workspace raises NoWorkspaceError.  The curses TUI
+        is created when neither _workspace_selector nor --workspace
         is provided.
 
         Since the curses TUI can't be launched in automated tests,
-        we instead prove that _tui_project_selector() returns a
-        conformant ProjectSelector object."""
-        from docker.constructor_cli import _tui_project_selector
+        we instead prove that _tui_workspace_selector() returns a
+        conformant WorkspaceSelector object."""
+        from docker.constructor_cli import _tui_workspace_selector
 
-        sel = _tui_project_selector()
+        sel = _tui_workspace_selector()
         self.assertTrue(hasattr(sel, "select"),
                         "Default selector must have select()")
         self.assertTrue(callable(sel.select),
                         "select must be callable")
 
     def test_real_tui_selector_conforms_to_protocol(self) -> None:
-        """The _tui_project_selector returns an object whose
-        select() satisfies the ProjectSelector protocol without
+        """The _tui_workspace_selector returns an object whose
+        select() satisfies the WorkspaceSelector protocol without
         invoking curses."""
-        from docker.constructor_cli import _tui_project_selector
+        from docker.constructor_cli import _tui_workspace_selector
 
-        sel = _tui_project_selector()
+        sel = _tui_workspace_selector()
         # Type-level conformance — the returned object satisfies
         # the structural type
         self.assertTrue(hasattr(sel, "select"))
@@ -2250,13 +2250,13 @@ class TestTUISelectorWiring(unittest.TestCase):
         self.assertTrue(callable(sel.select))
 
     def test_tui_flag_preserves_selector_over_explicit_main(self) -> None:
-        """When both --tui and --main-project are given, explicit
-        main-project takes precedence (per resolve_project_selection
+        """When both --tui and --workspace are given, explicit
+        main-project takes precedence (per resolve_workspace_selection
         resolution order).  The TUI selector is NOT invoked."""
         class BombSelector:
             def select(self) -> Any:
                 raise RuntimeError("TUI must not be invoked when "
-                                   "--main-project is explicit")
+                                   "--workspace is explicit")
 
         runner, inspector, executor, proj_factory = (
             self._fake_runner_for_tests()
@@ -2264,31 +2264,31 @@ class TestTUISelectorWiring(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["run", "--tui", "--main-project", "/work/explicit",
+            ["run", "--tui", "--workspace", "/work/explicit",
              "--dry-run"],
             dispatcher=None,
             _process_runner=runner,
             _container_inspector=inspector,
             _run_executor=executor,
             _create_projection=proj_factory,
-            _project_selector=BombSelector(),
+            _workspace_selector=BombSelector(),
         )
         self.assertEqual(0, rc, f"rc={rc} out={out!r} err={err!r}")
-        # The explicit --main-project should appear, not the TUI
+        # The explicit --workspace should appear, not the TUI
         self.assertIn("/work/explicit", out)
 
     def test_tui_selector_receives_no_args(self) -> None:
         """The TUI selector boundary is called with no arguments.
         All project discovery is the selector's responsibility."""
-        from docker.launcher import ProjectSelection
+        from docker.launcher import WorkspaceSelection
 
         select_args: list[tuple] = []
 
         class ArgRecordingSelector:
             def select(self) -> Any:
                 select_args.append(())
-                return ProjectSelection(
-                    main_project="/work/from-tui",
+                return WorkspaceSelection(
+                    workspace="/work/from-tui",
                 )
 
         runner, inspector, executor, proj_factory = (
@@ -2303,7 +2303,7 @@ class TestTUISelectorWiring(unittest.TestCase):
             _container_inspector=inspector,
             _run_executor=executor,
             _create_projection=proj_factory,
-            _project_selector=ArgRecordingSelector(),
+            _workspace_selector=ArgRecordingSelector(),
         )
         self.assertEqual(1, len(select_args),
                          "Selector.select() must be called exactly once")
@@ -2313,9 +2313,9 @@ class TestTUISelectorWiring(unittest.TestCase):
 
 class TestBaseProjectDirPrecedence(unittest.TestCase):
     """Prove the base-project-dir resolution chain:
-    CLI --base-project-dir → .env BASE_PROJECT_DIR → Path.home().
+    CLI --workspace-root → .env WORKSPACE_ROOT → Path.home().
 
-    All tests avoid curses by monkey-patching _tui_project_selector
+    All tests avoid curses by monkey-patching _tui_workspace_selector
     and asserting the *base_dir* argument it receives.
     """
 
@@ -2325,78 +2325,78 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
 
     @staticmethod
     def _patch_selector() -> tuple[list[str | None], Any]:
-        """Monkey-patch _tui_project_selector to record *base_dir*
+        """Monkey-patch _tui_workspace_selector to record *base_dir*
         and return a cancelled selector (so the command fails with
-        NoMainProjectError without invoking curses).
+        NoWorkspaceError without invoking curses).
 
         Returns (captured_list, restore_callable).
         """
         from docker import constructor_cli as mod
 
         captured: list[str | None] = []
-        orig = mod._tui_project_selector
+        orig = mod._tui_workspace_selector
 
-        def _fake_tui_selector(base_dir=None):
-            captured.append(base_dir)
-            # Return a selector that cancels → NoMainProjectError
+        def _fake_tui_selector(workspace_root=None):
+            captured.append(workspace_root)
+            # Return a selector that cancels → NoWorkspaceError
             class Cancelled:
                 def select(self):
                     return None
             return Cancelled()
 
-        mod._tui_project_selector = _fake_tui_selector
+        mod._tui_workspace_selector = _fake_tui_selector
 
         def restore():
-            mod._tui_project_selector = orig
+            mod._tui_workspace_selector = orig
 
         return captured, restore
 
-    def test_cli_base_project_dir_passed_to_selector(self) -> None:
-        """--base-project-dir /custom/path reaches the selector."""
+    def test_cli_workspace_root_passed_to_selector(self) -> None:
+        """--workspace-root /custom/path reaches the selector."""
         captured, restore = self._patch_selector()
         try:
             _run(self.m, ["run", "--tui",
-                  "--base-project-dir", "/custom/tui/root"])
+                  "--workspace-root", "/custom/tui/root"])
         finally:
             restore()
 
         self.assertEqual(1, len(captured),
                          "TUI selector factory must be called")
         self.assertEqual("/custom/tui/root", captured[0],
-                         "CLI arg must reach _tui_project_selector")
+                         "CLI arg must reach _tui_workspace_selector")
 
-    def test_cli_base_project_dir_wins_over_env(self) -> None:
-        """When both --base-project-dir and .env BASE_PROJECT_DIR
+    def test_cli_workspace_root_wins_over_env(self) -> None:
+        """When both --workspace-root and .env WORKSPACE_ROOT
         are present, CLI wins."""
         from docker import constructor_cli as mod
         captured, restore_sel = self._patch_selector()
         orig_read = mod._read_env_key
 
         def _fake_read(key, env_path):
-            if key == "BASE_PROJECT_DIR":
+            if key == "WORKSPACE_ROOT":
                 return "/from/env/file"
             return orig_read(key, env_path)
 
         mod._read_env_key = _fake_read
         try:
             _run(self.m, ["run", "--tui",
-                  "--base-project-dir", "/cli/wins"])
+                  "--workspace-root", "/cli/wins"])
         finally:
             restore_sel()
             mod._read_env_key = orig_read
 
         self.assertEqual(1, len(captured))
         self.assertEqual("/cli/wins", captured[0],
-                         "--base-project-dir must take precedence over .env")
+                         "--workspace-root must take precedence over .env")
 
-    def test_env_base_project_dir_fallback(self) -> None:
-        """Without --base-project-dir, .env BASE_PROJECT_DIR is used."""
+    def test_env_workspace_root_fallback(self) -> None:
+        """Without --workspace-root, .env WORKSPACE_ROOT is used."""
         from docker import constructor_cli as mod
         captured, restore_sel = self._patch_selector()
         orig_read = mod._read_env_key
 
         def _fake_read(key, env_path):
-            if key == "BASE_PROJECT_DIR":
+            if key == "WORKSPACE_ROOT":
                 return "/from/env/file"
             return orig_read(key, env_path)
 
@@ -2409,10 +2409,10 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
 
         self.assertEqual(1, len(captured))
         self.assertEqual("/from/env/file", captured[0],
-                         ".env BASE_PROJECT_DIR must be the fallback")
+                         ".env WORKSPACE_ROOT must be the fallback")
 
     def test_home_fallback_when_nothing_specified(self) -> None:
-        """When neither --base-project-dir nor .env BASE_PROJECT_DIR
+        """When neither --workspace-root nor .env WORKSPACE_ROOT
         is set, None reaches the selector, which internally falls
         back to Path.home()."""
         from docker import constructor_cli as mod
@@ -2435,13 +2435,13 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
                           "(selector falls back to Path.home())")
 
     def test_invalid_directory_passed_to_selector(self) -> None:
-        """When --base-project-dir points to a non-existent path,
+        """When --workspace-root points to a non-existent path,
         the path is still passed to the selector — the selector
         handles the invalid-directory fallback internally."""
         captured, restore = self._patch_selector()
         try:
             _run(self.m, ["run", "--tui",
-                  "--base-project-dir", "/nonexistent/path/42"])
+                  "--workspace-root", "/nonexistent/path/42"])
         finally:
             restore()
 
@@ -2451,12 +2451,12 @@ class TestBaseProjectDirPrecedence(unittest.TestCase):
                          "(selector owns the fallback logic)")
 
     def test_expanduser_applied_to_cli_value(self) -> None:
-        """--base-project-dir ~/projects should be expanded."""
+        """--workspace-root ~/projects should be expanded."""
         from pathlib import Path
         captured, restore = self._patch_selector()
         try:
             _run(self.m, ["run", "--tui",
-                  "--base-project-dir", "~/projects"])
+                  "--workspace-root", "~/projects"])
         finally:
             restore()
 
@@ -2648,7 +2648,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         rp = self._runtime_dir / "a1b2c3d4.toml"
         rp.write_text(
             '[extensions]\n'
-            '[project_paths]\n'
+            '[workspace_paths]\n'
             'paths = []\n'
             '[pi_home]\n'
             'path = "/home/dev/.pi"\n'
@@ -2825,9 +2825,9 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         for c in exec_calls:
             self.assertIn("pi-custom", c)
 
-    def test_explicit_project_paths_passed_to_verify_runtime(self) -> None:
-        """``--project`` (repeatable) forwards container-side paths
-        to ``verify_runtime`` so the project presence, ownership, and
+    def test_explicit_workspace_paths_passed_to_verify_runtime(self) -> None:
+        """``--workspace`` (repeatable) forwards container-side workspace paths
+        to ``verify_runtime`` so workspace presence, ownership, and
         env-var checks use representative data."""
         runner, calls = self._make_recording_runner()
         rc, out, err = _run(
@@ -2835,8 +2835,8 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             ["--project-directory", str(self._inv_path.parent),
              "verify", "--scope", "runtime",
              "--container", "pi-multi",
-             "--project", "/home/dev/p1",
-             "--project", "/home/dev/p2"],
+             "--workspace", "/home/dev/p1",
+             "--workspace", "/home/dev/p2"],
             _process_runner=runner,
             _prompt_user=lambda _: True,
         )
@@ -2848,10 +2848,12 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         self.assertIn("/home/dev/p2", all_argv,
                       "PROJECT_PATH_2 must be checked")
 
-    def test_project_paths_auto_discovered_from_container(self) -> None:
-        """When ``--project`` is omitted, project paths are read from
-        ``docker exec <container> sh -c 'env | grep PROJECT_PATH_'``
-        (the launcher's own contract)."""
+    def test_workspace_paths_auto_discovered_from_container(self) -> None:
+        """When ``--workspace`` is omitted, workspace paths are read from
+        ``docker exec <container> sh -c 'env | grep PROJECT_PATH_'``.
+
+        ``PROJECT_PATH_*`` is the intentional Phase 4 container contract.
+        """
         _paths = "/home/dev/alpha\n/home/dev/beta\n"
         runner, calls = self._make_recording_runner(
             stdout="PROJECT_PATH_1=/home/dev/alpha\n"
@@ -2888,7 +2890,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             _prompt_user=lambda _: True,
         )
         self.assertEqual(4, rc)
-        self.assertIn("no project paths available", err)
+        self.assertIn("no workspace paths available", err)
 
     def test_auto_discovery_preserves_numeric_order_not_path_sort(self) -> None:
         """PROJECT_PATH_N values are sorted by numeric suffix, not by
@@ -2931,7 +2933,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             _prompt_user=lambda _: True,
         )
         self.assertEqual(4, rc)
-        self.assertIn("no project paths available", err)
+        self.assertIn("no workspace paths available", err)
 
     def test_auto_discovery_non_one_start_rejected(self) -> None:
         """PROJECT_PATH_N must start at 1; e.g., 2,3 is not 1..2."""
@@ -2947,7 +2949,7 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             _prompt_user=lambda _: True,
         )
         self.assertEqual(4, rc)
-        self.assertIn("no project paths available", err)
+        self.assertIn("no workspace paths available", err)
 
     def test_missing_runtime_projection_is_error(self) -> None:
         """When no ``--runtime-projection`` is given and

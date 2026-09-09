@@ -219,7 +219,7 @@ def _discover_runtime_projection_from_container(
     return None
 
 
-def _discover_project_paths_from_container(
+def _discover_workspace_paths_from_container(
     container: str, runner: _CommandRunner,
 ) -> tuple[Path, ...] | None:
     """Read ``PROJECT_PATH_1..N`` env vars from *container*.
@@ -375,25 +375,30 @@ def _to_bool(value: object) -> bool:
     return bool(value)
 
 
-def _tui_project_selector(base_dir: str | None = None) -> Any:
-    """Create a curses-based :class:`~docker.launcher.ProjectSelector`
+def _lexical_absolute_path(path: str) -> str:
+    """Normalize *path* to an absolute spelling without resolving symlinks."""
+    return _os_builtin.path.abspath(_os_builtin.path.normpath(path))
+
+
+def _tui_workspace_selector(workspace_root: str | None = None) -> Any:
+    """Create a curses-based :class:`~docker.launcher.WorkspaceSelector`
     backed by the maintained TUI from :mod:`docker.tui`.
 
-    Builds a directory tree from *base_dir* (or ``Path.home()`` as
+    Builds a directory tree from *workspace_root* (or ``Path.home()`` as
     ultimate fallback) and opens the interactive curses interface.
-    Returns a :class:`~docker.launcher.ProjectSelection` or
+    Returns a :class:`~docker.launcher.WorkspaceSelection` or
     ``None`` on cancel.
 
-    The caller is responsible for resolving *base_dir* according to
-    the precedence: ``--base-project-dir`` → ``.env BASE_PROJECT_DIR``
+    The caller is responsible for resolving *workspace_root* according to
+    the precedence: ``--workspace-root`` → ``.env WORKSPACE_ROOT``
     → ``Path.home()``.
     """
     import os as _os
     from docker.tui import build_tree, run_tui
 
-    class TuiSelector:
+    class TuiWorkspaceSelector:
         def select(self) -> Any:
-            resolved = base_dir
+            resolved = workspace_root
             if resolved is None:
                 resolved = str(Path.home())
 
@@ -410,38 +415,42 @@ def _tui_project_selector(base_dir: str | None = None) -> Any:
                     return None
                 tree_roots = home_tree
 
-            main_item, additional_items = run_tui(
+            primary_item, extra_items = run_tui(
                 [],  # no live IDE projects
                 tree_roots,
                 light_theme=False,
             )
 
-            if main_item is None:
+            if primary_item is None:
                 return None
 
             # Extract paths from FlatItem tree nodes
-            main_path = ""
+            primary_path = ""
             if (
-                main_item.kind == "tree"
-                and main_item.node is not None
+                primary_item.kind == "tree"
+                and primary_item.node is not None
             ):
-                main_path = str(main_item.node.path)
+                primary_path = str(primary_item.node.path)
 
-            if not main_path:
+            if not primary_path:
                 return None
 
-            additional_paths: list[str] = []
-            for item in additional_items:
+            # Tree nodes retain the spelling of a relative workspace root.
+            # Convert selections to absolute lexical paths without resolving
+            # symlinks, matching the workspace bind-mount path contract.
+            primary_path = _lexical_absolute_path(primary_path)
+            extra_paths: list[str] = []
+            for item in extra_items:
                 if item.kind == "tree" and item.node is not None:
-                    additional_paths.append(str(item.node.path))
+                    extra_paths.append(_lexical_absolute_path(str(item.node.path)))
 
-            from docker.launcher import ProjectSelection
-            return ProjectSelection(
-                main_project=main_path,
-                optional_projects=tuple(additional_paths),
+            from docker.launcher import WorkspaceSelection
+            return WorkspaceSelection(
+                workspace=primary_path,
+                extra_workspaces=tuple(extra_paths),
             )
 
-    return TuiSelector()
+    return TuiWorkspaceSelector()
 
 
 def _real_dispatcher(
@@ -453,7 +462,7 @@ def _real_dispatcher(
     _container_inspector: Any = None,
     _run_executor: Any = None,
     _create_projection: Any = None,
-    _project_selector: Any = None,
+    _workspace_selector: Any = None,
     _progress_renderer: Any = None,
     _host_event_sink: Any = None,
 ) -> CommandResult:
@@ -476,8 +485,8 @@ def _real_dispatcher(
     Tests may inject fakes to prove boundary wiring without
     invoking Docker.
 
-    When ``_project_selector`` is ``None`` (default), the facade
-    creates a real curses-based :class:`~docker.launcher.ProjectSelector`.
+    When ``_workspace_selector`` is ``None`` (default), the facade
+    creates a real curses-based :class:`~docker.launcher.WorkspaceSelector`.
     Tests may inject a fake to prove TUI wiring.
 
     ``_progress_renderer`` is the facade-owned interactive discovery
@@ -734,11 +743,11 @@ def _real_dispatcher(
         from docker.launcher import (
             DockerContainerInspector,
             DockerRunExecutor,
-            NoMainProjectError,
+            NoWorkspaceError,
             ProcessRunner,
             RunRequest,
             orchestrate_run,
-            resolve_project_selection,
+            resolve_workspace_selection,
         )
 
         try:
@@ -751,39 +760,39 @@ def _real_dispatcher(
 
         c_args = _deep_freeze_command_args(request.command_args)
 
-        # ── project selection ──────────────────────────────────
-        main_project = c_args.get("main_project")
-        projects: tuple[str, ...] = tuple(
-            c_args.get("projects") or ()
+        # ── workspace selection ──────────────────────────────────
+        workspace = c_args.get("workspace")
+        extra_workspaces: tuple[str, ...] = tuple(
+            c_args.get("extra_workspaces") or ()
         )
         tui = bool(c_args.get("tui", False))
 
         try:
             # Resolve selector: use injected fake, or create the real
             # curses-based TUI selector when --tui is requested.
-            _selector = _project_selector
+            _selector = _workspace_selector
             if _selector is None and tui:
-                # Resolve base-project-dir: CLI > .env > None
-                _base_dir = c_args.get("base_project_dir")
-                if _base_dir is None:
-                    _base_dir = _read_env_key(
-                        "BASE_PROJECT_DIR", request.constructor_project.dotenv
+                # Resolve workspace root: CLI > project-local .env > home.
+                _workspace_root = c_args.get("workspace_root")
+                if _workspace_root is None:
+                    _workspace_root = _read_env_key(
+                        "WORKSPACE_ROOT", request.constructor_project.dotenv
                     )
-                if _base_dir is not None:
-                    _base_dir = _os_builtin.path.expanduser(str(_base_dir))
+                if _workspace_root is not None:
+                    _workspace_root = _os_builtin.path.expanduser(str(_workspace_root))
                 elif tui:
                     # No explicit base dir — selector will use
                     # Path.home() internally.
                     pass
-                _selector = _tui_project_selector(base_dir=_base_dir)
+                _selector = _tui_workspace_selector(workspace_root=_workspace_root)
 
-            selection = resolve_project_selection(
-                main_project=main_project if main_project is not None else None,
-                projects=projects,
+            selection = resolve_workspace_selection(
+                workspace=workspace if workspace is not None else None,
+                extra_workspaces=extra_workspaces,
                 tui=tui,
                 selector=_selector,
             )
-        except NoMainProjectError as exc:
+        except NoWorkspaceError as exc:
             return CommandResult(
                 exit_kind=ExitKind.CONFIG,
                 message=str(exc),
@@ -942,9 +951,6 @@ def _real_dispatcher(
             return CommandResult(exit_kind=ExitKind.CONFIG,
                                  message=f"Failed to resolve constructor cache root: {exc}")
 
-        # Runtime project paths — populated during runtime verification
-        # and referenced by evidence collection.
-        _proj_paths: tuple[Path, ...] = ()
 
         results: Any = {}
         all_ok = True
@@ -1090,23 +1096,23 @@ def _real_dispatcher(
                     container = None
 
             if container:
-                # ── resolve project paths ────────────────────────
-                raw_projects = c_args.get("projects")
-                if raw_projects:
-                    _proj_paths: tuple[Path, ...] = tuple(
-                        Path(p) for p in raw_projects
+                # ── resolve workspace paths ────────────────────────
+                raw_workspaces = c_args.get("workspace_paths")
+                if raw_workspaces:
+                    _workspace_paths: tuple[Path, ...] = tuple(
+                        Path(path) for path in raw_workspaces
                     )
                 else:
-                    _proj_paths = _discover_project_paths_from_container(
+                    _workspace_paths = _discover_workspace_paths_from_container(
                         container, _runner,
                     ) or ()
-                if not _proj_paths:
+                if not _workspace_paths:
                     results["runtime"] = {
                         "all_ok": False,
                         "checks": [],
                         "errors": [
-                            "no project paths available for runtime "
-                            "verification; pass --project or ensure "
+                            "no workspace paths available for runtime "
+                            "verification; pass --workspace or ensure "
                             "the container has PROJECT_PATH_1..N set"
                         ],
                     }
@@ -1126,7 +1132,7 @@ def _real_dispatcher(
                 r_result = verify_runtime(VerifyRuntimeRequest(
                     container=container,
                     runtime_projection_path=runtime_proj_path,
-                    project_paths=_proj_paths,
+                    workspace_paths=_workspace_paths,
                     container_pi_home=_container_pi_home,
                     runner=_runner,
                     host_access=_host_access,
@@ -2108,25 +2114,25 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- run (parser only; handler in Stage 9) ---
     p_run = sub.add_parser("run", help="Launch a Pi container session")
     p_run.add_argument(
-        "-m", "--main-project",
+        "-w", "--workspace",
         default=None,
-        dest="main_project",
+        dest="workspace",
         metavar="PATH",
-        help="Main project directory",
+        help="Primary workspace directory",
     )
     p_run.add_argument(
-        "--project",
+        "--extra-workspace",
         action="append",
         default=[],
-        dest="projects",
+        dest="extra_workspaces",
         metavar="PATH",
-        help="Additional project to mount (repeatable)",
+        help="Extra workspace to mount (repeatable)",
     )
     p_run.add_argument(
         "--tui",
         action="store_true",
         default=False,
-        help="Select projects interactively",
+        help="Select workspaces interactively",
     )
     p_run.add_argument(
         "--image",
@@ -2155,12 +2161,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Do not keep STDIN open",
     )
     p_run.add_argument(
-        "--base-project-dir",
+        "--workspace-root",
         default=None,
-        dest="base_project_dir",
+        dest="workspace_root",
         metavar="PATH",
         help="Root directory for filesystem tree view "
-             "(overrides .env BASE_PROJECT_DIR)",
+             "(overrides project-local .env WORKSPACE_ROOT)",
     )
     p_run.add_argument(
         "--chown-on-start",
@@ -2265,13 +2271,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "(default: most recent .docker-generated/runtime/*.toml)",
     )
     p_ver.add_argument(
-        "--project",
+        "--workspace",
         action="append",
         default=None,
-        dest="projects",
-        help="Project path inside the container (repeatable). "
-             "Default: auto-discovered from container PROJECT_PATH_1..N "
-             "env vars.",
+        dest="workspace_paths",
+        help="Workspace path inside the container (repeatable). "
+             "Default: auto-discovered from the container runtime contract.",
     )
     p_ver.add_argument(
         "--output-dir",
@@ -2391,7 +2396,7 @@ def main(
     _container_inspector: Any = None,
     _run_executor: Any = None,
     _create_projection: Any = None,
-    _project_selector: Any = None,
+    _workspace_selector: Any = None,
 ) -> int:
     """Parse arguments, dispatch, render, and map to exit code.
 
@@ -2465,7 +2470,7 @@ def main(
                 _container_inspector=_container_inspector,
                 _run_executor=_run_executor,
                 _create_projection=_create_projection,
-                _project_selector=_project_selector,
+                _workspace_selector=_workspace_selector,
                 _progress_renderer=progress_renderer,
                 _host_event_sink=host_event_sink,
             )

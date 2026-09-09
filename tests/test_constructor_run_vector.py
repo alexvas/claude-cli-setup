@@ -24,8 +24,8 @@ def _render(*,
             projection_host_path: str = "/home/dev/.cache/docker-constructor/projects/constructor-identity/runtime/proj-abc123.toml",
             projection_container_path: str = "/run/pi-cli/docker-constructor.runtime.toml",
             pi_home_host: str = "/home/alice/.pi",
-            main_project: str = "/home/dev/work/my-project",
-            optional_projects: tuple[str, ...] = (),
+            workspace: str = "/home/dev/work/my-project",
+            extra_workspaces: tuple[str, ...] = (),
             host_access = None,
             tty: bool = True,
             stdin_open: bool = True,
@@ -42,8 +42,8 @@ def _render(*,
         projection_host_path=projection_host_path,
         projection_container_path=projection_container_path,
         pi_home_host=pi_home_host,
-        main_project=main_project,
-        optional_projects=optional_projects,
+        workspace=workspace,
+        extra_workspaces=extra_workspaces,
         host_access=host_access,
         tty=tty,
         stdin_open=stdin_open,
@@ -59,7 +59,7 @@ def _render(*,
 
 
 class TestDefaultRunVector(unittest.TestCase):
-    """Assert the exact tuple shape for a default main-project launch."""
+    """Assert the exact tuple shape for a default primary-workspace launch."""
 
     def test_command_prefix_is_docker_run(self):
         args = _render()
@@ -94,12 +94,12 @@ class TestDefaultRunVector(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 6.2.2  Mounts — Pi home, projection, projects
+# 6.2.2  Mounts — Pi home, projection, workspaces
 # ---------------------------------------------------------------------------
 
 
 class TestMounts(unittest.TestCase):
-    """Assert Pi home, runtime projection, and project bind mounts."""
+    """Assert Pi home, runtime projection, and workspace bind mounts."""
 
     def test_pi_home_mount(self):
         from docker.versioning.rendering import _CONTAINER_PI_HOME
@@ -163,15 +163,15 @@ class TestMounts(unittest.TestCase):
         self.assertEqual(mount_a["dst"], mount_b["dst"])
         self.assertNotEqual(mount_a["src"], mount_b["src"])
 
-    def test_main_project_1to1_bind_mount(self):
-        args = _render(main_project="/home/dev/work/app")
+    def test_workspace_1to1_bind_mount(self):
+        args = _render(workspace="/home/dev/work/app")
         mounts = _collect_mounts(args)
-        main = _find_mount(mounts, dst="/home/dev/work/app")
-        self.assertIsNotNone(main, "missing main project mount")
-        self.assertEqual(main["src"], "/home/dev/work/app")
+        primary = _find_mount(mounts, dst="/home/dev/work/app")
+        self.assertIsNotNone(primary, "missing primary workspace mount")
+        self.assertEqual(primary["src"], "/home/dev/work/app")
 
-    def test_main_project_as_workdir(self):
-        args = _render(main_project="/home/dev/work/app")
+    def test_workspace_as_workdir(self):
+        args = _render(workspace="/home/dev/work/app")
         idx = args.index("--workdir")
         self.assertEqual(args[idx + 1], "/home/dev/work/app")
 
@@ -184,8 +184,8 @@ class TestMounts(unittest.TestCase):
 class TestEnvironment(unittest.TestCase):
     """Assert PROJECT_PATH_* and CHOWN_WORK_ON_START environment."""
 
-    def test_project_path_1_set(self):
-        args = _render(main_project="/home/dev/work/app")
+    def test_workspace_path_1_set(self):
+        args = _render(workspace="/home/dev/work/app")
         env = _collect_env(args)
         self.assertEqual(env.get("PROJECT_PATH_1"), "/home/dev/work/app")
 
@@ -256,52 +256,52 @@ class TestImageAndCommand(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 6.2.6  Optional projects
+# 6.2.6  Extra workspaces
 # ---------------------------------------------------------------------------
 
 
-class TestOptionalProjects(unittest.TestCase):
-    """Assert one and two optional projects receive 1:1 mounts and
+class TestExtraWorkspaces(unittest.TestCase):
+    """Assert one and two extra workspaces receive 1:1 mounts and
     ordered PROJECT_PATH_* variables."""
 
-    def test_one_optional_project_mount(self):
+    def test_one_extra_workspace_mount(self):
         args = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/opt1",),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/extra1",),
         )
         mounts = _collect_mounts(args)
-        opt = _find_mount(mounts, dst="/home/dev/work/opt1")
-        self.assertIsNotNone(opt, "missing optional project mount")
-        self.assertEqual(opt["src"], "/home/dev/work/opt1")
+        opt = _find_mount(mounts, dst="/home/dev/work/extra1")
+        self.assertIsNotNone(opt, "missing extra workspace mount")
+        self.assertEqual(opt["src"], "/home/dev/work/extra1")
 
-    def test_one_optional_project_env(self):
+    def test_one_extra_workspace_environment(self):
         args = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/opt1",),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/extra1",),
         )
         env = _collect_env(args)
-        self.assertEqual(env["PROJECT_PATH_1"], "/home/dev/work/main")
-        self.assertEqual(env["PROJECT_PATH_2"], "/home/dev/work/opt1")
+        self.assertEqual(env["PROJECT_PATH_1"], "/home/dev/work/primary")
+        self.assertEqual(env["PROJECT_PATH_2"], "/home/dev/work/extra1")
         self.assertNotIn("PROJECT_PATH_3", env)
 
-    def test_two_optional_projects_mounts(self):
+    def test_two_extra_workspaces_mounts(self):
         args = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/opt1", "/home/dev/work/opt2"),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/extra1", "/home/dev/work/extra2"),
         )
         mounts = _collect_mounts(args)
-        self.assertIsNotNone(_find_mount(mounts, dst="/home/dev/work/opt1"))
-        self.assertIsNotNone(_find_mount(mounts, dst="/home/dev/work/opt2"))
+        self.assertIsNotNone(_find_mount(mounts, dst="/home/dev/work/extra1"))
+        self.assertIsNotNone(_find_mount(mounts, dst="/home/dev/work/extra2"))
 
-    def test_two_optional_projects_env(self):
+    def test_two_extra_workspaces_env(self):
         args = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/opt1", "/home/dev/work/opt2"),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/extra1", "/home/dev/work/extra2"),
         )
         env = _collect_env(args)
-        self.assertEqual(env["PROJECT_PATH_1"], "/home/dev/work/main")
-        self.assertEqual(env["PROJECT_PATH_2"], "/home/dev/work/opt1")
-        self.assertEqual(env["PROJECT_PATH_3"], "/home/dev/work/opt2")
+        self.assertEqual(env["PROJECT_PATH_1"], "/home/dev/work/primary")
+        self.assertEqual(env["PROJECT_PATH_2"], "/home/dev/work/extra1")
+        self.assertEqual(env["PROJECT_PATH_3"], "/home/dev/work/extra2")
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +383,7 @@ class TestDeterministicOutput(unittest.TestCase):
             image="pi-cli-pi:latest", container_name="pi-1",
             projection_host_path=self._PROJECTION,
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-            pi_home_host="/home/alice/.pi", main_project="/home/dev/work/main",
+            pi_home_host="/home/alice/.pi", workspace="/home/dev/work/primary",
         )
         self.assertEqual(render_run_vector(ri), render_run_vector(ri))
 
@@ -391,8 +391,8 @@ class TestDeterministicOutput(unittest.TestCase):
         a = RunRenderInputs(image="pi-cli-pi:latest", container_name="pi-1",
             projection_host_path=self._PROJECTION,
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
-            pi_home_host="/home/alice/.pi", main_project="/home/dev/work/main")
-        b = RunRenderInputs(main_project="/home/dev/work/main", pi_home_host="/home/alice/.pi",
+            pi_home_host="/home/alice/.pi", workspace="/home/dev/work/primary")
+        b = RunRenderInputs(workspace="/home/dev/work/primary", pi_home_host="/home/alice/.pi",
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
             projection_host_path=self._PROJECTION, container_name="pi-1", image="pi-cli-pi:latest")
         self.assertEqual(render_run_vector(a), render_run_vector(b))
@@ -407,25 +407,25 @@ class TestPathEdgeCases(unittest.TestCase):
     """Paths with spaces, quotes, Unicode, and leading dashes must be
     preserved as individual vector elements."""
 
-    def test_project_path_with_spaces(self):
-        args = _render(main_project="/home/dev/work/my project")
+    def test_workspace_path_with_spaces(self):
+        args = _render(workspace="/home/dev/work/my project")
         self.assertIn("/home/dev/work/my project", args)
         mounts = _collect_mounts(args)
-        main = _find_mount(mounts, dst="/home/dev/work/my project")
-        self.assertIsNotNone(main)
-        self.assertEqual(main["src"], "/home/dev/work/my project")
+        primary = _find_mount(mounts, dst="/home/dev/work/my project")
+        self.assertIsNotNone(primary)
+        self.assertEqual(primary["src"], "/home/dev/work/my project")
 
-    def test_project_path_with_unicode(self):
+    def test_workspace_path_with_unicode(self):
         path = "/home/dev/work/projéct-α"
-        args = _render(main_project=path)
+        args = _render(workspace=path)
         env = _collect_env(args)
         self.assertEqual(env["PROJECT_PATH_1"], path)
 
-    def test_project_path_with_leading_dashes(self):
+    def test_workspace_path_with_leading_dashes(self):
         """A path like /home/dev/--help must not be misinterpreted
         as a Docker flag — it's a positional argument value."""
-        path = "/home/dev/work/--project-name"
-        args = _render(main_project=path)
+        path = "/home/dev/work/--workspace-name"
+        args = _render(workspace=path)
         # The path must appear verbatim after --workdir and as PROJECT_PATH_1.
         wd_idx = args.index("--workdir")
         self.assertEqual(args[wd_idx + 1], path)
@@ -441,71 +441,71 @@ class TestPathEdgeCases(unittest.TestCase):
         self.assertEqual(pi["src"], "/home/user name/.pi")
 
 
-class TestProjectValidation(unittest.TestCase):
-    """Reject malformed project inputs."""
+class TestWorkspaceValidation(unittest.TestCase):
+    """Reject malformed workspace inputs."""
 
-    def test_empty_main_project_rejected(self):
+    def test_empty_workspace_rejected(self):
         with self.assertRaises(ValueError):
-            _render(main_project="")
+            _render(workspace="")
 
-    def test_whitespace_only_main_project_rejected(self):
+    def test_whitespace_only_workspace_rejected(self):
         with self.assertRaises(ValueError):
-            _render(main_project="   ")
+            _render(workspace="   ")
 
-    def test_empty_optional_project_entry_rejected(self):
+    def test_empty_extra_workspace_entry_rejected(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/work/main",
-                optional_projects=("/home/dev/work/opt1", ""),
+                workspace="/home/dev/work/primary",
+                extra_workspaces=("/home/dev/work/extra1", ""),
             )
 
-    def test_duplicate_project_paths_rejected(self):
-        """A path appearing as both main and optional project must
+    def test_duplicate_workspace_paths_rejected(self):
+        """A path appearing as both primary and extra workspace must
         be rejected — duplicate mounts would collide."""
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/work/shared",
-                optional_projects=("/home/dev/work/other", "/home/dev/work/shared"),
+                workspace="/home/dev/work/shared",
+                extra_workspaces=("/home/dev/work/other", "/home/dev/work/shared"),
             )
 
-    def test_duplicate_optional_project_paths_rejected(self):
+    def test_duplicate_extra_workspace_paths_rejected(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/work/main",
-                optional_projects=("/home/dev/work/opt1", "/home/dev/work/opt1"),
+                workspace="/home/dev/work/primary",
+                extra_workspaces=("/home/dev/work/extra1", "/home/dev/work/extra1"),
             )
 
-    def test_more_than_two_optional_projects_accepted(self) -> None:
-        """Direct Docker execution has no limit on optional projects
-        (the old 2-project limit was a Compose fragment artefact)."""
+    def test_more_than_two_extra_workspaces_accepted(self) -> None:
+        """Direct Docker execution has no limit on extra workspaces
+        (the old two-workspace limit was a Compose fragment artefact)."""
         args = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=(
-                "/home/dev/work/opt1",
-                "/home/dev/work/opt2",
-                "/home/dev/work/opt3",
+            workspace="/home/dev/work/primary",
+            extra_workspaces=(
+                "/home/dev/work/extra1",
+                "/home/dev/work/extra2",
+                "/home/dev/work/extra3",
             ),
         )
-        # All three optionals must appear as 1:1 mounts
+        # All three extra workspaces must appear as 1:1 mounts
         args_str = " ".join(args)
-        self.assertIn("dst=/home/dev/work/opt1", args_str)
-        self.assertIn("dst=/home/dev/work/opt2", args_str)
-        self.assertIn("dst=/home/dev/work/opt3", args_str)
+        self.assertIn("dst=/home/dev/work/extra1", args_str)
+        self.assertIn("dst=/home/dev/work/extra2", args_str)
+        self.assertIn("dst=/home/dev/work/extra3", args_str)
         # All three exported as PROJECT_PATH_2,3,4
-        self.assertIn("PROJECT_PATH_1=/home/dev/work/main", args)
-        self.assertIn("PROJECT_PATH_2=/home/dev/work/opt1", args)
-        self.assertIn("PROJECT_PATH_3=/home/dev/work/opt2", args)
-        self.assertIn("PROJECT_PATH_4=/home/dev/work/opt3", args)
+        self.assertIn("PROJECT_PATH_1=/home/dev/work/primary", args)
+        self.assertIn("PROJECT_PATH_2=/home/dev/work/extra1", args)
+        self.assertIn("PROJECT_PATH_3=/home/dev/work/extra2", args)
+        self.assertIn("PROJECT_PATH_4=/home/dev/work/extra3", args)
 
-    def test_relative_main_project_rejected(self):
+    def test_relative_workspace_rejected(self):
         with self.assertRaises(ValueError):
-            _render(main_project="relative/path/project")
+            _render(workspace="relative/path/project")
 
-    def test_relative_optional_project_rejected(self):
+    def test_relative_extra_workspace_rejected(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/work/main",
-                optional_projects=("relative/path/project",),
+                workspace="/home/dev/work/primary",
+                extra_workspaces=("relative/path/project",),
             )
 
     def test_relative_pi_home_host_rejected(self):
@@ -646,32 +646,32 @@ class TestDestinationCollisions(unittest.TestCase):
     """Reject mount destination collisions across the complete
     destination set before rendering."""
 
-    def test_main_project_collides_with_pi_home(self):
+    def test_workspace_collides_with_pi_home(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/.pi",
+                workspace="/home/dev/.pi",
                 pi_home_host="/home/alice/.pi",
             )
 
-    def test_optional_project_collides_with_pi_home(self):
+    def test_extra_workspace_collides_with_pi_home(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/work/main",
-                optional_projects=("/home/dev/.pi",),
+                workspace="/home/dev/work/primary",
+                extra_workspaces=("/home/dev/.pi",),
                 pi_home_host="/home/alice/.pi",
             )
 
-    def test_main_project_collides_with_projection_dst(self):
+    def test_workspace_collides_with_projection_dst(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/run/pi-cli/docker-constructor.runtime.toml",
+                workspace="/run/pi-cli/docker-constructor.runtime.toml",
             )
 
-    def test_optional_project_collides_with_projection_dst(self):
+    def test_extra_workspace_collides_with_projection_dst(self):
         with self.assertRaises(ValueError):
             _render(
-                main_project="/home/dev/work/main",
-                optional_projects=(
+                workspace="/home/dev/work/primary",
+                extra_workspaces=(
                     "/run/pi-cli/docker-constructor.runtime.toml",
                 ),
             )
@@ -690,16 +690,16 @@ class TestDestinationCollisions(unittest.TestCase):
 class TestDeterministicOrderingEdge(unittest.TestCase):
     """Deterministic output independent of input field order."""
 
-    def test_optional_projects_in_order(self):
-        """Optional projects must appear in the vector in the order
+    def test_extra_workspaces_in_order(self):
+        """Extra workspaces must appear in the vector in the order
         they were given — no sorting or reordering."""
         a = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/B", "/home/dev/work/A"),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/B", "/home/dev/work/A"),
         )
         b = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/A", "/home/dev/work/B"),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/A", "/home/dev/work/B"),
         )
         # Different input order → different vector (caller controls ordering).
         self.assertNotEqual(a, b)
@@ -716,12 +716,12 @@ class TestDeterministicOrderingEdge(unittest.TestCase):
             ),
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
             pi_home_host="/home/alice/.pi",
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/lib",),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/lib",),
         ))
         b = render_run_vector(RunRenderInputs(
-            optional_projects=("/home/dev/work/lib",),
-            main_project="/home/dev/work/main",
+            extra_workspaces=("/home/dev/work/lib",),
+            workspace="/home/dev/work/primary",
             pi_home_host="/home/alice/.pi",
             projection_container_path="/run/pi-cli/docker-constructor.runtime.toml",
             projection_host_path=(
@@ -741,8 +741,8 @@ class TestArgumentAtomicity(unittest.TestCase):
         """Every --flag and its value are separate elements.
         No '--flag=value' or '--flag value' fused into one string."""
         args = _render(
-            main_project="/home/dev/work/main",
-            optional_projects=("/home/dev/work/lib",),
+            workspace="/home/dev/work/primary",
+            extra_workspaces=("/home/dev/work/lib",),
         )
         for token in args:
             if token.startswith("--"):
@@ -1407,14 +1407,14 @@ class TestArtifactMountCollisions(unittest.TestCase):
             self.assertIn("duplicate or aliased",
                           str(ctx.exception).lower())
 
-    def test_rejects_artifact_target_collision_with_project(self):
-        """When main_project is set to a valid artifact-root path,
+    def test_rejects_artifact_target_collision_with_workspace(self):
+        """When workspace is set to a valid artifact-root path,
         an artifact mount with that same target hits the
         duplicate-destination check."""
         target = self._target("sha512/collision.tgz")
         with self.assertRaises(ValueError) as ctx:
             _render(
-                main_project=target,
+                workspace=target,
                 artifact_mounts=(
                     self._mount(host_path=self._reg_a, target=target),
                 ),

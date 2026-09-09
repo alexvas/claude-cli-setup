@@ -1,9 +1,9 @@
-"""Project launcher — project selection, pi-N allocation, and
+"""Project launcher — workspace selection, pi-N allocation, and
 run-vector assembly for ``docker-constructor.py run``.
 
 This module owns:
-  - :class:`ProjectSelection` — resolved project paths ready for rendering
-  - :func:`resolve_project_selection` — CLI-flag → selection with precedence
+  - :class:`WorkspaceSelection` — resolved workspace paths ready for rendering
+  - :func:`resolve_workspace_selection` — CLI-flag → selection with precedence
   - :func:`allocate_pi_name` — lowest-free pi-N from container inspection
   - :func:`build_run_inputs` — selection → :class:`RunRenderInputs`
   - :class:`RunRequest` / :class:`RunResult` — run-transaction DTOs
@@ -64,8 +64,8 @@ class ExecutionMode(enum.Enum):
 # ═══════════════════════════════════════════════════════════════════
 
 
-class NoMainProjectError(Exception):
-    """Raised when no main project can be determined."""
+class NoWorkspaceError(Exception):
+    """Raised when no primary workspace can be determined."""
 
 
 class ContainerInspectError(Exception):
@@ -78,26 +78,26 @@ class ContainerInspectError(Exception):
 
 
 @dataclass(frozen=True)
-class ProjectSelection:
-    """Resolved project selection ready for launch-vector assembly.
+class WorkspaceSelection:
+    """Resolved workspace selection ready for launch-vector assembly.
 
-    *main_project* is always a non-empty absolute path.
-    *optional_projects* preserves insertion order with no duplicates.
+    *workspace* is always a non-empty absolute path.
+    *extra_workspaces* preserves insertion order with no duplicates.
     """
 
-    main_project: str
-    optional_projects: tuple[str, ...] = ()
+    workspace: str
+    extra_workspaces: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.main_project or not os.path.isabs(self.main_project):
+        if not self.workspace or not os.path.isabs(self.workspace):
             raise ValueError(
-                f"main_project must be a non-empty absolute path, "
-                f"got {self.main_project!r}"
+                f"workspace must be a non-empty absolute path, "
+                f"got {self.workspace!r}"
             )
-        for i, p in enumerate(self.optional_projects):
+        for i, p in enumerate(self.extra_workspaces):
             if not p or not os.path.isabs(p):
                 raise ValueError(
-                    f"optional_projects[{i}] must be a non-empty "
+                    f"extra_workspaces[{i}] must be a non-empty "
                     f"absolute path, got {p!r}"
                 )
 
@@ -119,14 +119,14 @@ class ContainerNameInspector(Protocol):
         ...
 
 
-class ProjectSelector(Protocol):
-    """Injected interactive project-selection boundary (TUI).
+class WorkspaceSelector(Protocol):
+    """Injected interactive workspace-selection boundary (TUI).
 
-    Returns a resolved :class:`ProjectSelection` or ``None`` when
+    Returns a resolved :class:`WorkspaceSelection` or ``None`` when
     the user cancels.  The caller owns validation and error mapping.
     """
 
-    def select(self) -> ProjectSelection | None:
+    def select(self) -> WorkspaceSelection | None:
         ...
 
 
@@ -152,63 +152,60 @@ class ProjectionFactory(Protocol):
 # ═══════════════════════════════════════════════════════════════════
 
 
-def resolve_project_selection(
+def resolve_workspace_selection(
     *,
-    main_project: str | None = None,
-    projects: tuple[str, ...] = (),
+    workspace: str | None = None,
+    extra_workspaces: tuple[str, ...] = (),
     tui: bool = False,
-    base_project_dir: str | None = None,
-    selector: ProjectSelector | None = None,
-) -> ProjectSelection:
-    """Resolve main and optional projects from CLI flags.
+    workspace_root: str | None = None,
+    selector: WorkspaceSelector | None = None,
+) -> WorkspaceSelection:
+    """Resolve primary and extra workspaces from CLI flags.
 
-    Precedence:
-    1. Explicit *main_project*
-    2. TUI selection via *selector* (when *tui* is ``True``)
-    3. Documented automatic selection (if retained)
-    4. Raise :class:`NoMainProjectError`
+    Paths are lexically normalized to absolute paths without resolving
+    symlinks. Explicit CLI selection takes precedence over TUI selection.
     """
-    resolved_main: str | None = None
-    resolved_optional: tuple[str, ...] = ()
+    resolved_workspace: str | None = None
+    resolved_extra: tuple[str, ...] = ()
 
-    if main_project is not None:
-        # Explicit main wins; optionals come from CLI
-        resolved_main = main_project
-        resolved_optional = tuple(projects)
+    if workspace is not None:
+        resolved_workspace = workspace
+        resolved_extra = tuple(extra_workspaces)
     elif tui and selector is not None:
-        # Unwrapped paragraph
         sel = selector.select()
         if sel is None:
-            raise NoMainProjectError(
-                "No main project selected (TUI cancelled)"
-            )
-        resolved_main = sel.main_project
-        resolved_optional = sel.optional_projects
+            raise NoWorkspaceError("No primary workspace selected (TUI cancelled)")
+        resolved_workspace = sel.workspace
+        resolved_extra = sel.extra_workspaces
     else:
-        raise NoMainProjectError(
-            "No main project specified.  Use --main-project / -m "
-            "to select a project directory, or --tui to choose "
-            "interactively."
+        raise NoWorkspaceError(
+            "No primary workspace specified. Use --workspace / -w "
+            "to select a workspace directory, or --tui to choose interactively."
         )
 
-    # Normalise and validate
-    resolved_main = os.path.normpath(resolved_main)
-    norm_optional = tuple(os.path.normpath(p) for p in resolved_optional)
-
-    # Duplicate detection
-    seen: set[str] = {resolved_main}
+    if not resolved_workspace:
+        raise ValueError("workspace must be a non-empty path")
+    if any(not path for path in resolved_extra):
+        raise ValueError("extra workspaces must be non-empty paths")
+    # Use lexical absolute normalization only: workspace symlink spelling is
+    # part of the bind-mount contract and must not be collapsed with realpath.
+    resolved_workspace = os.path.abspath(os.path.normpath(resolved_workspace))
+    normalized_extra = tuple(
+        os.path.abspath(os.path.normpath(path)) for path in resolved_extra
+    )
+    seen: set[str] = {resolved_workspace}
     deduped: list[str] = []
-    for p in norm_optional:
-        if p in seen:
+    for path in normalized_extra:
+        if path in seen:
             raise ValueError(
-                f"Duplicate project path after normalisation: {p!r}"
+                f"Duplicate workspace path after normalisation: {path!r}"
             )
-        seen.add(p)
-        deduped.append(p)
+        seen.add(path)
+        deduped.append(path)
 
-    return ProjectSelection(
-        main_project=resolved_main,
-        optional_projects=tuple(deduped),
+    return WorkspaceSelection(
+        workspace=resolved_workspace,
+        extra_workspaces=tuple(deduped),
     )
 
 
@@ -257,7 +254,7 @@ def allocate_pi_name(inspector: ContainerNameInspector) -> str:
 
 def build_run_inputs(
     *,
-    selection: ProjectSelection,
+    selection: WorkspaceSelection,
     image: str,
     container_name: str,
     pi_home_host: str,
@@ -268,7 +265,7 @@ def build_run_inputs(
     chown_on_start: str | None = None,
 ) -> RunRenderInputs:
     """Build :class:`~docker.versioning.rendering.RunRenderInputs`
-    from a resolved :class:`ProjectSelection` and runtime parameters.
+    from a resolved :class:`WorkspaceSelection` and runtime parameters.
 
     Host-access inputs are always disabled — callers that need host
     access must construct ``RunRenderInputs`` with an explicit
@@ -280,8 +277,8 @@ def build_run_inputs(
         pi_home_host=pi_home_host,
         projection_host_path=projection_host_path,
         projection_container_path=projection_container_path,
-        main_project=selection.main_project,
-        optional_projects=selection.optional_projects,
+        workspace=selection.workspace,
+        extra_workspaces=selection.extra_workspaces,
         tty=tty,
         stdin_open=stdin_open,
         chown_on_start=chown_on_start,
@@ -374,8 +371,8 @@ class RunRequest:
     image: str
     """Canonical image to run (e.g. ``pi-cli-pi:latest``)."""
 
-    selection: ProjectSelection
-    """Resolved project selection from :func:`resolve_project_selection`."""
+    selection: WorkspaceSelection
+    """Resolved workspace selection from :func:`resolve_workspace_selection`."""
 
     pi_home_host: str
     """Host path to the Pi home directory."""
@@ -771,8 +768,8 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                     str(project_state.runtime_root / "projection.toml")
                 ),
                 projection_container_path=projection_container_path,
-                main_project=request.selection.main_project,
-                optional_projects=request.selection.optional_projects,
+                workspace=request.selection.workspace,
+                extra_workspaces=request.selection.extra_workspaces,
                 host_access=host_access,
                 tty=request.tty,
                 stdin_open=request.stdin_open,
@@ -927,8 +924,8 @@ def orchestrate_run(request: RunRequest) -> RunResult:
                 pi_home_host=request.pi_home_host,
                 projection_host_path=projection_path or "",
                 projection_container_path=projection_container_path,
-                main_project=request.selection.main_project,
-                optional_projects=request.selection.optional_projects,
+                workspace=request.selection.workspace,
+                extra_workspaces=request.selection.extra_workspaces,
                 host_access=host_access,
                 tty=request.tty,
                 stdin_open=request.stdin_open,

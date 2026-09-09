@@ -114,27 +114,27 @@ Rules:
 
 ### RED
 
-- [ ] P4.R1 Add CLI tests for `--workspace`/`-w`, repeatable `--extra-workspace`, and `--workspace-root`, including rejection of `--main-project`, `-m`, `--project`, and `--base-project-dir`.
-- [ ] P4.R2 Add workspace-selection domain tests that preserve existing lexical absolute-path normalization without resolving workspace symlinks, plus primary/extra ordering, duplicate rejection, and TUI precedence.
-- [ ] P4.R3 Add dotenv tests for `WORKSPACE_ROOT`, CLI precedence, home-directory fallback, and rejection of `BASE_PROJECT_DIR` as an active default.
-- [ ] P4.R4 Add TUI tests for primary/extra selection, labels, return values, navigation, and scrolling behavior.
-- [ ] P4.R5 Add verification/evidence DTO tests requiring workspace-oriented public and domain fields.
+- [x] P4.R1 Add CLI tests for `--workspace`/`-w`, repeatable `--extra-workspace`, and `--workspace-root`, including rejection of `--main-project`, `-m`, `--project`, and `--base-project-dir`.
+- [x] P4.R2 Add workspace-selection domain tests that preserve existing lexical absolute-path normalization without resolving workspace symlinks, plus primary/extra ordering, duplicate rejection, and TUI precedence.
+- [x] P4.R3 Add dotenv tests for `WORKSPACE_ROOT`, CLI precedence, home-directory fallback, and rejection of `BASE_PROJECT_DIR` as an active default.
+- [x] P4.R4 Add TUI tests for primary/extra selection, labels, return values, navigation, and scrolling behavior.
+- [x] P4.R5 Add verification/evidence DTO tests requiring workspace-oriented public and domain fields.
 
 ### GREEN
 
-- [ ] P4.G1 Implement the workspace CLI and remove project-oriented aliases required by P4.R1.
-- [ ] P4.G2 Rename launcher domain types, protocols, fields, diagnostics, and structured data required by P4.R2.
-- [ ] P4.G3 Replace `BASE_PROJECT_DIR` with project-local `WORKSPACE_ROOT` behavior required by P4.R3.
-- [ ] P4.G4 Migrate the curses TUI model, labels, states, inputs, and outputs required by P4.R4 without changing navigation behavior.
-- [ ] P4.G5 Rename verification/evidence workspace inputs and DTO fields required by P4.R5.
+- [x] P4.G1 Implement the workspace CLI and remove project-oriented aliases required by P4.R1.
+- [x] P4.G2 Rename launcher domain types, protocols, fields, diagnostics, and structured data required by P4.R2.
+- [x] P4.G3 Replace `BASE_PROJECT_DIR` with project-local `WORKSPACE_ROOT` behavior required by P4.R3.
+- [x] P4.G4 Migrate the curses TUI model, labels, states, inputs, and outputs required by P4.R4 without changing navigation behavior.
+- [x] P4.G5 Rename verification/evidence workspace inputs and DTO fields required by P4.R5.
 
 ### INTROSPECT
 
-- [ ] P4.I1 Inspect public host interfaces and domain boundaries for retained main/additional-project terminology or compatibility translation; remove every active occurrence found.
+- [x] P4.I1 Inspect public host interfaces and domain boundaries for retained main/additional-project terminology or compatibility translation; remove every active occurrence found.
 
 ### VALIDATE
 
-- [ ] P4.V1 Run the CLI, workspace-domain, dotenv, TUI, and verification/evidence DTO tests introduced in P4.R1–P4.R5 and record that they all pass.
+- [x] P4.V1 Run the CLI, workspace-domain, dotenv, TUI, and verification/evidence DTO tests introduced in P4.R1–P4.R5 and record that they all pass.
 
 ## Phase 5 — Container Workspace Contract
 

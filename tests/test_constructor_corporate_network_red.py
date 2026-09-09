@@ -483,7 +483,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
     def test_build_and_run_resolve_bundle_from_same_constructor_project(self) -> None:
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.build_orchestration import BuildRequest, orchestrate_build
         from docker.versioning.dispatch_types import ExitKind
 
@@ -522,7 +522,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
                     inventory_path=str(inventory),
                     repo_root=str(repository), project_root=str(workspace),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_recording_run_executor(effects),
@@ -574,7 +574,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
     def test_invalid_enabled_bundle_aborts_run_before_docker(self) -> None:
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.dispatch_types import ExitKind
 
         with tempfile.TemporaryDirectory() as root:
@@ -603,7 +603,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
                     inventory_path=str(inventory),
                     repo_root=str(root_path), project_root=str(root_path),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=False,
                     executor=_recording_run_executor(effects),
@@ -619,7 +619,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
     def test_direct_caller_without_repo_root_fails_closed(self) -> None:
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.dispatch_types import ExitKind
 
         with tempfile.TemporaryDirectory() as root:
@@ -649,7 +649,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
                 result = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_recording_run_executor(effects),
@@ -733,7 +733,7 @@ class TestLocalCompanionFailClosedCommandsRed(_LocalTest):
     def _run_message(self, root: Path, effects: list[str]) -> str:
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.dispatch_types import ExitKind
 
         inventory = root / "inventory.toml"
@@ -752,7 +752,7 @@ class TestLocalCompanionFailClosedCommandsRed(_LocalTest):
                 inventory_path=str(inventory),
                 repo_root=str(root), project_root=str(root),
                 image="pi-cli-pi:latest",
-                selection=ProjectSelection(main_project="/work/project"),
+                selection=WorkspaceSelection(workspace="/work/project"),
                 pi_home_host="/home/user/.pi",
                 dry_run=False,
                 executor=_recording_run_executor(effects),
@@ -959,7 +959,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
     def test_valid_external_proxy_without_host_access_renders_no_host_mapping(self) -> None:
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.dispatch_types import ExitKind
 
         with tempfile.TemporaryDirectory() as root:
@@ -978,7 +978,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                 result = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_recording_run_executor(effects),
@@ -1001,7 +1001,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
         # abort before Docker even when host access is disabled.
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.dispatch_types import ExitKind
 
         with tempfile.TemporaryDirectory() as root:
@@ -1026,7 +1026,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                 result = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=False,
                     executor=_recording_run_executor(effects),
@@ -1042,7 +1042,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
     def test_absent_corporate_settings_preserve_existing_host_access_vector(self) -> None:
         from unittest import mock
 
-        from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
+        from docker.launcher import WorkspaceSelection, RunRequest, orchestrate_run
         from docker.versioning.dispatch_types import ExitKind
 
         policy = (
@@ -1065,7 +1065,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                 result = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
                     image="pi-cli-pi:latest",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_recording_run_executor(effects),

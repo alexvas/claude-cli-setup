@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from docker.launcher import ProcessResult, ProjectSelection, RunRequest, orchestrate_run
+from docker.launcher import ProcessResult, WorkspaceSelection, RunRequest, orchestrate_run
 from docker.versioning.build_orchestration import BuildRequest, ProcessResult as BuildProcessResult, orchestrate_build
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.project_state import resolve_project_state
@@ -168,7 +168,7 @@ class ExternalProjectStatePhase3Tests(unittest.TestCase):
 
         request = RunRequest(
             inventory_path=str(self.project / "docker-constructor.toml"), project_root=str(self.project),
-            image="test:latest", selection=ProjectSelection(main_project=str(self.primary), optional_projects=(str(self.extra),)),
+            image="test:latest", selection=WorkspaceSelection(workspace=str(self.primary), extra_workspaces=(str(self.extra),)),
             pi_home_host=str(self.installation / "pi-home"), _constructor_cache_root=str(self.cache),
             inspector=_Inspector(), executor=_RunExecutor(), _create_projection=retain_projection,
         )
@@ -188,7 +188,7 @@ class ExternalProjectStatePhase3Tests(unittest.TestCase):
         try:
             with patch("docker.constructor_cli._discover_runtime_projection_from_container", return_value=None), \
                  patch("docker.versioning.runtime_verification.verify_runtime", side_effect=record_and_verify):
-                main(["--project-directory", str(alias), "verify", "--scope", "runtime", "--container", "pi-test", "--project", str(self.primary)], _process_runner=_VerifyRunner())
+                main(["--project-directory", str(alias), "verify", "--scope", "runtime", "--container", "pi-test", "--extra-workspace", str(self.primary)], _process_runner=_VerifyRunner())
             self.assertEqual([projection], captured)
             self.assertEqual(state.namespace, resolve_project_state(alias, cache_root=self.cache).namespace)
         finally:
@@ -217,7 +217,7 @@ class ExternalProjectStatePhase3Tests(unittest.TestCase):
             with patch("docker.launcher.artifact_cache.materialize_selected_artifacts", return_value={}):
                 run = orchestrate_run(RunRequest(
                     inventory_path=str(self.project / "docker-constructor.toml"), project_root=str(self.project),
-                    image="test:latest", selection=ProjectSelection(main_project=str(self.primary), optional_projects=(str(self.extra),)),
+                    image="test:latest", selection=WorkspaceSelection(workspace=str(self.primary), extra_workspaces=(str(self.extra),)),
                     pi_home_host=str(self.installation / "pi-home"), _constructor_cache_root=str(self.cache),
                     inspector=_Inspector(), executor=_RunExecutor(),
                 ))
@@ -269,7 +269,7 @@ exit 0
         })
         result = subprocess.run(
             [str(Path(__file__).parents[1] / "docker/collect-runtime-artifact-evidence.sh"),
-             "--project-directory", str(self.project), "--main-project", str(self.primary),
+             "--project-directory", str(self.project), "--workspace", str(self.primary),
              "--duration", "1"],
             cwd=self.installation, env=env, text=True, capture_output=True, timeout=30,
         )
@@ -318,7 +318,7 @@ exit 0
                  patch("docker.versioning.project_state.resolve_project_state", side_effect=AssertionError("default lookup called")), \
                  patch("pathlib.Path.read_bytes", autospec=True, side_effect=record_read), \
                  patch("docker.versioning.runtime_verification.verify_runtime", side_effect=record_and_verify):
-                main(["--project-directory", str(self.project), "verify", "--scope", "runtime", "--container", "pi-test", "--project", str(self.primary), "--runtime-projection", str(external)], _process_runner=_VerifyRunner())
+                main(["--project-directory", str(self.project), "verify", "--scope", "runtime", "--container", "pi-test", "--extra-workspace", str(self.primary), "--runtime-projection", str(external)], _process_runner=_VerifyRunner())
             self.assertEqual([external], captured)
             self.assertIn(external, read_paths)
         finally:

@@ -46,13 +46,13 @@ def _run(
     _container_inspector: Any = None,
     _run_executor: Any = None,
     _create_projection: Any = None,
-    _project_selector: Any = None,
+    _workspace_selector: Any = None,
 ) -> tuple[int, str, str]:
     # Run commands now resolve external project state from the selected
     # constructor project; integration fixtures must provide that readable
     # directory rather than relying on the former lexical checkout paths.
     for index, value in enumerate(argv[:-1]):
-        if value == "--main-project":
+        if value == "--workspace":
             Path(argv[index + 1]).mkdir(parents=True, exist_ok=True)
     out = io.StringIO()
     err = io.StringIO()
@@ -81,7 +81,7 @@ def _run(
             _container_inspector=_container_inspector,
             _run_executor=_run_executor,
             _create_projection=_create_projection,
-            _project_selector=_project_selector,
+            _workspace_selector=_workspace_selector,
         )
     return rc, out.getvalue(), err.getvalue()
 
@@ -313,13 +313,13 @@ class _ScriptedProcessRunner:
 def _build_happy_runtime_runner(
     container: str,
     proj_hash: str,
-    project_paths: tuple[str, ...],
+    workspace_paths: tuple[str, ...],
     extensions: dict[str, tuple[str, str]],
     gateway: str | None = None,
 ) -> _ScriptedProcessRunner:
     """Return a scripted runner where every runtime check **passes**.
 
-    *project_paths* are container-side directory paths (e.g.
+    *workspace_paths* are container-side directory paths (e.g.
     ``("/tmp/p1",)``).  *extensions* maps extension key → (package,
     version).  When *gateway* is ``None``, the real operational
     gateway is read from the repository ``.env``.
@@ -352,22 +352,22 @@ def _build_happy_runtime_runner(
     for _key, (pkg, ver) in sorted(extensions.items()):
         r.when(f"cat /home/dev/.pi/agent/npm/node_modules/{pkg}/package.json",
                rc=0, stdout=json.dumps({"version": ver}))
-    # ── project paths ──
-    for i, pp in enumerate(project_paths, start=1):
+    # ── workspace paths ──
+    for i, pp in enumerate(workspace_paths, start=1):
         r.when(f"test -d {pp}", rc=0)
         r.when(f"printenv PROJECT_PATH_{i}", rc=0, stdout=pp)
     # guard: no next entry
-    if project_paths:
-        r.when(f"printenv PROJECT_PATH_{len(project_paths) + 1}", rc=1)
+    if workspace_paths:
+        r.when(f"printenv PROJECT_PATH_{len(workspace_paths) + 1}", rc=1)
     # ── working directory ──
-    if project_paths:
-        r.when("pwd", rc=0, stdout=project_paths[0])
+    if workspace_paths:
+        r.when("pwd", rc=0, stdout=workspace_paths[0])
     else:
         r.when("pwd", rc=0, stdout="/home/dev")
     # ── ownership ──
     # Match stat commands by the last argument (the path).
     r.when("stat -c %U:%G /home/dev/.pi", rc=0, stdout="dev:dev")
-    for i, pp in enumerate(project_paths, start=1):
+    for i, pp in enumerate(workspace_paths, start=1):
         r.when(f"stat -c %U:%G {pp}", rc=0, stdout="dev:dev")
     # ── pi-home ──
     r.when("test -d /home/dev/.pi", rc=0)
@@ -730,7 +730,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["run", "--main-project", "/tmp/fake-project"],
+            ["run", "--workspace", "/tmp/fake-project"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
             _run_executor=_FailingExecutor(),
@@ -748,7 +748,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         # Verify structural data through JSON output.
         rc_j, out_j, _ = _run(
             self.m,
-            ["--output", "json", "run", "--main-project",
+            ["--output", "json", "run", "--workspace",
              "/tmp/fake-project"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
@@ -788,7 +788,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["--output", "json", "run", "--main-project",
+            ["--output", "json", "run", "--workspace",
              "/tmp/fake-project", "--no-tty", "--no-interactive"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
@@ -814,17 +814,17 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         # The message summarises the exit.
         self.assertIn("127", data.get("message", ""))
 
-    def test_missing_main_project_returns_config(self) -> None:
-        """When ``--main-project`` is absent and TUI is not
-        requested, ``resolve_project_selection`` raises
-        ``NoMainProjectError`` and the facade returns CONFIG."""
+    def test_missing_workspace_returns_config(self) -> None:
+        """When ``--workspace`` is absent and TUI is not
+        requested, ``resolve_workspace_selection`` raises
+        ``NoWorkspaceError`` and the facade returns CONFIG."""
         rc, out, err = _run(
             self.m,
             ["run", "--dry-run"],
             _prompt_user=lambda _: True,
         )
         self.assertEqual(3, rc)
-        self.assertIn("no main project", _strip_ansi(err).lower())
+        self.assertIn("no primary workspace", _strip_ansi(err).lower())
 
     def test_captured_failure_exposes_both_streams_in_json(self) -> None:
         """In captured (non-interactive) mode, both stdout and
@@ -846,7 +846,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             rc, out, err = _run(
                 self.m,
-                ["--output", "json", "run", "--main-project",
+                ["--output", "json", "run", "--workspace",
                  str(Path(td) / "main-project"),
                  "--no-tty", "--no-interactive"],
                 _process_runner=runner,
@@ -890,7 +890,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             rc, out, err = _run(
                 self.m,
-                ["run", "--main-project", str(Path(td) / "main-project"),
+                ["run", "--workspace", str(Path(td) / "main-project"),
                  "--no-tty", "--no-interactive"],
                 _process_runner=runner,
                 _container_inspector=self._fake_inspector("pi-0001"),
@@ -932,7 +932,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["--output", "json", "run", "--main-project",
+            ["--output", "json", "run", "--workspace",
              "/tmp/fake-project", "--tty"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
@@ -988,7 +988,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["run", "--main-project", "/tmp/fake-project"],
+            ["run", "--workspace", "/tmp/fake-project"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
             _run_executor=_SpyExecutor(),
@@ -1027,7 +1027,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["run", "--main-project", "/tmp/fake-project",
+            ["run", "--workspace", "/tmp/fake-project",
              "--no-tty", "--no-interactive"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
@@ -1071,7 +1071,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
 
         rc, out, err = _run(
             self.m,
-            ["run", "--main-project", "/tmp/fake-project", "--tty"],
+            ["run", "--workspace", "/tmp/fake-project", "--tty"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
             _run_executor=executor,
@@ -1170,7 +1170,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         def _run_in_worker() -> None:
             result.append(_run(
                 self.m,
-                ["run", "--main-project", "/tmp/fake-project",
+                ["run", "--workspace", "/tmp/fake-project",
                  "--tty"],
                 _process_runner=runner,
                 _container_inspector=self._fake_inspector("pi-0001"),
@@ -1290,7 +1290,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         # ── text mode ───────────────────────────────────────
         rc_text, out_text, err_text = _run(
             self.m,
-            ["run", "--main-project", "/tmp/fake-project",
+            ["run", "--workspace", "/tmp/fake-project",
              "--no-tty", "--no-interactive"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
@@ -1318,7 +1318,7 @@ class TestRunFailureDiagnostics(unittest.TestCase):
         # ── JSON mode ───────────────────────────────────────
         rc_json, out_json, err_json = _run(
             self.m,
-            ["--output", "json", "run", "--main-project",
+            ["--output", "json", "run", "--workspace",
              "/tmp/fake-project", "--no-tty", "--no-interactive"],
             _process_runner=runner,
             _container_inspector=self._fake_inspector("pi-0001"),
@@ -1536,7 +1536,7 @@ class TestVerifyRuntimeMountDiagnostics(unittest.TestCase):
         return _build_happy_runtime_runner(
             container="test-ctr",
             proj_hash=self._proj_hash,
-            project_paths=("/tmp/proj1",),
+            workspace_paths=("/tmp/proj1",),
             extensions={"@llblab/pi-codex-usage":
                         ("@llblab/pi-codex-usage", "0.9.1")},
         )
@@ -1549,7 +1549,7 @@ class TestVerifyRuntimeMountDiagnostics(unittest.TestCase):
             "verify", "--scope", "runtime",
             "--container", "test-ctr",
             "--runtime-projection", self._proj_path,
-            "--project", "/tmp/proj1",
+            "--workspace", "/tmp/proj1",
         ]
 
     @property
@@ -1918,41 +1918,36 @@ class TestProjectErrorDiagnostics(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.m = _load_mod()
 
-    def test_no_main_project_through_facade_config_exit_and_suggestion(self) -> None:
-        """A facade-level ``NoMainProjectError`` produces CONFIG exit
-        code and suggests ``--main-project`` or ``--tui``."""
+    def test_no_workspace_through_facade_config_exit_and_suggestion(self) -> None:
+        """A facade-level ``NoWorkspaceError`` produces CONFIG exit
+        code and suggests ``--workspace`` or ``--tui``."""
         fake = _make_fake_dispatcher(
             self.m, exit_kind="config",
             message=(
-                "no main project selected; "
-                "pass --main-project or use --tui"
+                "no primary workspace selected; "
+                "pass --workspace or use --tui"
             ),
         )
         rc, out, err = _run(self.m, ["run", "--dry-run"], dispatcher=fake)
         self.assertEqual(3, rc)
         text = _strip_ansi(err)
-        self.assertIn("no main project", text.lower())
-        self.assertIn("--main-project", text)
+        self.assertIn("no primary workspace", text.lower())
+        self.assertIn("--workspace", text)
         self.assertIn("--tui", text)
 
-    def test_duplicate_project_paths_reported_in_error(self) -> None:
-        """Duplicate project paths are rejected before Docker is invoked,
+    def test_duplicate_workspace_paths_reported_in_error(self) -> None:
+        """Duplicate workspace paths are rejected before Docker is invoked,
         with the duplicated path in the error."""
-        fake = _make_fake_dispatcher(
-            self.m, exit_kind="config",
-            message=(
-                "duplicate project path: "
-                "/tmp/proj1 (--main-project and --project)"
-            ),
-        )
         rc, out, err = _run(
             self.m,
-            ["run", "--main-project", "/tmp/proj1",
-             "--project", "/tmp/proj1", "--dry-run"],
-            dispatcher=fake,
+            ["run", "--workspace", "/tmp/proj1",
+             "--extra-workspace", "/tmp/proj1", "--dry-run"],
         )
         self.assertEqual(3, rc)
-        self.assertIn("/tmp/proj1", _strip_ansi(err))
+        self.assertIn(
+            "Duplicate workspace path after normalisation: '/tmp/proj1'",
+            _strip_ansi(err),
+        )
 
 # ════════════════════════════════════════════════════════════════════════
 # 14.2  Cross-cutting evidence assertions
@@ -2065,7 +2060,7 @@ class TestEvidenceCompleteness(unittest.TestCase):
             runner = _build_happy_runtime_runner(
                 container="ev-ctr",
                 proj_hash=proj_hash,
-                project_paths=("/tmp/p1",),
+                workspace_paths=("/tmp/p1",),
                 extensions={"@llblab/p": ("@llblab/p", "0.9.1")},
             )
             # Cause an extension failure: return wrong version with
@@ -2086,7 +2081,7 @@ class TestEvidenceCompleteness(unittest.TestCase):
                  "verify", "--scope", "runtime",
                  "--container", "ev-ctr",
                  "--runtime-projection", proj_path,
-                 "--project", "/tmp/p1",
+                 "--workspace", "/tmp/p1",
                  "--collect-evidence",
                  "--output-dir", evidence_dir],
                 _process_runner=runner,

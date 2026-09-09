@@ -132,4 +132,4 @@ class LegacyAndWorkspaceNeutralityTests(unittest.TestCase):
     def test_renderer_rejects_checkout_local_runtime_projection(self):
         from docker.versioning.rendering import RunRenderInputs, render_run_vector
         with self.assertRaisesRegex(ValueError, 'external project-state'):
-            render_run_vector(RunRenderInputs(image='image', container_name='pi-1', pi_home_host='/home/user/.pi', projection_host_path='/work/constructor/.docker-generated/runtime/p.toml', projection_container_path='/run/pi-cli/docker-constructor.runtime.toml', main_project='/work/primary', project_state_runtime_root='/cache/projects/selected/runtime'))
+            render_run_vector(RunRenderInputs(image='image', container_name='pi-1', pi_home_host='/home/user/.pi', projection_host_path='/work/constructor/.docker-generated/runtime/p.toml', projection_container_path='/run/pi-cli/docker-constructor.runtime.toml', workspace='/work/primary', project_state_runtime_root='/cache/projects/selected/runtime'))

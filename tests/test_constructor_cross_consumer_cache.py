@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from docker.launcher import ProcessResult, ProjectSelection, RunRequest, orchestrate_run
+from docker.launcher import ProcessResult, WorkspaceSelection, RunRequest, orchestrate_run
 from docker.versioning.readonly_service import dispatch
 
 
@@ -209,7 +209,7 @@ class TestCrossConsumerCacheRoot(unittest.TestCase):
                 self.assertEqual(len(requested), first_request_count)
                 runtime = orchestrate_run(RunRequest(
                     inventory_path=str(inventory), image="test-image",
-                    selection=ProjectSelection(main_project="/work/project"),
+                    selection=WorkspaceSelection(workspace="/work/project"),
                     pi_home_host="/home/test/.pi", repo_root=str(checkout),
                     projection_parent_dir=str(checkout / ".docker-generated" / "runtime"),
                     _artifact_fetcher=fetch, executor=_Executor(), inspector=_Inspector(),

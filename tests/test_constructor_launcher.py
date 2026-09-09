@@ -1,19 +1,19 @@
-"""RED — Project Launcher Tests (Stage 11.1).
+"""RED — Workspace Launcher Tests (Stage 11.1).
 
-Failing tests for project selection, pi-N allocation, and
+Failing tests for workspace selection, pi-N allocation, and
 launch-vector assembly.  All tests use injected fakes — no Docker
 daemon, subprocess, filesystem, or network access.
 
 Design constraints:
-  - ``--main-project PATH`` selects the main project explicitly.
-  - ``--project PATH`` (repeatable) adds optional projects.
-  - ``--tui`` invokes interactive project selection.
-  - Project-selection precedence:
-    1. Explicit ``--main-project``
+  - ``--workspace PATH`` selects the primary workspace explicitly.
+  - ``--extra-workspace PATH`` (repeatable) adds an extra workspace.
+  - ``--tui`` invokes interactive workspace selection.
+  - Workspace-selection precedence:
+    1. Explicit ``--workspace``
     2. TUI selection (when ``--tui`` is requested)
     3. Automatic selection (if retained)
-    4. Otherwise: actionable ``NoMainProjectError``
-  - The first ``--project`` is never silently promoted to main.
+    4. Otherwise: actionable ``NoWorkspaceError``
+  - The first ``--extra-workspace`` is never silently promoted to primary workspace.
   - pi-N allocation uses ``docker ps -a`` inspection, best-effort.
   - The launch vector assembles into :class:`RunRenderInputs` and
     delegates to :func:`render_run_vector`.
@@ -31,11 +31,11 @@ from docker.launcher import (
     DockerContainerInspector,
     DockerRunExecutor,
     ExecutionMode,
-    NoMainProjectError,
+    NoWorkspaceError,
     ProcessResult,
     ProcessRunner,
-    ProjectSelection,
-    ProjectSelector,
+    WorkspaceSelection,
+    WorkspaceSelector,
     ProjectionFactory,
     RunExecutor,
     RunRequest,
@@ -138,219 +138,224 @@ class FakeProcessRunner(ProcessRunner):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 11.1.1 - Project selection from CLI flags
+# 11.1.1 - Workspace selection from CLI flags
 # ═══════════════════════════════════════════════════════════════════
 
 
-class TestProjectSelectionFromArgs(unittest.TestCase):
-    """Project selection contract: the CLI parser MUST support the
-    full flag surface described in the Phase 11 plan, and project
-    resolution MUST produce a :class:`ProjectSelection` that
+class TestWorkspaceSelectionFromArgs(unittest.TestCase):
+    """Workspace selection contract: the CLI parser MUST support the
+    full flag surface described in the Phase 11 plan, and workspace
+    resolution MUST produce a :class:`WorkspaceSelection` that
     observes the documented precedence rules."""
 
     # ── helpers ──────────────────────────────────────────────────
 
     @staticmethod
-    def _select(*, selector: ProjectSelector | None = None, **flags) -> ProjectSelection:
-        """Simulate resolving project selection from parsed CLI flags.
+    def _select(*, selector: WorkspaceSelector | None = None, **flags) -> WorkspaceSelection:
+        """Simulate resolving workspace selection from parsed CLI flags.
 
-        Mapped to the future ``resolve_project_selection()`` in
+        Mapped to the future ``resolve_workspace_selection()`` in
         ``docker/launcher.py``.
         """
-        from docker.launcher import resolve_project_selection
-        return resolve_project_selection(
-            main_project=flags.get("main_project"),
-            projects=flags.get("projects", ()),
+        from docker.launcher import resolve_workspace_selection
+        return resolve_workspace_selection(
+            workspace=flags.get("workspace"),
+            extra_workspaces=flags.get("extra_workspaces", ()),
             tui=flags.get("tui", False),
-            base_project_dir=flags.get("base_project_dir"),
+            workspace_root=flags.get("workspace_root"),
             selector=selector,
         )
 
-    # ── explicit main project ────────────────────────────────────
+    # ── explicit primary workspace ────────────────────────────────────
 
-    def test_explicit_main_project_no_optional(self) -> None:
-        sel = self._select(main_project="/work/p1")
-        self.assertEqual(sel.main_project, "/work/p1")
-        self.assertEqual(sel.optional_projects, ())
+    def test_explicit_primary_workspace_without_extra_workspaces(self) -> None:
+        sel = self._select(workspace="/work/p1")
+        self.assertEqual(sel.workspace, "/work/p1")
+        self.assertEqual(sel.extra_workspaces, ())
 
-    def test_explicit_main_project_with_one_optional(self) -> None:
+    def test_explicit_primary_workspace_with_one_extra_workspace(self) -> None:
         sel = self._select(
-            main_project="/work/p1", projects=["/work/p2"],
+            workspace="/work/p1", extra_workspaces=["/work/p2"],
         )
-        self.assertEqual(sel.main_project, "/work/p1")
-        self.assertEqual(sel.optional_projects, ("/work/p2",))
+        self.assertEqual(sel.workspace, "/work/p1")
+        self.assertEqual(sel.extra_workspaces, ("/work/p2",))
 
-    def test_explicit_main_project_with_two_optional(self) -> None:
+    def test_explicit_primary_workspace_with_two_extra_workspaces(self) -> None:
         sel = self._select(
-            main_project="/work/p1",
-            projects=["/work/p2", "/work/p3"],
+            workspace="/work/p1",
+            extra_workspaces=["/work/p2", "/work/p3"],
         )
-        self.assertEqual(sel.main_project, "/work/p1")
-        self.assertEqual(sel.optional_projects, ("/work/p2", "/work/p3"))
+        self.assertEqual(sel.workspace, "/work/p1")
+        self.assertEqual(sel.extra_workspaces, ("/work/p2", "/work/p3"))
 
-    def test_explicit_main_project_with_many_optional(self) -> None:
+    def test_explicit_primary_workspace_with_many_extra_workspaces(self) -> None:
         sel = self._select(
-            main_project="/work/main",
-            projects=[f"/work/p{i}" for i in range(5)],
+            workspace="/work/primary",
+            extra_workspaces=[f"/work/p{i}" for i in range(5)],
         )
-        self.assertEqual(sel.main_project, "/work/main")
-        self.assertEqual(len(sel.optional_projects), 5)
+        self.assertEqual(sel.workspace, "/work/primary")
+        self.assertEqual(len(sel.extra_workspaces), 5)
 
-    # ── no main project → error ──────────────────────────────────
+    # ── no primary workspace → error ──────────────────────────────────
 
-    def test_no_main_project_raises(self) -> None:
-        with self.assertRaises(NoMainProjectError):
+    def test_no_workspace_raises(self) -> None:
+        with self.assertRaises(NoWorkspaceError):
             self._select()
 
-    def test_no_main_project_only_optional_raises(self) -> None:
-        """The first --project is never silently treated as main."""
-        with self.assertRaises(NoMainProjectError):
-            self._select(projects=["/work/p1"])
+    def test_no_workspace_only_optional_raises(self) -> None:
+        """The first --extra-workspace is never silently treated as primary workspace."""
+        with self.assertRaises(NoWorkspaceError):
+            self._select(extra_workspaces=["/work/p1"])
 
-    def test_no_main_project_multiple_optional_raises(self) -> None:
-        with self.assertRaises(NoMainProjectError):
-            self._select(projects=["/work/p1", "/work/p2"])
+    def test_no_workspace_multiple_optional_raises(self) -> None:
+        with self.assertRaises(NoWorkspaceError):
+            self._select(extra_workspaces=["/work/p1", "/work/p2"])
 
-    # ── stable optional ordering ─────────────────────────────────
+    # ── stable extra-workspace ordering ─────────────────────────────────
 
-    def test_optional_projects_preserve_insertion_order(self) -> None:
+    def test_extra_workspaces_preserve_insertion_order(self) -> None:
         sel = self._select(
-            main_project="/work/main",
-            projects=["/work/z", "/work/a", "/work/m"],
+            workspace="/work/primary",
+            extra_workspaces=["/work/z", "/work/a", "/work/m"],
         )
         self.assertEqual(
-            sel.optional_projects,
+            sel.extra_workspaces,
             ("/work/z", "/work/a", "/work/m"),
         )
 
     # ── duplicate rejection ──────────────────────────────────────
 
-    def test_main_equals_optional_rejected(self) -> None:
+    def test_primary_workspace_equal_to_extra_workspace_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._select(
-                main_project="/work/p1", projects=["/work/p1"],
+                workspace="/work/p1", extra_workspaces=["/work/p1"],
             )
 
-    def test_duplicate_optional_paths_rejected(self) -> None:
+    def test_duplicate_extra_workspace_paths_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._select(
-                main_project="/work/p1",
-                projects=["/work/p2", "/work/p2"],
+                workspace="/work/p1",
+                extra_workspaces=["/work/p2", "/work/p2"],
             )
 
     # ── path validation ──────────────────────────────────────────
 
-    def test_relative_main_project_rejected(self) -> None:
-        with self.assertRaises(ValueError):
-            self._select(main_project="relative/path")
+    def test_relative_workspace_is_normalized_to_absolute(self) -> None:
+        selection = self._select(workspace="relative/path")
+        self.assertEqual(
+            selection.workspace, os.path.abspath("relative/path"),
+        )
 
-    def test_relative_optional_project_rejected(self) -> None:
+    def test_relative_extra_workspace_is_normalized_to_absolute(self) -> None:
+        selection = self._select(
+            workspace="/work/p1",
+            extra_workspaces=["relative/path"],
+        )
+        self.assertEqual(
+            selection.extra_workspaces,
+            (os.path.abspath("relative/path"),),
+        )
+
+    def test_empty_workspace_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._select(workspace="")
+
+    def test_empty_extra_workspace_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._select(
-                main_project="/work/p1",
-                projects=["relative/path"],
-            )
-
-    def test_empty_main_project_rejected(self) -> None:
-        with self.assertRaises(ValueError):
-            self._select(main_project="")
-
-    def test_empty_optional_project_rejected(self) -> None:
-        with self.assertRaises(ValueError):
-            self._select(
-                main_project="/work/p1", projects=[""],
+                workspace="/work/p1", extra_workspaces=[""],
             )
 
     # ── normalized-path duplicate detection ──────────────────────
 
-    def test_normalized_duplicate_main_and_optional_rejected(self) -> None:
+    def test_normalized_duplicate_primary_and_extra_workspace_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._select(
-                main_project="/work/a",
-                projects=["/work/./a"],
+                workspace="/work/a",
+                extra_workspaces=["/work/./a"],
             )
 
-    def test_normalized_duplicate_optionals_rejected(self) -> None:
+    def test_normalized_duplicate_extra_workspaces_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._select(
-                main_project="/work/main",
-                projects=["/work/a", "/work/./a"],
+                workspace="/work/primary",
+                extra_workspaces=["/work/a", "/work/./a"],
             )
 
     def test_normalized_duplicate_deep_traversal_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._select(
-                main_project="/work/main",
-                projects=["/work/a/b/../c", "/work/a/c"],
+                workspace="/work/primary",
+                extra_workspaces=["/work/a/b/../c", "/work/a/c"],
             )
 
-    # ── TUI selection (injected ProjectSelector boundary) ────────
+    # ── TUI selection (injected WorkspaceSelector boundary) ────────
 
-    def test_tui_selects_main_project(self) -> None:
+    def test_tui_selects_workspace(self) -> None:
         """When --tui is requested and the selector returns a
-        ProjectSelection, that selection becomes the result."""
+        WorkspaceSelection, that selection becomes the result."""
         sel = self._select(
             tui=True,
-            selector=_FakeSelector("/work/tui-main"),
+            selector=_FakeSelector("/work/tui-primary"),
         )
-        self.assertEqual(sel.main_project, "/work/tui-main")
-        self.assertEqual(sel.optional_projects, ())
+        self.assertEqual(sel.workspace, "/work/tui-primary")
+        self.assertEqual(sel.extra_workspaces, ())
 
-    def test_tui_selects_main_plus_optional_projects(self) -> None:
-        """The TUI can return optional projects alongside the
-        main project — they are preserved in the result."""
+    def test_tui_selects_primary_and_extra_workspaces(self) -> None:
+        """The TUI can return extra workspaces alongside the
+        primary workspace — they are preserved in the result."""
         sel = self._select(
             tui=True,
             selector=_FakeSelector(
-                "/work/tui-main", ("/work/tui-opt1", "/work/tui-opt2"),
+                "/work/tui-primary", ("/work/tui-extra1", "/work/tui-extra2"),
             ),
         )
-        self.assertEqual(sel.main_project, "/work/tui-main")
+        self.assertEqual(sel.workspace, "/work/tui-primary")
         self.assertEqual(
-            sel.optional_projects,
-            ("/work/tui-opt1", "/work/tui-opt2"),
+            sel.extra_workspaces,
+            ("/work/tui-extra1", "/work/tui-extra2"),
         )
 
     def test_tui_cancellation_returns_error(self) -> None:
         """When --tui is requested but the selector returns None
-        (user cancelled), the result is NoMainProjectError."""
-        with self.assertRaises(NoMainProjectError):
+        (user cancelled), the result is NoWorkspaceError."""
+        with self.assertRaises(NoWorkspaceError):
             self._select(tui=True, selector=_FakeSelector.cancelled())
 
-    def test_tui_without_main_flag_still_requires_selection(self) -> None:
-        """--tui alone with no --main-project must still resolve a
-        main project through the TUI; cancellation is an error."""
-        with self.assertRaises(NoMainProjectError):
+    def test_tui_without_primary_workspace_flag_still_requires_selection(self) -> None:
+        """--tui alone with no --workspace must still resolve a
+        primary workspace through the TUI; cancellation is an error."""
+        with self.assertRaises(NoWorkspaceError):
             self._select(
-                tui=True, projects=["/work/p1"],
+                tui=True, extra_workspaces=["/work/p1"],
                 selector=_FakeSelector.cancelled(),
             )
 
-    # ── TUI + explicit main still works ──────────────────────────
+    # ── TUI + explicit primary workspace still works ──────────────────────────
 
-    def test_tui_with_explicit_main_project(self) -> None:
-        """Explicit --main-project takes precedence over --tui.
+    def test_tui_with_explicit_workspace(self) -> None:
+        """Explicit --workspace takes precedence over --tui.
         The selector is not consulted."""
         sel = self._select(
-            main_project="/work/main", tui=True,
+            workspace="/work/primary", tui=True,
             selector=_FakeSelector("/work/should-not-be-used"),
         )
-        self.assertEqual(sel.main_project, "/work/main")
+        self.assertEqual(sel.workspace, "/work/primary")
 
-    def test_explicit_main_ignores_tui_cancellation(self) -> None:
-        """When --main-project is given, even a cancelled TUI must
+    def test_explicit_primary_workspace_ignores_tui_cancellation(self) -> None:
+        """When --workspace is given, even a cancelled TUI must
         not prevent the selection — explicit beats TUI."""
         sel = self._select(
-            main_project="/work/main", tui=True,
+            workspace="/work/primary", tui=True,
             selector=_FakeSelector.cancelled(),
         )
-        self.assertEqual(sel.main_project, "/work/main")
+        self.assertEqual(sel.workspace, "/work/primary")
 
     # ── malformed TUI results ───────────────────────────────────
 
-    def test_tui_result_main_equals_optional_rejected(self) -> None:
+    def test_tui_result_primary_equal_to_extra_workspace_rejected(self) -> None:
         """The resolver validates the selector's result — a
-        returned main_project that duplicates an optional must
+        returned workspace that duplicates an extra workspace must
         be rejected, not blindly trusted."""
         with self.assertRaises(ValueError):
             self._select(
@@ -360,12 +365,12 @@ class TestProjectSelectionFromArgs(unittest.TestCase):
 
     def test_tui_result_duplicate_optional_paths_rejected(self) -> None:
         """The resolver must reject a selector result where two
-        optional projects are the same path."""
+        extra workspaces are the same path."""
         with self.assertRaises(ValueError):
             self._select(
                 tui=True,
                 selector=_FakeSelector.from_raw(
-                    "/work/main", ("/work/opt", "/work/opt"),
+                    "/work/primary", ("/work/extra", "/work/extra"),
                 ),
             )
 
@@ -376,23 +381,23 @@ class TestProjectSelectionFromArgs(unittest.TestCase):
             self._select(
                 tui=True,
                 selector=_FakeSelector.from_raw(
-                    "/work/main", ("/work/a", "/work/./a"),
+                    "/work/primary", ("/work/a", "/work/./a"),
                 ),
             )
 
-    def test_tui_result_relative_main_project_rejected(self) -> None:
-        """A selector that returns a relative main_project path
-        must be rejected — absolute paths are required."""
-        with self.assertRaises(ValueError):
-            self._select(
-                tui=True,
-                selector=_FakeSelector.from_raw(
-                    "relative/path", (),
-                ),
-            )
+    def test_tui_result_relative_workspace_is_normalized_to_absolute(self) -> None:
+        """A selector result receives the same lexical absolute
+        normalization as CLI workspace paths."""
+        selection = self._select(
+            tui=True,
+            selector=_FakeSelector.from_raw("relative/path", ()),
+        )
+        self.assertEqual(
+            selection.workspace, os.path.abspath("relative/path"),
+        )
 
-    def test_tui_result_empty_main_project_rejected(self) -> None:
-        """A selector that returns an empty main_project must be
+    def test_tui_result_empty_workspace_rejected(self) -> None:
+        """A selector that returns an empty workspace must be
         rejected."""
         with self.assertRaises(ValueError):
             self._select(
@@ -407,49 +412,49 @@ class TestProjectSelectionFromArgs(unittest.TestCase):
 
 
 class _FakeSelector:
-    """Fake :class:`ProjectSelector` for deterministic tests."""
+    """Fake :class:`WorkspaceSelector` for deterministic tests."""
 
     def __init__(
         self,
-        main: str,
-        optionals: tuple[str, ...] = (),
+        primary_workspace: str,
+        extra_workspaces: tuple[str, ...] = (),
     ) -> None:
-        self._main = main
-        self._optionals = optionals
+        self._primary_workspace = primary_workspace
+        self._extra_workspaces = extra_workspaces
 
     @classmethod
     def cancelled(cls) -> "_FakeSelector":
         """Return a selector that simulates user cancellation."""
         inst = cls.__new__(cls)
-        inst._main = ""  # signals cancelled
-        inst._optionals = ()
+        inst._primary_workspace = ""  # signals cancelled
+        inst._extra_workspaces = ()
         return inst
 
     @classmethod
     def from_raw(
-        cls, main: str, optionals: tuple[str, ...],
+        cls, primary_workspace: str, extra_workspaces: tuple[str, ...],
     ) -> "_FakeSelector":
         """Return a selector that returns a pre-built
-        :class:`ProjectSelection` with potentially invalid fields.
+        :class:`WorkspaceSelection` with potentially invalid fields.
 
         Uses ``object.__setattr__`` to bypass ``__post_init__``
         validation so the resolver's own validation can be tested.
         """
-        sel = ProjectSelection.__new__(ProjectSelection)
-        object.__setattr__(sel, "main_project", main)
-        object.__setattr__(sel, "optional_projects", optionals)
+        sel = WorkspaceSelection.__new__(WorkspaceSelection)
+        object.__setattr__(sel, "workspace", primary_workspace)
+        object.__setattr__(sel, "extra_workspaces", extra_workspaces)
         inst = cls.__new__(cls)
         inst._result = sel
         return inst
 
-    def select(self) -> ProjectSelection | None:
+    def select(self) -> WorkspaceSelection | None:
         if hasattr(self, "_result"):
             return self._result  # from_raw
-        if not self._main:
+        if not self._primary_workspace:
             return None
-        return ProjectSelection(
-            main_project=self._main,
-            optional_projects=self._optionals,
+        return WorkspaceSelection(
+            workspace=self._primary_workspace,
+            extra_workspaces=self._extra_workspaces,
         )
 
 
@@ -589,15 +594,15 @@ class TestPiNAllocation(unittest.TestCase):
 
 
 class TestLaunchVectorContract(unittest.TestCase):
-    """Integration of project selection → :class:`RunRenderInputs` →
+    """Integration of workspace selection → :class:`RunRenderInputs` →
     :func:`render_run_vector`.  The launcher must produce a correct
-    ``docker run`` vector from selected projects without Compose."""
+    ``docker run`` vector from selected extra_workspaces without Compose."""
 
     # ── helpers ──────────────────────────────────────────────────
 
     @staticmethod
     def _build_inputs(
-        selection: ProjectSelection,
+        selection: WorkspaceSelection,
         *,
         image: str = "pi-cli-pi:latest",
         container_name: str = "pi-1",
@@ -632,12 +637,12 @@ class TestLaunchVectorContract(unittest.TestCase):
     # ── basic shape ──────────────────────────────────────────────
 
     def test_command_starts_with_docker_run_rm(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         args = self._vector(self._build_inputs(sel))
         self.assertEqual(args[:3], ("docker", "run", "--rm"))
 
     def test_no_compose_in_output(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         args = self._vector(self._build_inputs(sel))
         self.assertNotIn("compose", args)
         self.assertNotIn("-f", args)
@@ -646,7 +651,7 @@ class TestLaunchVectorContract(unittest.TestCase):
     # ── container name ───────────────────────────────────────────
 
     def test_container_name_in_vector(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = self._build_inputs(sel, container_name="pi-7")
         args = self._vector(inputs)
         name_idx = args.index("--name")
@@ -656,42 +661,42 @@ class TestLaunchVectorContract(unittest.TestCase):
 
     def test_pi_home_mounted_to_container(self) -> None:
         """Host Pi home is mounted at /home/dev/.pi in the container."""
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = self._build_inputs(sel, pi_home_host="/host/pi")
         args = self._vector(inputs)
         spec = _parse_mount_spec(args, dst="/home/dev/.pi")
         self.assertEqual(spec["src"], "/host/pi")
         self.assertEqual(spec["dst"], "/home/dev/.pi")
 
-    # ── main project 1:1 mount + workdir ─────────────────────────
+    # ── primary workspace 1:1 mount + workdir ─────────────────────────
 
-    def test_main_project_1to1_mount(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+    def test_workspace_1to1_mount(self) -> None:
+        sel = WorkspaceSelection(workspace="/work/p1")
         args = self._vector(self._build_inputs(sel))
         spec = _parse_mount_spec(args, dst="/work/p1")
         self.assertEqual(spec["src"], "/work/p1")
 
-    def test_main_project_is_workdir(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+    def test_workspace_is_workdir(self) -> None:
+        sel = WorkspaceSelection(workspace="/work/p1")
         args = self._vector(self._build_inputs(sel))
         wd_idx = args.index("--workdir")
         self.assertEqual(args[wd_idx + 1], "/work/p1")
 
-    # ── optional projects ────────────────────────────────────────
+    # ── extra workspaces ────────────────────────────────────────
 
-    def test_one_optional_project_mount(self) -> None:
-        sel = ProjectSelection(
-            main_project="/work/main",
-            optional_projects=("/work/opt",),
+    def test_one_extra_workspace_mount(self) -> None:
+        sel = WorkspaceSelection(
+            workspace="/work/primary",
+            extra_workspaces=("/work/extra",),
         )
         args = self._vector(self._build_inputs(sel))
-        spec = _parse_mount_spec(args, dst="/work/opt")
-        self.assertEqual(spec["src"], "/work/opt")
+        spec = _parse_mount_spec(args, dst="/work/extra")
+        self.assertEqual(spec["src"], "/work/extra")
 
-    def test_two_optional_projects_mount(self) -> None:
-        sel = ProjectSelection(
-            main_project="/work/main",
-            optional_projects=("/work/a", "/work/b"),
+    def test_two_extra_workspaces_mount(self) -> None:
+        sel = WorkspaceSelection(
+            workspace="/work/primary",
+            extra_workspaces=("/work/a", "/work/b"),
         )
         args = self._vector(self._build_inputs(sel))
         spec_a = _parse_mount_spec(args, dst="/work/a")
@@ -699,79 +704,79 @@ class TestLaunchVectorContract(unittest.TestCase):
         self.assertEqual(spec_a["src"], "/work/a")
         self.assertEqual(spec_b["src"], "/work/b")
 
-    def test_optional_projects_preserved_in_order(self) -> None:
-        sel = ProjectSelection(
-            main_project="/work/main",
-            optional_projects=("/work/z", "/work/a"),
+    def test_extra_workspaces_preserved_in_order(self) -> None:
+        sel = WorkspaceSelection(
+            workspace="/work/primary",
+            extra_workspaces=("/work/z", "/work/a"),
         )
         args = self._vector(self._build_inputs(sel))
         z_idx = _find_mount(args, dst="/work/z")
         a_idx = _find_mount(args, dst="/work/a")
-        self.assertLess(z_idx, a_idx, "optional mounts must preserve order")
+        self.assertLess(z_idx, a_idx, "extra-workspace mounts must preserve order")
 
     # ── PROJECT_PATH_* environment ───────────────────────────────
 
-    def test_project_path_1_is_main(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+    def test_runtime_path_1_is_primary_workspace(self) -> None:
+        sel = WorkspaceSelection(workspace="/work/p1")
         args = self._vector(self._build_inputs(sel))
         self.assertIn("PROJECT_PATH_1=/work/p1", args)
 
-    def test_project_path_2_is_first_optional(self) -> None:
-        sel = ProjectSelection(
-            main_project="/work/main",
-            optional_projects=("/work/opt1", "/work/opt2"),
+    def test_runtime_path_2_is_first_extra_workspace(self) -> None:
+        sel = WorkspaceSelection(
+            workspace="/work/primary",
+            extra_workspaces=("/work/extra1", "/work/extra2"),
         )
         args = self._vector(self._build_inputs(sel))
-        self.assertIn("PROJECT_PATH_1=/work/main", args)
-        self.assertIn("PROJECT_PATH_2=/work/opt1", args)
-        self.assertIn("PROJECT_PATH_3=/work/opt2", args)
+        self.assertIn("PROJECT_PATH_1=/work/primary", args)
+        self.assertIn("PROJECT_PATH_2=/work/extra1", args)
+        self.assertIn("PROJECT_PATH_3=/work/extra2", args)
 
-    def test_project_path_count_matches_projects(self) -> None:
-        sel = ProjectSelection(
-            main_project="/work/main",
-            optional_projects=("/work/a", "/work/b", "/work/c"),
+    def test_runtime_path_count_matches_extra_workspaces(self) -> None:
+        sel = WorkspaceSelection(
+            workspace="/work/primary",
+            extra_workspaces=("/work/a", "/work/b", "/work/c"),
         )
         args = self._vector(self._build_inputs(sel))
         project_path_count = sum(
             1 for a in args if a.startswith("PROJECT_PATH_")
         )
-        self.assertEqual(project_path_count, 4)  # 1 main + 3 optional
+        self.assertEqual(project_path_count, 4)  # 1 primary + 3 extra
 
-    def test_many_optionals_each_mounted_and_exported(self) -> None:
-        """Every optional project appears as a 1:1 mount *and* as a
+    def test_many_extra_workspaces_each_mounted_and_exported(self) -> None:
+        """Every extra workspace appears as a 1:1 mount *and* as a
         consecutive PROJECT_PATH_N with no gaps in numbering."""
-        optionals = tuple(f"/work/opt{i}" for i in range(1, 6))
-        sel = ProjectSelection(
-            main_project="/work/main",
-            optional_projects=optionals,
+        extra_workspaces = tuple(f"/work/extra{i}" for i in range(1, 6))
+        sel = WorkspaceSelection(
+            workspace="/work/primary",
+            extra_workspaces=extra_workspaces,
         )
         args = self._vector(self._build_inputs(sel))
 
-        # Main project: mount + PROJECT_PATH_1
-        main_spec = _parse_mount_spec(args, dst="/work/main")
-        self.assertEqual(main_spec["src"], "/work/main")
-        self.assertIn("PROJECT_PATH_1=/work/main", args)
+        # Primary workspace: mount + PROJECT_PATH_1
+        primary_spec = _parse_mount_spec(args, dst="/work/primary")
+        self.assertEqual(primary_spec["src"], "/work/primary")
+        self.assertIn("PROJECT_PATH_1=/work/primary", args)
 
-        # Each optional: mounted 1:1 and exported consecutively
-        for i, path in enumerate(optionals, start=2):
+        # Each extra workspace: mounted 1:1 and exported consecutively
+        for i, path in enumerate(extra_workspaces, start=2):
             spec = _parse_mount_spec(args, dst=path)
             self.assertEqual(
                 spec["src"], path,
-                f"optional project {path!r} must be mounted 1:1",
+                f"extra workspace {path!r} must be mounted 1:1",
             )
             self.assertIn(
                 f"PROJECT_PATH_{i}={path}", args,
                 f"{path!r} must be exported as PROJECT_PATH_{i}",
             )
 
-        # No gaps: exactly N+1 PROJECT_PATH_ vars for N optionals
+        # No gaps: exactly N+1 PROJECT_PATH_ vars for N extra workspaces
         exported = sorted(
             a for a in args if a.startswith("PROJECT_PATH_")
         )
         expected = [
             f"PROJECT_PATH_{i}={p}"
             for i, p in enumerate(
-                ("/work/main",) + optionals, start=1,
+                ("/work/primary",) + extra_workspaces, start=1,
             )
         ]
         self.assertEqual(
@@ -785,7 +790,7 @@ class TestLaunchVectorContract(unittest.TestCase):
         from dataclasses import replace
 
         from docker.versioning.rendering import RunHostAccess
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = replace(
             self._build_inputs(sel),
             host_access=RunHostAccess(address="192.168.1.1", mode="external-address"),
@@ -800,7 +805,7 @@ class TestLaunchVectorContract(unittest.TestCase):
     # ── image and command ────────────────────────────────────────
 
     def test_image_placed_correctly(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = self._build_inputs(sel, image="my-image:tag")
         args = self._vector(inputs)
         # Image must be the last argument before any passthrough command.
@@ -809,13 +814,13 @@ class TestLaunchVectorContract(unittest.TestCase):
     # ── chown_on_start ───────────────────────────────────────────
 
     def test_chown_on_start_set(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = self._build_inputs(sel, chown_on_start="1")
         args = self._vector(inputs)
         self.assertIn("CHOWN_WORK_ON_START=1", args)
 
     def test_no_chown_on_start_when_none(self) -> None:
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = self._build_inputs(sel, chown_on_start=None)
         args = self._vector(inputs)
         chown_vars = [a for a in args if "CHOWN_WORK_ON_START" in a]
@@ -832,7 +837,7 @@ class TestLaunchVectorContract(unittest.TestCase):
         name = allocate_pi_name(inspector)
         self.assertEqual(name, "pi-3")
 
-        sel = ProjectSelection(main_project="/work/p1")
+        sel = WorkspaceSelection(workspace="/work/p1")
         inputs = self._build_inputs(sel, container_name=name)
         args = self._vector(inputs)
 
@@ -1063,7 +1068,7 @@ class TestRunTransaction(unittest.TestCase):
 
     def _make_fixture_toml(self) -> str:
         """Copy the real docker-constructor.toml and inject an
-        additional ``pi-read`` artifact at version ``0.3.0`` so
+        second ``pi-read`` artifact at version ``0.3.0`` so
         override-version selection is observable."""
         import shutil
         real = os.path.abspath(
@@ -1132,7 +1137,7 @@ class TestRunTransaction(unittest.TestCase):
             "inventory_path": self._inventory_path,
             "project_root": str(Path(self._inventory_path).parent),
             "image": "pi-cli-pi:latest",
-            "selection": ProjectSelection(main_project="/work/p1"),
+            "selection": WorkspaceSelection(workspace="/work/p1"),
             "pi_home_host": "/home/alice/.pi",
             "projection_parent_dir": self._proj_parent,
             "_create_projection": RecordingProjectionFactory(),
@@ -2391,25 +2396,25 @@ class TestRunTransaction(unittest.TestCase):
             "projection path must be absolute",
         )
 
-    def test_main_project_1to1_in_result(self) -> None:
+    def test_workspace_1to1_in_result(self) -> None:
         req = self._request(
-            selection=ProjectSelection(
-                main_project="/work/main",
-                optional_projects=("/work/opt",),
+            selection=WorkspaceSelection(
+                workspace="/work/primary",
+                extra_workspaces=("/work/extra",),
             ),
             executor=FakeRunExecutor(returncode=0),
             inspector=FakeContainerNameInspector(set()),
         )
         result = self._run(req)
-        # Main project mounted 1:1
-        main_spec = _parse_mount_spec(result.run_args, dst="/work/main")
-        self.assertEqual(main_spec["src"], "/work/main")
-        # Optional project mounted 1:1
-        opt_spec = _parse_mount_spec(result.run_args, dst="/work/opt")
-        self.assertEqual(opt_spec["src"], "/work/opt")
+        # Primary workspace mounted 1:1
+        primary_spec = _parse_mount_spec(result.run_args, dst="/work/primary")
+        self.assertEqual(primary_spec["src"], "/work/primary")
+        # Extra workspace mounted 1:1
+        opt_spec = _parse_mount_spec(result.run_args, dst="/work/extra")
+        self.assertEqual(opt_spec["src"], "/work/extra")
         # Both exported
-        self.assertIn("PROJECT_PATH_1=/work/main", result.run_args)
-        self.assertIn("PROJECT_PATH_2=/work/opt", result.run_args)
+        self.assertIn("PROJECT_PATH_1=/work/primary", result.run_args)
+        self.assertIn("PROJECT_PATH_2=/work/extra", result.run_args)
 
     # ── projection readability before execution ──────────────────
 
@@ -3658,7 +3663,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         """``RunRequest`` MUST NOT expose a ``cache_root`` field.
         Materialization is not a caller choice — every non-dry
         run must prepare artifacts before publication.  An
-        optional field that defers materialization when empty
+        deferred field that skips materialization when empty
         contradicts the authoritative launcher/runtime specs."""
         import dataclasses
         from docker.launcher import RunRequest
@@ -3666,7 +3671,7 @@ class TestEndToEndPlanningGuards(TestRunTransaction):
         self.assertNotIn(
             "cache_root", fields,
             "RunRequest must NOT expose cache_root — "
-            "materialization is constructor-owned, not optional",
+            "materialization is constructor-owned, not caller-selected",
         )
 
     def test_invalid_cache_root_fails_before_cache_and_execution(
@@ -3983,12 +3988,12 @@ class TestOrchestrationOrdering(unittest.TestCase):
         return ("order-fixture:" + url).encode("utf-8")
 
     def _request(self, **overrides: object) -> RunRequest:
-        from docker.launcher import ProjectSelection
+        from docker.launcher import WorkspaceSelection
         kwargs: dict[str, object] = {
             "inventory_path": self._inventory_path,
             "project_root": str(Path(self._inventory_path).parent),
             "image": "pi-cli-pi:latest",
-            "selection": ProjectSelection(main_project="/work/p1"),
+            "selection": WorkspaceSelection(workspace="/work/p1"),
             "pi_home_host": "/home/alice/.pi",
             "projection_parent_dir": self._proj_parent,
             "_create_projection": _LoggedProjectionFactory(self._event_log),
