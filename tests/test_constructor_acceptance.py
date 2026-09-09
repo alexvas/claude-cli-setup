@@ -355,10 +355,10 @@ def _build_happy_runtime_runner(
     # ── workspace paths ──
     for i, pp in enumerate(workspace_paths, start=1):
         r.when(f"test -d {pp}", rc=0)
-        r.when(f"printenv PROJECT_PATH_{i}", rc=0, stdout=pp)
+        r.when(f"printenv WORKSPACE_PATH_{i}", rc=0, stdout=pp)
     # guard: no next entry
     if workspace_paths:
-        r.when(f"printenv PROJECT_PATH_{len(workspace_paths) + 1}", rc=1)
+        r.when(f"printenv WORKSPACE_PATH_{len(workspace_paths) + 1}", rc=1)
     # ── working directory ──
     if workspace_paths:
         r.when("pwd", rc=0, stdout=workspace_paths[0])

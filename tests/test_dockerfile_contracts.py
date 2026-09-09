@@ -264,6 +264,27 @@ class TestDockerfileBuildContract(unittest.TestCase):
             DOCKERFILE,
         )
 
+    def test_runtime_home_copy_owns_all_descendants_for_custom_dev_identity(self) -> None:
+        """Cross-stage COPY otherwise resets descendants to root:root.
+
+        ``--chown`` is Docker's recursive copy-time ownership mechanism, so
+        this contract covers every runtime-home descendant without a later
+        whole-home ``chown -R``.
+        """
+        runtime_home_copies = (
+            ("/home/dev/.local", "/home/dev/.local"),
+            ("/home/dev/.rustup", "/home/dev/.rustup"),
+            ("/home/dev/.cargo/bin", "/home/dev/.cargo/bin"),
+            ("/home/dev/mcp", "/home/dev/mcp"),
+        )
+        for source, destination in runtime_home_copies:
+            with self.subTest(source=source):
+                self.assertIn(
+                    f"COPY --chown=dev:dev --from=toolchain {source} {destination}",
+                    DOCKERFILE,
+                )
+        self.assertNotRegex(DOCKERFILE, r"chown\\s+-R\\s+[^\\n]*?/home/dev(?:\\s|$)")
+
     def test_runtime_startup_files_and_entrypoint_agree(self) -> None:
         self.assertIn("COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh", DOCKERFILE)
         self.assertEqual(

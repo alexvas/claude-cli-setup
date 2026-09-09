@@ -182,12 +182,12 @@ class TestMounts(unittest.TestCase):
 
 
 class TestEnvironment(unittest.TestCase):
-    """Assert PROJECT_PATH_* and CHOWN_WORK_ON_START environment."""
+    """Assert WORKSPACE_PATH_* and CHOWN_WORK_ON_START environment."""
 
     def test_workspace_path_1_set(self):
         args = _render(workspace="/home/dev/work/app")
         env = _collect_env(args)
-        self.assertEqual(env.get("PROJECT_PATH_1"), "/home/dev/work/app")
+        self.assertEqual(env.get("WORKSPACE_PATH_1"), "/home/dev/work/app")
 
     def test_chown_on_start_when_set(self):
         args = _render(chown_on_start="1")
@@ -262,7 +262,7 @@ class TestImageAndCommand(unittest.TestCase):
 
 class TestExtraWorkspaces(unittest.TestCase):
     """Assert one and two extra workspaces receive 1:1 mounts and
-    ordered PROJECT_PATH_* variables."""
+    ordered WORKSPACE_PATH_* variables."""
 
     def test_one_extra_workspace_mount(self):
         args = _render(
@@ -280,9 +280,9 @@ class TestExtraWorkspaces(unittest.TestCase):
             extra_workspaces=("/home/dev/work/extra1",),
         )
         env = _collect_env(args)
-        self.assertEqual(env["PROJECT_PATH_1"], "/home/dev/work/primary")
-        self.assertEqual(env["PROJECT_PATH_2"], "/home/dev/work/extra1")
-        self.assertNotIn("PROJECT_PATH_3", env)
+        self.assertEqual(env["WORKSPACE_PATH_1"], "/home/dev/work/primary")
+        self.assertEqual(env["WORKSPACE_PATH_2"], "/home/dev/work/extra1")
+        self.assertNotIn("WORKSPACE_PATH_3", env)
 
     def test_two_extra_workspaces_mounts(self):
         args = _render(
@@ -299,9 +299,9 @@ class TestExtraWorkspaces(unittest.TestCase):
             extra_workspaces=("/home/dev/work/extra1", "/home/dev/work/extra2"),
         )
         env = _collect_env(args)
-        self.assertEqual(env["PROJECT_PATH_1"], "/home/dev/work/primary")
-        self.assertEqual(env["PROJECT_PATH_2"], "/home/dev/work/extra1")
-        self.assertEqual(env["PROJECT_PATH_3"], "/home/dev/work/extra2")
+        self.assertEqual(env["WORKSPACE_PATH_1"], "/home/dev/work/primary")
+        self.assertEqual(env["WORKSPACE_PATH_2"], "/home/dev/work/extra1")
+        self.assertEqual(env["WORKSPACE_PATH_3"], "/home/dev/work/extra2")
 
 
 # ---------------------------------------------------------------------------
@@ -419,18 +419,18 @@ class TestPathEdgeCases(unittest.TestCase):
         path = "/home/dev/work/projéct-α"
         args = _render(workspace=path)
         env = _collect_env(args)
-        self.assertEqual(env["PROJECT_PATH_1"], path)
+        self.assertEqual(env["WORKSPACE_PATH_1"], path)
 
     def test_workspace_path_with_leading_dashes(self):
         """A path like /home/dev/--help must not be misinterpreted
         as a Docker flag — it's a positional argument value."""
         path = "/home/dev/work/--workspace-name"
         args = _render(workspace=path)
-        # The path must appear verbatim after --workdir and as PROJECT_PATH_1.
+        # The path must appear verbatim after --workdir and as WORKSPACE_PATH_1.
         wd_idx = args.index("--workdir")
         self.assertEqual(args[wd_idx + 1], path)
         env = _collect_env(args)
-        self.assertEqual(env["PROJECT_PATH_1"], path)
+        self.assertEqual(env["WORKSPACE_PATH_1"], path)
 
     def test_pi_home_host_with_spaces(self):
         args = _render(pi_home_host="/home/user name/.pi")
@@ -491,11 +491,11 @@ class TestWorkspaceValidation(unittest.TestCase):
         self.assertIn("dst=/home/dev/work/extra1", args_str)
         self.assertIn("dst=/home/dev/work/extra2", args_str)
         self.assertIn("dst=/home/dev/work/extra3", args_str)
-        # All three exported as PROJECT_PATH_2,3,4
-        self.assertIn("PROJECT_PATH_1=/home/dev/work/primary", args)
-        self.assertIn("PROJECT_PATH_2=/home/dev/work/extra1", args)
-        self.assertIn("PROJECT_PATH_3=/home/dev/work/extra2", args)
-        self.assertIn("PROJECT_PATH_4=/home/dev/work/extra3", args)
+        # All three exported as WORKSPACE_PATH_2,3,4
+        self.assertIn("WORKSPACE_PATH_1=/home/dev/work/primary", args)
+        self.assertIn("WORKSPACE_PATH_2=/home/dev/work/extra1", args)
+        self.assertIn("WORKSPACE_PATH_3=/home/dev/work/extra2", args)
+        self.assertIn("WORKSPACE_PATH_4=/home/dev/work/extra3", args)
 
     def test_relative_workspace_rejected(self):
         with self.assertRaises(ValueError):

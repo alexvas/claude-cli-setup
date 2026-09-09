@@ -1,6 +1,6 @@
 #!/bin/bash
-# Fix PROJECT_PATH_* host-directory mounts, then drop to user dev (container starts as root).
-# docker-constructor.py defines PROJECT_PATH_* as host bind mounts; mountpoint guards image paths.
+# Fix WORKSPACE_PATH_* host-directory mounts, then drop to user dev (container starts as root).
+# docker-constructor.py defines WORKSPACE_PATH_* as host bind mounts; mountpoint guards image paths.
 set -euo pipefail
 
 CHOWN_WORK_ON_START="${CHOWN_WORK_ON_START:-1}"
@@ -39,7 +39,7 @@ fix_ownership_and_permissions() {
 }
 
 # Check whether a path is a container mount point.
-# PROJECT_PATH_* variables are bind mounts by design;
+# WORKSPACE_PATH_* variables are bind mounts by design;
 # mountpoint(1) confirms the path is not an ordinary image-layer directory.
 # Returns 0 for mount points, non-zero otherwise.
 is_mount_point() {
@@ -52,10 +52,40 @@ if [ "$(id -u)" = "0" ]; then
       echo "mountpoint command is required when CHOWN_WORK_ON_START is enabled" >&2
       exit 1
     fi
-    # Repair project mount points.
-    for var in ${!PROJECT_PATH_@}; do
+    # Validate the complete WORKSPACE_PATH_1..N contract before touching any
+    # mount.  Reject malformed suffixes, empty values, duplicates, and gaps so
+    # a partially configured environment can never receive partial repair.
+    declare -A workspace_paths=()
+    workspace_count=0
+    for var in ${!WORKSPACE_PATH_@}; do
+      suffix="${var#WORKSPACE_PATH_}"
+      if ! [[ "${suffix}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "invalid workspace variable ${var}: expected WORKSPACE_PATH_1..N" >&2
+        exit 1
+      fi
       path="${!var}"
-      if [ -n "${path}" ] && [ -d "${path}" ] && is_mount_point "${path}"; then
+      if [ -z "${path}" ]; then
+        echo "invalid workspace variable ${var}: path must not be empty" >&2
+        exit 1
+      fi
+      if [ -n "${workspace_paths[${suffix}]+configured}" ]; then
+        echo "duplicate workspace index ${suffix}" >&2
+        exit 1
+      fi
+      workspace_paths["${suffix}"]="${path}"
+      workspace_count=$((workspace_count + 1))
+    done
+    for ((index = 1; index <= workspace_count; index++)); do
+      if [ -z "${workspace_paths[${index}]+configured}" ]; then
+        echo "workspace variables must be consecutive WORKSPACE_PATH_1..N; missing WORKSPACE_PATH_${index}" >&2
+        exit 1
+      fi
+    done
+
+    # Repair validated workspace mount points in numeric contract order.
+    for ((index = 1; index <= workspace_count; index++)); do
+      path="${workspace_paths[${index}]}"
+      if [ -d "${path}" ] && is_mount_point "${path}"; then
         fix_ownership_and_permissions "${path}"
         gosu dev:dev git config --global --add safe.directory "${path}" 2>/dev/null || true
       fi
@@ -63,15 +93,11 @@ if [ "$(id -u)" = "0" ]; then
   fi
 
   # ── Protected runtime extension installer ─────────────────────────
-  # Runs whenever the runtime projection is mounted.  Pi-home
-  # ownership/permissions are repaired before the installer
-  # regardless of CHOWN_WORK_ON_START — the runtime contract
-  # requires dev:dev ownership before the installer runs.
+  # Runs whenever the runtime projection is mounted.  Ownership repair is
+  # intentionally limited to WORKSPACE_PATH_* mounts above; Pi home and other
+  # non-workspace mounts are never traversed by the entrypoint.
   RUNTIME_PROJECTION="/run/pi-cli/docker-constructor.runtime.toml"
   if [ -f "${RUNTIME_PROJECTION}" ]; then
-    if [ -d /home/dev/.pi ] && is_mount_point /home/dev/.pi; then
-      fix_ownership_and_permissions /home/dev/.pi
-    fi
     echo "==> Installing Pi extensions from runtime projection"
     if ! gosu dev:dev env PYTHONPATH=/usr/local/lib/pi-cli python3 -m docker.runtime_installer install; then
       echo "ERROR: Extension installation failed — aborting startup" >&2

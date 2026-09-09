@@ -4537,11 +4537,10 @@ class TestEntrypointExecution(unittest.TestCase):
         """Assert the harness trace reflects correct startup
         ordering and failure gating.
 
-        Required ordering (all of these must be present):
+        Required behavior:
 
-        1. Pi-home repair commands (find … chown, find … chmod)
-           appear before the installer launch.
-        2. The installer is launched via ``gosu dev:dev``.
+        1. The installer is launched via ``gosu dev:dev``.
+        2. Pi home is not traversed or repaired because it is not a workspace.
 
         Failure gating (none of these must appear):
 
@@ -4581,25 +4580,9 @@ class TestEntrypointExecution(unittest.TestCase):
             " gosu dev:dev",
         )
 
-        # ── repair commands must be present ────────────────────
-        self.assertGreater(
-            chown_idx, -1,
-            "trace must contain find … chown dev:dev repair",
-        )
-        self.assertGreater(
-            chmod_idx, -1,
-            "trace must contain find … chmod ug+rwX repair",
-        )
-
-        # ── repair before installer ────────────────────────────
-        self.assertLess(
-            chown_idx, installer_idx,
-            "chown repair must appear BEFORE installer launch",
-        )
-        self.assertLess(
-            chmod_idx, installer_idx,
-            "chmod repair must appear BEFORE installer launch",
-        )
+        # ── no non-workspace Pi-home repair ────────────────────
+        self.assertEqual(chown_idx, -1, "Pi home must not be ownership-repaired")
+        self.assertEqual(chmod_idx, -1, "Pi home must not be permission-repaired")
 
         # ── installer exits non-zero ───────────────────────────
         exit_lines = [l for l in lines if "exit_code" in l]

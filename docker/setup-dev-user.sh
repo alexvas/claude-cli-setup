@@ -30,7 +30,7 @@ fi
 
 if id dev >/dev/null 2>&1; then
   usermod -u "${DEV_UID}" -g dev -s "${dev_shell}" dev 2>/dev/null || true
-  chown -R dev:dev /home/dev 2>/dev/null || true
+  chown dev:dev /home/dev 2>/dev/null || true
   exit 0
 fi
 
@@ -48,4 +48,4 @@ elif ! getent passwd dev >/dev/null; then
 fi
 
 mkdir -p /home/dev
-chown -R dev:dev /home/dev
+chown dev:dev /home/dev

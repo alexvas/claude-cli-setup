@@ -260,18 +260,14 @@ ARG PI_CORPORATE_CA_PATH
 ARG OH_MY_ZSH_VERSION
 
 COPY --from=pi-tools /opt/pi /opt/pi
-COPY --from=toolchain /home/dev/.local /home/dev/.local
-COPY --from=toolchain /home/dev/.rustup /home/dev/.rustup
-COPY --from=toolchain /home/dev/.cargo/bin /home/dev/.cargo/bin
-COPY --from=toolchain /home/dev/mcp /home/dev/mcp
+# --chown applies to every copied descendant, including when DEV_UID/GID are
+# customized in the base stage.  Do not replace this with a whole-home rewrite.
+COPY --chown=dev:dev --from=toolchain /home/dev/.local /home/dev/.local
+COPY --chown=dev:dev --from=toolchain /home/dev/.rustup /home/dev/.rustup
+COPY --chown=dev:dev --from=toolchain /home/dev/.cargo/bin /home/dev/.cargo/bin
+COPY --chown=dev:dev --from=toolchain /home/dev/mcp /home/dev/mcp
 
-RUN chown dev:dev \
-      /home/dev/.local \
-      /home/dev/.rustup \
-      /home/dev/.cargo \
-      /home/dev/.cargo/bin \
-      /home/dev/mcp \
-    && ln -sf /opt/pi/bin/pi /usr/local/bin/pi \
+RUN ln -sf /opt/pi/bin/pi /usr/local/bin/pi \
     && install -d -o dev -g dev /home/dev/work \
     && install -d -o dev -g dev /home/dev/.npm-global \
     && install -d -o dev -g dev /home/dev/.npm-global/bin

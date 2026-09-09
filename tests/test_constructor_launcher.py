@@ -714,12 +714,12 @@ class TestLaunchVectorContract(unittest.TestCase):
         a_idx = _find_mount(args, dst="/work/a")
         self.assertLess(z_idx, a_idx, "extra-workspace mounts must preserve order")
 
-    # ── PROJECT_PATH_* environment ───────────────────────────────
+    # ── WORKSPACE_PATH_* environment ───────────────────────────────
 
     def test_runtime_path_1_is_primary_workspace(self) -> None:
         sel = WorkspaceSelection(workspace="/work/p1")
         args = self._vector(self._build_inputs(sel))
-        self.assertIn("PROJECT_PATH_1=/work/p1", args)
+        self.assertIn("WORKSPACE_PATH_1=/work/p1", args)
 
     def test_runtime_path_2_is_first_extra_workspace(self) -> None:
         sel = WorkspaceSelection(
@@ -727,9 +727,9 @@ class TestLaunchVectorContract(unittest.TestCase):
             extra_workspaces=("/work/extra1", "/work/extra2"),
         )
         args = self._vector(self._build_inputs(sel))
-        self.assertIn("PROJECT_PATH_1=/work/primary", args)
-        self.assertIn("PROJECT_PATH_2=/work/extra1", args)
-        self.assertIn("PROJECT_PATH_3=/work/extra2", args)
+        self.assertIn("WORKSPACE_PATH_1=/work/primary", args)
+        self.assertIn("WORKSPACE_PATH_2=/work/extra1", args)
+        self.assertIn("WORKSPACE_PATH_3=/work/extra2", args)
 
     def test_runtime_path_count_matches_extra_workspaces(self) -> None:
         sel = WorkspaceSelection(
@@ -738,13 +738,13 @@ class TestLaunchVectorContract(unittest.TestCase):
         )
         args = self._vector(self._build_inputs(sel))
         project_path_count = sum(
-            1 for a in args if a.startswith("PROJECT_PATH_")
+            1 for a in args if a.startswith("WORKSPACE_PATH_")
         )
         self.assertEqual(project_path_count, 4)  # 1 primary + 3 extra
 
     def test_many_extra_workspaces_each_mounted_and_exported(self) -> None:
         """Every extra workspace appears as a 1:1 mount *and* as a
-        consecutive PROJECT_PATH_N with no gaps in numbering."""
+        consecutive WORKSPACE_PATH_N with no gaps in numbering."""
         extra_workspaces = tuple(f"/work/extra{i}" for i in range(1, 6))
         sel = WorkspaceSelection(
             workspace="/work/primary",
@@ -752,10 +752,10 @@ class TestLaunchVectorContract(unittest.TestCase):
         )
         args = self._vector(self._build_inputs(sel))
 
-        # Primary workspace: mount + PROJECT_PATH_1
+        # Primary workspace: mount + WORKSPACE_PATH_1
         primary_spec = _parse_mount_spec(args, dst="/work/primary")
         self.assertEqual(primary_spec["src"], "/work/primary")
-        self.assertIn("PROJECT_PATH_1=/work/primary", args)
+        self.assertIn("WORKSPACE_PATH_1=/work/primary", args)
 
         # Each extra workspace: mounted 1:1 and exported consecutively
         for i, path in enumerate(extra_workspaces, start=2):
@@ -765,23 +765,23 @@ class TestLaunchVectorContract(unittest.TestCase):
                 f"extra workspace {path!r} must be mounted 1:1",
             )
             self.assertIn(
-                f"PROJECT_PATH_{i}={path}", args,
-                f"{path!r} must be exported as PROJECT_PATH_{i}",
+                f"WORKSPACE_PATH_{i}={path}", args,
+                f"{path!r} must be exported as WORKSPACE_PATH_{i}",
             )
 
-        # No gaps: exactly N+1 PROJECT_PATH_ vars for N extra workspaces
+        # No gaps: exactly N+1 WORKSPACE_PATH_ vars for N extra workspaces
         exported = sorted(
-            a for a in args if a.startswith("PROJECT_PATH_")
+            a for a in args if a.startswith("WORKSPACE_PATH_")
         )
         expected = [
-            f"PROJECT_PATH_{i}={p}"
+            f"WORKSPACE_PATH_{i}={p}"
             for i, p in enumerate(
                 ("/work/primary",) + extra_workspaces, start=1,
             )
         ]
         self.assertEqual(
             exported, expected,
-            "PROJECT_PATH_* must be consecutive with no gaps",
+            "WORKSPACE_PATH_* must be consecutive with no gaps",
         )
 
     # ── host access ─────────────────────────────────────────────
@@ -2413,8 +2413,8 @@ class TestRunTransaction(unittest.TestCase):
         opt_spec = _parse_mount_spec(result.run_args, dst="/work/extra")
         self.assertEqual(opt_spec["src"], "/work/extra")
         # Both exported
-        self.assertIn("PROJECT_PATH_1=/work/primary", result.run_args)
-        self.assertIn("PROJECT_PATH_2=/work/extra", result.run_args)
+        self.assertIn("WORKSPACE_PATH_1=/work/primary", result.run_args)
+        self.assertIn("WORKSPACE_PATH_2=/work/extra", result.run_args)
 
     # ── projection readability before execution ──────────────────
 

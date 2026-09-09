@@ -294,13 +294,13 @@ def _passing_handlers(
         path = f"/home/dev/.pi/agent/npm/node_modules/{pkg}/package.json"
         handlers[("cat", path)] = (0, pkg_json, "")
     for i, pp in enumerate(workspace_paths, start=1):
-        # projects.present — directory accessible AND env-var exact
+        # workspaces.present — directory accessible AND env-var exact
         handlers[("test", "-d", pp)] = (0, "", "")
-        handlers[("printenv", f"PROJECT_PATH_{i}")] = (0, f"{pp}\n", "")
+        handlers[("printenv", f"WORKSPACE_PATH_{i}")] = (0, f"{pp}\n", "")
         # ownership.dev — per-project
         handlers[("stat", "-c", "%U:%G", pp)] = (0, "dev:dev\n", "")
     # No unexpected next entry
-    handlers[("printenv", f"PROJECT_PATH_{len(workspace_paths) + 1}")] = (1, "", "")
+    handlers[("printenv", f"WORKSPACE_PATH_{len(workspace_paths) + 1}")] = (1, "", "")
     return handlers
 
 
@@ -613,12 +613,12 @@ class TestRuntimeExtensionsResults(unittest.TestCase):
 
 
 class TestRuntimeProjects(unittest.TestCase):
-    """PROJECT_PATH_1..N environment contract — exact values,
+    """WORKSPACE_PATH_1..N environment contract — exact values,
     consecutive numbering, no unexpected next entry."""
 
     def test_project_env_contract(self) -> None:
-        """Each PROJECT_PATH_N has the exact expected value,
-        numbering is 1..N, and PROJECT_PATH_{N+1} is unset."""
+        """Each WORKSPACE_PATH_N has the exact expected value,
+        numbering is 1..N, and WORKSPACE_PATH_{N+1} is unset."""
         workspace_paths = ("/tmp/p1", "/tmp/p2")
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
@@ -636,21 +636,21 @@ class TestRuntimeProjects(unittest.TestCase):
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
-                          if c.key == "projects.present"]
+                          if c.key == "workspaces.present"]
         self.assertTrue(all(c.ok for c in project_checks))
         detail = " ".join(c.detail for c in project_checks)
         self.assertIn("/tmp/p1", detail)
         self.assertIn("/tmp/p2", detail)
 
     def test_wrong_env_value_detected(self) -> None:
-        """PROJECT_PATH_1 is set but to a different path → fail."""
+        """WORKSPACE_PATH_1 is set but to a different path → fail."""
         workspace_paths = ("/tmp/p1",)
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
             workspace_paths=workspace_paths,
         )
-        handlers[("printenv", "PROJECT_PATH_1")] = (
+        handlers[("printenv", "WORKSPACE_PATH_1")] = (
             0, "/some/other/dir\n", "")
         runner = _DispatchRunner(_CONTAINER, handlers)
         with handle:
@@ -663,18 +663,18 @@ class TestRuntimeProjects(unittest.TestCase):
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
-                          if c.key == "projects.present"]
+                          if c.key == "workspaces.present"]
         self.assertFalse(all(c.ok for c in project_checks))
 
     def test_missing_env_variable_detected(self) -> None:
-        """PROJECT_PATH_2 is unset when it should exist → fail."""
+        """WORKSPACE_PATH_2 is unset when it should exist → fail."""
         workspace_paths = ("/tmp/p1", "/tmp/p2")
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
             workspace_paths=workspace_paths,
         )
-        handlers[("printenv", "PROJECT_PATH_2")] = (1, "", "")
+        handlers[("printenv", "WORKSPACE_PATH_2")] = (1, "", "")
         runner = _DispatchRunner(_CONTAINER, handlers)
         with handle:
             result = verify_runtime(VerifyRuntimeRequest(
@@ -686,18 +686,18 @@ class TestRuntimeProjects(unittest.TestCase):
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
-                          if c.key == "projects.present"]
+                          if c.key == "workspaces.present"]
         self.assertFalse(all(c.ok for c in project_checks))
 
     def test_unexpected_next_entry_detected(self) -> None:
-        """PROJECT_PATH_3 is set but only 2 projects declared → fail."""
+        """WORKSPACE_PATH_3 is set but only 2 projects declared → fail."""
         workspace_paths = ("/tmp/p1", "/tmp/p2")
         handle = _fresh_runtime_handle()
         handlers = _passing_handlers(
             expected_hash=handle.content_hash,
             workspace_paths=workspace_paths,
         )
-        handlers[("printenv", "PROJECT_PATH_3")] = (
+        handlers[("printenv", "WORKSPACE_PATH_3")] = (
             0, "/unexpected/path\n", "")
         runner = _DispatchRunner(_CONTAINER, handlers)
         with handle:
@@ -710,11 +710,11 @@ class TestRuntimeProjects(unittest.TestCase):
                 runner=runner,
             ))
         project_checks = [c for c in result.checks
-                          if c.key == "projects.present"]
+                          if c.key == "workspaces.present"]
         self.assertFalse(all(c.ok for c in project_checks))
 
     def test_directory_missing_but_env_set(self) -> None:
-        """PROJECT_PATH_1 is set correctly but the directory does not
+        """WORKSPACE_PATH_1 is set correctly but the directory does not
         exist → fail (both checks are independent)."""
         workspace_paths = ("/tmp/p1",)
         handle = _fresh_runtime_handle()
@@ -735,12 +735,12 @@ class TestRuntimeProjects(unittest.TestCase):
                 runner=runner,
             ))
         proj = next(c for c in result.checks
-                    if c.key == "projects.present")
+                    if c.key == "workspaces.present")
         self.assertFalse(proj.ok)
 
 
 class TestRuntimeWorkingDirectory(unittest.TestCase):
-    """Working directory must equal PROJECT_PATH_1."""
+    """Working directory must equal WORKSPACE_PATH_1."""
 
     def test_correct_dir(self) -> None:
         handle = _fresh_runtime_handle()

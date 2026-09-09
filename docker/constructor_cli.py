@@ -222,7 +222,7 @@ def _discover_runtime_projection_from_container(
 def _discover_workspace_paths_from_container(
     container: str, runner: _CommandRunner,
 ) -> tuple[Path, ...] | None:
-    """Read ``PROJECT_PATH_1..N`` env vars from *container*.
+    """Read ``WORKSPACE_PATH_1..N`` env vars from *container*.
 
     Returns the container-side paths in numeric suffix order or
     ``None`` when the query fails, no projects are set, or the
@@ -231,7 +231,7 @@ def _discover_workspace_paths_from_container(
     try:
         result = runner.run([
             "docker", "exec", container, "sh", "-c",
-            "env | sort | grep '^PROJECT_PATH_'",
+            "env | sort | grep '^WORKSPACE_PATH_'",
         ])
     except OSError:
         return None
@@ -246,16 +246,16 @@ def _discover_workspace_paths_from_container(
         value = value.strip()
         if not value:
             continue
-        # Extract numeric suffix: PROJECT_PATH_<N>
-        suffix = name[len("PROJECT_PATH_"):]
+        # Extract numeric suffix: WORKSPACE_PATH_<N>
+        suffix = name[len("WORKSPACE_PATH_"):]
         if not suffix.isdigit():
-            continue  # skip malformed keys like PROJECT_PATH_X
+            continue  # skip malformed keys like WORKSPACE_PATH_X
         parsed.append((int(suffix), value))
     if not parsed:
         return None
     # Sort by numeric index so order is preserved
     parsed.sort(key=lambda item: item[0])
-    # Validate consecutive 1..N (no gaps, no PROJECT_PATH_10 → skip)
+    # Validate consecutive 1..N (no gaps, no WORKSPACE_PATH_10 → skip)
     indices = [idx for idx, _ in parsed]
     if indices != list(range(1, len(indices) + 1)):
         return None
@@ -1113,7 +1113,7 @@ def _real_dispatcher(
                         "errors": [
                             "no workspace paths available for runtime "
                             "verification; pass --workspace or ensure "
-                            "the container has PROJECT_PATH_1..N set"
+                            "the container has WORKSPACE_PATH_1..N set"
                         ],
                     }
                     all_ok = False

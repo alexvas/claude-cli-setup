@@ -294,17 +294,17 @@ class _VerifyRuntimeRunner:
         if "test" in cmd and "-w" in cmd and "docker-constructor.runtime.toml" in cmd:
             return P(argv=argv, return_code=1, stdout="", stderr="")
 
-        # projects.present — test -d PROJECT_PATH_1
+        # projects.present — test -d WORKSPACE_PATH_1
         if "test" in cmd and "-d" in cmd and self._project_path in cmd:
             return P(argv=argv, return_code=0, stdout="", stderr="")
 
-        # projects.present — printenv PROJECT_PATH_1
-        if "printenv" in cmd and "PROJECT_PATH_1" in cmd and "PROJECT_PATH_2" not in cmd:
+        # projects.present — printenv WORKSPACE_PATH_1
+        if "printenv" in cmd and "WORKSPACE_PATH_1" in cmd and "WORKSPACE_PATH_2" not in cmd:
             return P(argv=argv, return_code=0,
                      stdout=self._project_path, stderr="")
 
-        # projects.present — printenv PROJECT_PATH_2 (must be absent)
-        if "printenv" in cmd and "PROJECT_PATH_2" in cmd:
+        # projects.present — printenv WORKSPACE_PATH_2 (must be absent)
+        if "printenv" in cmd and "WORKSPACE_PATH_2" in cmd:
             return P(argv=argv, return_code=1, stdout="", stderr="")
 
         # working.directory — pwd

@@ -22,12 +22,12 @@ Checks
 |                          | ``/home/dev/.pi/agent/npm/node_modules/<package>/``          |
 |                          | (verified by reading ``package.json``).                      |
 +--------------------------+-----------------------------------------------------------+
-| ``projects.present``     | ``PROJECT_PATH_1..N`` environment variables each contain        |
+| ``workspaces.present``     | ``WORKSPACE_PATH_1..N`` environment variables each contain        |
 |                          | exactly the corresponding request-supplied path, AND each      |
 |                          | directory exists and is accessible.  Numbering is consecutive  |
 |                          | 1..N with no unexpected next entry.                           |
 +--------------------------+-----------------------------------------------------------+
-| ``working.directory``    | The container working directory equals ``PROJECT_PATH_1``.   |
+| ``working.directory``    | The container working directory equals ``WORKSPACE_PATH_1``.   |
 +--------------------------+-----------------------------------------------------------+
 | ``ownership.dev``        | ``/home/dev/.pi`` and every project path are owned            |
 |                          | by ``dev:dev`` (UID/GID 1000:1000).                          |
@@ -181,7 +181,7 @@ expectations."""
     not caller-supplied."""
     workspace_paths: tuple[Path, ...]
     """Workspace paths **inside the container** that should be present
-    as ``PROJECT_PATH_1..N``."""
+    as ``WORKSPACE_PATH_1..N``."""
     container_pi_home: Path
     """Pi home path **inside the container** (e.g. ``"/home/dev/.pi"``).
     All runtime checks use this as the container-side directory — the
@@ -339,29 +339,29 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
                 _add("extensions.results", False,
                      f"{pkg_name}: expected v{expected_ver}, got v{actual_ver}", r)
 
-    # ── projects.present ─────────────────────────────────────────────
+    # ── workspaces.present ─────────────────────────────────────────────
     for i, p in enumerate(pp, start=1):
         sp = str(p)
         # Directory accessible
         r = _exec(("test", "-d", sp))
         if r.return_code != 0:
-            _add("projects.present", False,
-                 f"PROJECT_PATH_{i} ({sp}) is not an accessible directory", r)
+            _add("workspaces.present", False,
+                 f"WORKSPACE_PATH_{i} ({sp}) is not an accessible directory", r)
         else:
             # Env var exact value
-            r_env = _exec(("printenv", f"PROJECT_PATH_{i}"))
+            r_env = _exec(("printenv", f"WORKSPACE_PATH_{i}"))
             actual = r_env.stdout.strip() if r_env.return_code == 0 else ""
             if actual == sp:
-                _add("projects.present", True,
-                     f"PROJECT_PATH_{i}={sp} (dir present)", r_env)
+                _add("workspaces.present", True,
+                     f"WORKSPACE_PATH_{i}={sp} (dir present)", r_env)
             else:
-                _add("projects.present", False,
-                     f"PROJECT_PATH_{i}: expected {sp!r}, got {actual!r}", r_env)
+                _add("workspaces.present", False,
+                     f"WORKSPACE_PATH_{i}: expected {sp!r}, got {actual!r}", r_env)
     # Guard: no unexpected next entry
-    guard_key = f"PROJECT_PATH_{len(pp) + 1}"
+    guard_key = f"WORKSPACE_PATH_{len(pp) + 1}"
     r_guard = _exec(("printenv", guard_key))
     if r_guard.return_code == 0:
-        _add("projects.present", False,
+        _add("workspaces.present", False,
              f"unexpected {guard_key}={r_guard.stdout.strip()!r}", r_guard)
 
     # ── working.directory ────────────────────────────────────────────
@@ -371,7 +371,7 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         expected_wd = str(pp[0])
         if wd == expected_wd:
             _add("working.directory", True,
-                 f"working directory is PROJECT_PATH_1 ({wd})", r)
+                 f"working directory is WORKSPACE_PATH_1 ({wd})", r)
         else:
             _add("working.directory", False,
                  f"working directory: expected {expected_wd!r}, got {wd!r}", r)
@@ -395,10 +395,10 @@ def verify_runtime(request: VerifyRuntimeRequest) -> RuntimeVerificationResult:
         p_owner = r.stdout.strip() if r.return_code == 0 else ""
         if p_owner == "dev:dev":
             _add("ownership.dev", True,
-                 f"PROJECT_PATH_{i} ({sp}) owned by dev:dev", r)
+                 f"WORKSPACE_PATH_{i} ({sp}) owned by dev:dev", r)
         else:
             _add("ownership.dev", False,
-                 f"PROJECT_PATH_{i} ({sp}) owned by {p_owner!r}, expected dev:dev", r)
+                 f"WORKSPACE_PATH_{i} ({sp}) owned by {p_owner!r}, expected dev:dev", r)
 
     # ── pi-home.setup ─────────────────────────────────────────────────
     r = _exec(("test", "-d", pi_home))

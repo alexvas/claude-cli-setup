@@ -333,13 +333,13 @@ class RunRenderInputs:
     """
 
     workspace: str
-    """Host path to the primary workspace.  Bound as ``PROJECT_PATH_1`` and
+    """Host path to the primary workspace.  Bound as ``WORKSPACE_PATH_1`` and
     set as the container working directory.
     """
 
     extra_workspaces: tuple[str, ...] = ()
-    """Extra host workspace paths bound as ``PROJECT_PATH_2``,
-    ``PROJECT_PATH_3``, etc.
+    """Extra host workspace paths bound as ``WORKSPACE_PATH_2``,
+    ``WORKSPACE_PATH_3``, etc.
     """
 
     host_access: RunHostAccess = RunHostAccess()
@@ -978,10 +978,10 @@ def render_run_vector(inputs: RunRenderInputs) -> tuple[str, ...]:
     # Working directory
     args.extend(("--workdir", inputs.workspace))
 
-    # Environment: PROJECT_PATH_*
+    # Environment: WORKSPACE_PATH_*
     all_projects = (inputs.workspace,) + inputs.extra_workspaces
     for i, proj_path in enumerate(all_projects, start=1):
-        args.extend(("--env", f"PROJECT_PATH_{i}={proj_path}"))
+        args.extend(("--env", f"WORKSPACE_PATH_{i}={proj_path}"))
 
     if inputs.chown_on_start is not None:
         args.extend(("--env", f"CHOWN_WORK_ON_START={inputs.chown_on_start}"))

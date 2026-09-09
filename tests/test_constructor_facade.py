@@ -2840,24 +2840,24 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
             _process_runner=runner,
             _prompt_user=lambda _: True,
         )
-        # PROJECT_PATH_1 and PROJECT_PATH_2 must appear in docker exec
+        # WORKSPACE_PATH_1 and WORKSPACE_PATH_2 must appear in docker exec
         exec_calls = [c for c in calls if c[0] == "docker" and c[1] == "exec"]
         all_argv = " ".join(" ".join(c) for c in exec_calls)
         self.assertIn("/home/dev/p1", all_argv,
-                      "PROJECT_PATH_1 must be checked")
+                      "WORKSPACE_PATH_1 must be checked")
         self.assertIn("/home/dev/p2", all_argv,
-                      "PROJECT_PATH_2 must be checked")
+                      "WORKSPACE_PATH_2 must be checked")
 
     def test_workspace_paths_auto_discovered_from_container(self) -> None:
         """When ``--workspace`` is omitted, workspace paths are read from
-        ``docker exec <container> sh -c 'env | grep PROJECT_PATH_'``.
+        ``docker exec <container> sh -c 'env | grep WORKSPACE_PATH_'``.
 
-        ``PROJECT_PATH_*`` is the intentional Phase 4 container contract.
+        ``WORKSPACE_PATH_*`` is the intentional Phase 4 container contract.
         """
         _paths = "/home/dev/alpha\n/home/dev/beta\n"
         runner, calls = self._make_recording_runner(
-            stdout="PROJECT_PATH_1=/home/dev/alpha\n"
-                    "PROJECT_PATH_2=/home/dev/beta\n"
+            stdout="WORKSPACE_PATH_1=/home/dev/alpha\n"
+                    "WORKSPACE_PATH_2=/home/dev/beta\n"
         )
         rc, out, err = _run(
             self.m,
@@ -2871,12 +2871,12 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         all_argv = " ".join(" ".join(c) for c in exec_calls)
         # Both auto-discovered paths must be checked
         self.assertIn("/home/dev/alpha", all_argv,
-                      "PROJECT_PATH_1 must be auto-discovered and checked")
+                      "WORKSPACE_PATH_1 must be auto-discovered and checked")
         self.assertIn("/home/dev/beta", all_argv,
-                      "PROJECT_PATH_2 must be auto-discovered and checked")
+                      "WORKSPACE_PATH_2 must be auto-discovered and checked")
 
     def test_auto_discovery_empty_projects_is_error(self) -> None:
-        """When the container has no PROJECT_PATH_* vars, auto-discovery
+        """When the container has no WORKSPACE_PATH_* vars, auto-discovery
         returns an error rather than guessing."""
         runner, calls = self._make_recording_runner(
             stdout=""  # empty env output
@@ -2893,12 +2893,12 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         self.assertIn("no workspace paths available", err)
 
     def test_auto_discovery_preserves_numeric_order_not_path_sort(self) -> None:
-        """PROJECT_PATH_N values are sorted by numeric suffix, not by
-        the path string.  ``PROJECT_PATH_2=/zzz`` must appear after
-        ``PROJECT_PATH_1=/aaa`` even though "/aaa" > "/zzz"."""
+        """WORKSPACE_PATH_N values are sorted by numeric suffix, not by
+        the path string.  ``WORKSPACE_PATH_2=/zzz`` must appear after
+        ``WORKSPACE_PATH_1=/aaa`` even though "/aaa" > "/zzz"."""
         runner, calls = self._make_recording_runner(
-            stdout="PROJECT_PATH_2=/home/dev/zzz\n"
-                    "PROJECT_PATH_1=/home/dev/aaa\n"
+            stdout="WORKSPACE_PATH_2=/home/dev/zzz\n"
+                    "WORKSPACE_PATH_1=/home/dev/aaa\n"
         )
         rc, out, err = _run(
             self.m,
@@ -2917,12 +2917,12 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         self.assertNotEqual(-1, pos_zzz)
         # Numeric order: 1 before 2 → aaa must appear before zzz
         self.assertLess(pos_aaa, pos_zzz,
-                        "PROJECT_PATH_1 must appear before PROJECT_PATH_2")
+                        "WORKSPACE_PATH_1 must appear before WORKSPACE_PATH_2")
 
     def test_auto_discovery_gaps_in_indices_rejected(self) -> None:
-        """Gaps in PROJECT_PATH_N (e.g., 1, 3 but no 2) are rejected."""
+        """Gaps in WORKSPACE_PATH_N (e.g., 1, 3 but no 2) are rejected."""
         runner, calls = self._make_recording_runner(
-            stdout="PROJECT_PATH_1=/a\nPROJECT_PATH_3=/c\n"
+            stdout="WORKSPACE_PATH_1=/a\nWORKSPACE_PATH_3=/c\n"
         )
         rc, out, err = _run(
             self.m,
@@ -2936,9 +2936,9 @@ class TestVerifyRuntimeWiring(unittest.TestCase):
         self.assertIn("no workspace paths available", err)
 
     def test_auto_discovery_non_one_start_rejected(self) -> None:
-        """PROJECT_PATH_N must start at 1; e.g., 2,3 is not 1..2."""
+        """WORKSPACE_PATH_N must start at 1; e.g., 2,3 is not 1..2."""
         runner, calls = self._make_recording_runner(
-            stdout="PROJECT_PATH_2=/a\nPROJECT_PATH_3=/b\n"
+            stdout="WORKSPACE_PATH_2=/a\nWORKSPACE_PATH_3=/b\n"
         )
         rc, out, err = _run(
             self.m,

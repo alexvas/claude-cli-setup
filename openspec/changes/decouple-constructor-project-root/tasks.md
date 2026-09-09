@@ -144,28 +144,28 @@ Rules:
 
 ### RED
 
-- [ ] P5.R1 Add run-vector tests for primary/extra 1:1 bind mounts, primary workdir, consecutive `WORKSPACE_PATH_1..N`, duplicate rejection, and stable ordering.
-- [ ] P5.R2 Add entrypoint harness tests for workspace mounts, gaps, non-mounts, disabled repair, symlink safety, permission repair, Git safe-directory registration, and privilege dropping.
-- [ ] P5.R3 Add runtime verification tests for consecutive workspace discovery, accessibility, ownership, working-directory equality, gaps, and absence of `PROJECT_PATH_*` fallback.
-- [ ] P5.R4 Add an ownership regression test proving host workspace bind-mount repair remains available without whole-home image ownership rewrites.
-- [ ] P5.R5 Add host-access and corporate-network run-vector tests using only the workspace container contract.
-- [ ] P5.R6 Add an image-fixture compatibility test that fails when launcher, entrypoint, and runtime verification use different container contracts.
+- [x] P5.R1 Add run-vector tests for primary/extra 1:1 bind mounts, primary workdir, consecutive `WORKSPACE_PATH_1..N`, duplicate rejection, and stable ordering.
+- [x] P5.R2 Add entrypoint harness tests for workspace mounts, gaps, non-mounts, disabled repair, symlink safety, permission repair, Git safe-directory registration, and privilege dropping.
+- [x] P5.R3 Add runtime verification tests for consecutive workspace discovery, accessibility, ownership, working-directory equality, gaps, and absence of `PROJECT_PATH_*` fallback.
+- [x] P5.R4 Add an ownership regression test proving host workspace bind-mount repair remains available without whole-home image ownership rewrites.
+- [x] P5.R5 Add host-access and corporate-network run-vector tests using only the workspace container contract.
+- [x] P5.R6 Add an image-fixture compatibility test that fails when launcher, entrypoint, and runtime verification use different container contracts.
 
 ### GREEN
 
-- [ ] P5.G1 Change run rendering to emit the workspace mounts, workdir, and environment contract required by P5.R1.
-- [ ] P5.G2 Change `docker/entrypoint.sh` to inspect and repair only configured `WORKSPACE_PATH_*` mount points as required by P5.R2 and P5.R4.
-- [ ] P5.G3 Change runtime discovery and verification to require consecutive `WORKSPACE_PATH_1..N` with no old-name fallback as required by P5.R3.
-- [ ] P5.G4 Update host-access and corporate-network rendering integrations required by P5.R5.
-- [ ] P5.G5 Rebuild or adjust image verification fixtures so host launcher, image entrypoint, and verification satisfy P5.R6 atomically.
+- [x] P5.G1 Change run rendering to emit the workspace mounts, workdir, and environment contract required by P5.R1.
+- [x] P5.G2 Change `docker/entrypoint.sh` to inspect and repair only configured `WORKSPACE_PATH_*` mount points as required by P5.R2 and P5.R4.
+- [x] P5.G3 Change runtime discovery and verification to require consecutive `WORKSPACE_PATH_1..N` with no old-name fallback as required by P5.R3.
+- [x] P5.G4 Update host-access and corporate-network rendering integrations required by P5.R5.
+- [x] P5.G5 Rebuild or adjust image verification fixtures so host launcher, image entrypoint, and verification satisfy P5.R6 atomically.
 
 ### INTROSPECT
 
-- [ ] P5.I1 Inspect the host/image boundary for mixed workspace/project contracts, whole-home ownership rewrites, or repair of non-workspace mounts; fix every occurrence found.
+- [x] P5.I1 Inspect the host/image boundary for mixed workspace/project contracts, whole-home ownership rewrites, or repair of non-workspace mounts; fix every occurrence found.
 
 ### VALIDATE
 
-- [ ] P5.V1 Run the run-vector, entrypoint harness, runtime verification, ownership, host-access, corporate-network, and image-fixture tests introduced in P5.R1–P5.R6 and record that they all pass.
+- [x] P5.V1 Run the run-vector, entrypoint harness, runtime verification, ownership, host-access, corporate-network, and image-fixture tests introduced in P5.R1–P5.R6 and record that they all pass.
 
 ## Phase 6 — Repository Integrations and Documentation
 
