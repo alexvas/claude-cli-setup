@@ -63,19 +63,19 @@ def _request(policy: BuildOutputPolicy, runner: RecordingExecutor, *, progress: 
         _publish_projection=lambda *_args, **_kwargs: __import__(
             "docker.versioning.build_orchestration", fromlist=["PublishResult"]
         ).PublishResult("/tmp/effective.toml"),
-    )
+    project_root=Path(str(INVENTORY_PATH)).resolve().parent)
 
 
 class TestBuildOutputModel(unittest.TestCase):
     def test_request_supports_only_typed_policies_with_captured_default(self):
-        self.assertIs(BuildRequest(inventory_path="x").output_policy,
+        self.assertIs(BuildRequest(inventory_path="x", project_root=Path("x").resolve().parent).output_policy,
                       BuildOutputPolicy.CAPTURED)
         self.assertEqual({BuildOutputPolicy.STREAMED, BuildOutputPolicy.CAPTURED},
                          set(BuildOutputPolicy))
 
     def test_request_rejects_non_policy_values(self):
         with self.assertRaisesRegex(ValueError, "BuildOutputPolicy"):
-            BuildRequest(inventory_path="x", output_policy="invalid")  # type: ignore[arg-type]
+            BuildRequest(inventory_path="x", output_policy="invalid", project_root=Path("x").resolve().parent)  # type: ignore[arg-type]
 
     def test_process_result_explicitly_identifies_output_policy(self):
         result = ProcessResult(("docker", "build", "."), 0, "", "",

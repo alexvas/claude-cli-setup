@@ -140,7 +140,7 @@ class TestDockerBackedHostAcceptance(unittest.TestCase):
                 _materialize_artifacts=lambda *_args, **_kwargs: (artifact,) * 4,
                 _materialize_pi=stall_pi,
                 _named_context_supported=lambda: True,
-            ))
+            project_root=Path(str(repo / "docker-constructor.toml")).resolve().parent))
             self.assertEqual(result.exit_kind, ExitKind.OPERATIONAL)
             self.assertEqual(main.calls, 0)
             self.assertNotEqual(

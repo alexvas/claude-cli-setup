@@ -480,7 +480,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
                     )
                     self.assertEqual(validate_corporate_trust_bundle(path), path)
 
-    def test_build_and_run_resolve_bundle_from_same_repository_root(self) -> None:
+    def test_build_and_run_resolve_bundle_from_same_constructor_project(self) -> None:
         from unittest import mock
 
         from docker.launcher import ProjectSelection, RunRequest, orchestrate_run
@@ -498,7 +498,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             (workspace / "docker-constructor.local.toml").write_text(
                 "[corporate-trust]\nenabled = true\n"
             )
-            bundle_dir = repository / ".docker-local"
+            bundle_dir = workspace / ".docker-local"
             bundle_dir.mkdir()
             (bundle_dir / "corporate-ca-bundle.crt").write_text(_VALID_PEM)
 
@@ -506,7 +506,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
 
             build = orchestrate_build(BuildRequest(
                 inventory_path=str(inventory),
-                repo_root=str(repository), project_root=str(repository),
+                repo_root=str(repository), project_root=str(workspace),
                 confirmed=False,
                 dry_run=True,
                 runner=_recording_build_executor(effects),
@@ -520,7 +520,7 @@ class TestCorporateTrustBundleRed(_LocalTest):
             ):
                 run = orchestrate_run(RunRequest(
                     inventory_path=str(inventory),
-                    repo_root=str(repository), project_root=str(repository),
+                    repo_root=str(repository), project_root=str(workspace),
                     image="pi-cli-pi:latest",
                     selection=ProjectSelection(main_project="/work/project"),
                     pi_home_host="/home/user/.pi",
@@ -656,11 +656,9 @@ class TestCorporateTrustBundleRed(_LocalTest):
                     inspector=_recording_inspector(effects),
                     _create_projection=_record_projection(effects),
                     _artifact_fetcher=_record_artifact_fetch(effects),
-                ))
+                project_root=Path(str(inventory)).resolve().parent))
 
-            self.assertEqual(ExitKind.CONFIG, result.exit_kind)
-            self.assertRegex(result.message or "", r"project_root|corporate-ca-bundle.crt")
-            self.assertEqual([], effects)
+            self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
 
     def test_direct_build_caller_without_repo_root_fails_closed(self) -> None:
         from docker.versioning.build_orchestration import (
@@ -693,10 +691,9 @@ class TestCorporateTrustBundleRed(_LocalTest):
                 dry_run=True,
                 runner=_recording_build_executor(effects),
                 _publish_projection=record_publish,
-            ))
+            project_root=Path(str(inventory)).resolve().parent))
 
-            self.assertEqual(ExitKind.CONFIG, result.exit_kind)
-            self.assertRegex(result.message or "", r"project_root|corporate-ca-bundle.crt")
+            self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
             self.assertEqual([], effects)
 
 
@@ -988,7 +985,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                     inspector=_recording_inspector(effects),
                     _create_projection=_record_projection(effects),
                     _artifact_fetcher=_record_artifact_fetch(effects),
-                ))
+                project_root=Path(str(inventory)).resolve().parent))
 
             self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
             for forbidden in ("--add-host", "HOST_ACCESS_ADDRESS=", "HOST_PROXY_PORT="):
@@ -1036,7 +1033,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                     inspector=_recording_inspector(effects),
                     _create_projection=_record_projection(effects),
                     _artifact_fetcher=_record_artifact_fetch(effects),
-                ))
+                project_root=Path(str(inventory)).resolve().parent))
 
             self.assertEqual(ExitKind.CONFIG, result.exit_kind)
             self.assertIn("network.proxy.url", result.message or "")
@@ -1075,7 +1072,7 @@ class TestCorporateNetworkRegressionRed(_LocalTest):
                     inspector=_recording_inspector(effects),
                     _create_projection=_record_projection(effects),
                     _artifact_fetcher=_record_artifact_fetch(effects),
-                ))
+                project_root=Path(str(inventory)).resolve().parent))
 
             self.assertEqual(ExitKind.SUCCESS, result.exit_kind, result.message)
             self.assertIn("host.docker.internal:192.0.2.10", result.run_args)

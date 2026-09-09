@@ -200,7 +200,7 @@ class TestBuildRequestDto(unittest.TestCase):
     """Task 7 — immutable BuildRequest fields."""
 
     def test_minimal_request_has_all_defaults(self):
-        req = BuildRequest(inventory_path=str(INVENTORY_PATH))
+        req = BuildRequest(inventory_path=str(INVENTORY_PATH), project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         self.assertEqual(str(INVENTORY_PATH), req.inventory_path)
         self.assertEqual("linux-amd64", req.platform)
         self.assertIsNone(req.tag)
@@ -245,7 +245,7 @@ class TestBuildRequestDto(unittest.TestCase):
             repo_root="/tmp",
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         self.assertEqual("linux-arm64", req.platform)
         self.assertEqual("pi:custom", req.tag)
         self.assertEqual("build", req.target)
@@ -275,7 +275,7 @@ class TestBuildRequestDto(unittest.TestCase):
         self.assertIs(pr, result.process_result)
 
     def test_dtos_are_frozen(self):
-        req = BuildRequest(inventory_path=str(INVENTORY_PATH))
+        req = BuildRequest(inventory_path=str(INVENTORY_PATH), project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         with self.assertRaises(Exception):
             req.platform = "linux-arm64"  # type: ignore[misc]
         result = BuildResult(exit_kind=ExitKind.SUCCESS)
@@ -289,7 +289,7 @@ class TestBuildRequestDto(unittest.TestCase):
         req = BuildRequest(
             inventory_path=str(INVENTORY_PATH),
             overrides=mutable,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         self.assertIsInstance(req.overrides, MappingProxyType)
         self.assertEqual({"A": "1", "B": "2"}, dict(req.overrides))
         # Mutate the caller-owned dict
@@ -306,7 +306,7 @@ class TestBuildRequestDto(unittest.TestCase):
     def test_overrides_default_is_empty_immutable(self):
         """Default ``overrides`` (no argument) must be an empty immutable
         mapping."""
-        req = BuildRequest(inventory_path=str(INVENTORY_PATH))
+        req = BuildRequest(inventory_path=str(INVENTORY_PATH), project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         self.assertIsInstance(req.overrides, MappingProxyType)
         self.assertEqual({}, dict(req.overrides))
 
@@ -356,7 +356,7 @@ class TestInjectablesWired(unittest.TestCase):
             _materialize_pi=fake_pi_materialization,
             _transport_factory=UrllibStreamingTransport,
             _named_context_supported=lambda: True,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         # Just verify the slots are populated
         self.assertIs(runner, req.runner)
         self.assertIs(_diag_reachable, req._diagnose_gateway)
@@ -380,7 +380,7 @@ class TestDefaultBuild(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -392,7 +392,7 @@ class TestDefaultBuild(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -405,7 +405,7 @@ class TestDefaultBuild(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         _assert_prospective(result)
 
@@ -416,7 +416,7 @@ class TestDefaultBuild(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         _assert_prospective(result)
 
@@ -427,7 +427,7 @@ class TestDefaultBuild(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         r1 = orchestrate_build(req)
         r2 = orchestrate_build(req)
         _assert_prospective(r1)
@@ -454,7 +454,7 @@ class TestBuildOverrides(unittest.TestCase):
             }),
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -469,7 +469,7 @@ class TestBuildOverrides(unittest.TestCase):
             }),
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG for unsupported override, got {result.exit_kind}")
@@ -484,7 +484,7 @@ class TestBuildOverrides(unittest.TestCase):
             }),
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG for runtime override, got {result.exit_kind}")
@@ -504,7 +504,7 @@ class TestPlatformSelection(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -516,7 +516,7 @@ class TestPlatformSelection(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         # ARM64 may succeed or fail CONFIG depending on inventory
         self.assertIn(result.exit_kind, (ExitKind.SUCCESS, ExitKind.CONFIG),
@@ -536,7 +536,7 @@ class TestPlatformSelection(unittest.TestCase):
             platform="linux-arm64",
             _diagnose_gateway=record_diag,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path("/nonexistent/inventory.toml").resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}")
@@ -569,7 +569,7 @@ class TestProjectionPublication(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=record_publish,
             runner=FakeBuildExecutor(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         # Publisher must have been called at least once
@@ -596,7 +596,7 @@ class TestCacheControls(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -608,7 +608,7 @@ class TestCacheControls(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -620,7 +620,7 @@ class TestCacheControls(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -632,7 +632,7 @@ class TestCacheControls(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -645,7 +645,7 @@ class TestCacheControls(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -658,7 +658,7 @@ class TestCacheControls(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         _assert_prospective(result)
@@ -719,7 +719,7 @@ class TestFailureOrdering(unittest.TestCase):
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
-        )
+        project_root=Path("/nonexistent/inventory.toml").resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -731,7 +731,7 @@ class TestFailureOrdering(unittest.TestCase):
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
-        )
+        project_root=Path("README.md").resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -744,7 +744,7 @@ class TestFailureOrdering(unittest.TestCase):
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
-        )
+        project_root=Path("pyproject.toml").resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -758,7 +758,7 @@ class TestFailureOrdering(unittest.TestCase):
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         # Must be CONFIG (invalid override is a configuration error)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
@@ -773,7 +773,7 @@ class TestFailureOrdering(unittest.TestCase):
             _diagnose_gateway=self.fakes.diagnose,
             _publish_projection=self.fakes.publish,
             runner=self.fakes,  # type: ignore[arg-type]
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -798,7 +798,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -813,7 +813,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -832,7 +832,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind)
         # No build_args rendered
@@ -850,7 +850,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -866,7 +866,7 @@ class TestRenderValidationFailures(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.CONFIG, result.exit_kind,
                          f"expected CONFIG, got {result.exit_kind}: {result.message}")
@@ -918,7 +918,7 @@ class TestBuildGatewayIsolation(unittest.TestCase):
             _diagnose_gateway=diagnose,
             _publish_projection=_publish_ok,
             runner=runner,
-        ))
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent))
 
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         self.assertEqual([], calls)
@@ -969,7 +969,7 @@ class TestConfirmation(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"not-confirmed is SUCCESS not {result.exit_kind}: {result.message}")
@@ -996,7 +996,7 @@ class TestConfirmation(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=docker_runner,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         # Real impl returns SUCCESS with process_result; stub returns OPERATIONAL
         self.assertIsInstance(result, BuildResult)
@@ -1024,7 +1024,7 @@ class TestConfirmation(unittest.TestCase):
                 AssertionError("build must not diagnose gateway")),
             _publish_projection=publish,
             runner=RecordingRunner(),
-        ))
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent))
         self.assertIsInstance(result, BuildResult)
         self.assertEqual(["publish", "docker"], seq)
 
@@ -1069,7 +1069,7 @@ class TestDryRun(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1085,7 +1085,7 @@ class TestDryRun(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1101,7 +1101,7 @@ class TestDryRun(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1116,7 +1116,7 @@ class TestDryRun(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1131,7 +1131,7 @@ class TestDryRun(unittest.TestCase):
             _diagnose_gateway=self._bomb_diagnose,
             _publish_projection=self._bomb_publish,
             runner=self._BombRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1147,7 +1147,7 @@ class TestDryRun(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1162,7 +1162,7 @@ class TestDryRun(unittest.TestCase):
             dry_run=True,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}: {result.message}")
@@ -1187,7 +1187,7 @@ class TestDirectExecution(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertIsInstance(result, BuildResult)
         if runner.calls:
@@ -1206,7 +1206,7 @@ class TestDirectExecution(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertIsInstance(result, BuildResult)
         if runner.calls:
@@ -1232,7 +1232,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind,
                          f"expected SUCCESS, got {result.exit_kind}")
@@ -1252,7 +1252,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind,
                          f"expected OPERATIONAL, got {result.exit_kind}")
@@ -1270,7 +1270,7 @@ class TestSubprocessOutcomes(unittest.TestCase):
             runner=runner,
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIsNotNone(result.process_result)
@@ -1302,7 +1302,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             _diagnose_gateway=broken_diagnose,
             _publish_projection=_publish_ok,
             runner=runner,
-        ))
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent))
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)
         self.assertEqual(1, len(runner.calls))
 
@@ -1323,7 +1323,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("disk full", result.message or "")
@@ -1345,7 +1345,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=broken_publish,
             runner=FakeBuildExecutor(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("permission denied", result.message or "")
@@ -1369,7 +1369,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=MissingDockerRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("not found", result.message or "")
@@ -1390,7 +1390,7 @@ class TestBuildBoundaryFailures(unittest.TestCase):
             _diagnose_gateway=_diag_reachable,
             _publish_projection=_publish_ok,
             runner=DeniedDockerRunner(),
-        )
+        project_root=Path(str(INVENTORY_PATH)).resolve().parent)
         result = orchestrate_build(req)
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
         self.assertIn("permission denied", result.message or "")
@@ -1430,7 +1430,7 @@ class TestMaterializationBoundary(unittest.TestCase):
             _transport_factory=transport_factory,
             _named_context_supported=lambda: True,
             _publish_projection=publish,
-        )
+        project_root=Path(str(self.inventory)).resolve().parent)
 
     def _tree_snapshot(self, root: Path, *, exclude: Path | None = None):
         """Record structure, types, modes, contents, and symlink targets.
@@ -1946,7 +1946,7 @@ class TestMaterializationBoundary(unittest.TestCase):
             finally:
                 directory_fds.pop(fd, None)
 
-        with patch.object(project_state_module, "resolve_project_state", side_effect=record_project_state), patch.object(
+        with patch("docker.versioning.build_orchestration.resolve_project_state", side_effect=record_project_state), patch.object(
             build_cache_module, "open_build_cache_state", side_effect=record_build_cache
         ), patch("os.open", side_effect=record_os_open), patch("os.close", side_effect=record_os_close):
             result = orchestrate_build(request)
@@ -2027,7 +2027,7 @@ class TestPiMaterializationBoundary(unittest.TestCase):
             _transport_factory=transport_factory,
             _named_context_supported=lambda: True,
             _publish_projection=publish,
-        )
+        project_root=Path(str(self.inventory)).resolve().parent)
 
     def _run_and_assert(self, *, materialize_pi, message_substr,
                         transport_factory=None):
@@ -2154,7 +2154,7 @@ class TestPiSnapshotAdmissionFailure(unittest.TestCase):
             _transport_factory=no_network_transport_factory,
             _named_context_supported=lambda: True,
             _publish_projection=publish,
-        )
+        project_root=Path(str(self.inventory)).resolve().parent)
 
     def test_snapshot_admission_failure_is_operational(self):
         publish_calls: list[object] = []

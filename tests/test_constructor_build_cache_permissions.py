@@ -292,7 +292,7 @@ class ConstructorProjectForeignOwnership(unittest.TestCase):
                 inspector=_no_containers_inspector(),
                 _create_projection=_external_projection_factory,
                 _constructor_cache_root=str(self.cache),
-            ))
+            project_root=Path(str(inventory)).resolve().parent))
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind, getattr(result, "message", ""))
         self.assertEqual(len(executor.calls), 1)
 

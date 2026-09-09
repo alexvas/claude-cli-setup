@@ -517,7 +517,7 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
             _materialize_pi=fake_pi_materialization,
-        )
+        project_root=Path(self._INVENTORY).resolve().parent)
         result = orchestrate_build(req)
 
         # orchestrate_build goes through plan → execute → calls runner.run
@@ -554,7 +554,7 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
             _materialize_pi=fake_pi_materialization,
-        )
+        project_root=Path(self._INVENTORY).resolve().parent)
         result = orchestrate_build(req)
 
         self.assertEqual(ExitKind.OPERATIONAL, result.exit_kind)
@@ -588,7 +588,7 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
             _materialize_pi=fake_pi_materialization,
-        )
+        project_root=Path(self._INVENTORY).resolve().parent)
         result = orchestrate_build(req)
 
         self.assertIsNotNone(result.process_result)
@@ -619,7 +619,7 @@ class TestBuildFailureDiagnostics(unittest.TestCase):
             _transport_factory=no_network_transport_factory,
             _materialize_artifacts=self._materialize_fixture,
             _materialize_pi=fake_pi_materialization,
-        )
+        project_root=Path(self._INVENTORY).resolve().parent)
         result = orchestrate_build(req)
 
         self.assertEqual(ExitKind.SUCCESS, result.exit_kind)

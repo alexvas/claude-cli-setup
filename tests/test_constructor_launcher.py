@@ -22,6 +22,7 @@ Design constraints:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import unittest
 
 from docker.launcher import (
@@ -1129,6 +1130,7 @@ class TestRunTransaction(unittest.TestCase):
         from docker.launcher import orchestrate_run  # keep import alive
         kwargs: dict[str, object] = {
             "inventory_path": self._inventory_path,
+            "project_root": str(Path(self._inventory_path).parent),
             "image": "pi-cli-pi:latest",
             "selection": ProjectSelection(main_project="/work/p1"),
             "pi_home_host": "/home/alice/.pi",
@@ -3984,6 +3986,7 @@ class TestOrchestrationOrdering(unittest.TestCase):
         from docker.launcher import ProjectSelection
         kwargs: dict[str, object] = {
             "inventory_path": self._inventory_path,
+            "project_root": str(Path(self._inventory_path).parent),
             "image": "pi-cli-pi:latest",
             "selection": ProjectSelection(main_project="/work/p1"),
             "pi_home_host": "/home/alice/.pi",

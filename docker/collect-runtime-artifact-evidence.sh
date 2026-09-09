@@ -16,9 +16,11 @@ Run one Docker constructor launch and write logs, cache metadata, and live
 container mount evidence to a timestamped evidence directory.
 
 Options:
-  --inventory PATH       Reviewed inventory (default: docker-constructor.toml)
-  --output-dir DIR       Evidence directory (default: .docker-generated/evidence/runtime-artifacts-<UTC timestamp>)
-  --main-project DIR     Main project to mount (default: repository root)
+  --project-directory DIR
+                         Constructor project containing docker-constructor.toml
+                         (default: process working directory)
+  --output-dir DIR       Evidence directory (default: external project-state namespace)
+  --main-project DIR     Main project to mount (default: process working directory)
   --pi-home DIR          Pi home to mount; path must end in /.pi (default: DIR/home/.pi)
   --image IMAGE          Runtime image (default: pi-cli-pi:latest)
   --override KEY=VALUE   Runtime override to pass to run (repeatable)
@@ -36,18 +38,20 @@ constructor_cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
 if [[ "$constructor_cache_home" != /* ]]; then
   constructor_cache_home="$HOME/.cache"
 fi
-inventory="$repo_root/docker-constructor.toml"
+project_directory="$(pwd -P)"
+inventory=""
 output_dir=""
-main_project="$repo_root"
+main_project="$(pwd -P)"
 pi_home=""
+pi_home_explicit=false
 image="pi-cli-pi:latest"
 overrides=()
 duration=30
 
 while (($#)); do
   case "$1" in
-    --inventory)
-      inventory=${2:?--inventory requires a path}
+    --project-directory)
+      project_directory=${2:?--project-directory requires a directory}
       shift 2
       ;;
     --output-dir)
@@ -60,6 +64,7 @@ while (($#)); do
       ;;
     --pi-home)
       pi_home=${2:?--pi-home requires a directory}
+      pi_home_explicit=true
       shift 2
       ;;
     --image)
@@ -91,28 +96,31 @@ if ! [[ "$duration" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-main_project="$(cd "$main_project" && pwd)"
-inventory="$(cd "$(dirname "$inventory")" && pwd)/$(basename "$inventory")"
-if [[ -z "$output_dir" ]]; then
-  output_dir="$repo_root/.docker-generated/evidence/runtime-artifacts-$(date -u +%Y%m%dT%H%M%SZ)"
-fi
-mkdir -p "$output_dir"
-output_dir="$(cd "$output_dir" && pwd)"
-
-if [[ -z "$pi_home" ]]; then
-  pi_home="$output_dir/home/.pi"
-fi
-mkdir -p "$pi_home"
-pi_home="$(cd "$pi_home" && pwd)"
-if [[ "$(basename "$pi_home")" != ".pi" ]]; then
-  printf '%s\n' '--pi-home must name a .pi directory because run derives it from HOME' >&2
+if [[ ! -d "$project_directory" ]]; then
+  printf 'Constructor project directory does not exist: %s\n' "$project_directory" >&2
   exit 2
 fi
-home_dir="$(dirname "$pi_home")"
-# Resolve the active runtime-artifacts/blobs leaf; generated evidence stays checkout-local.
+project_directory="$(cd "$project_directory" && pwd -P)"
+inventory="$project_directory/docker-constructor.toml"
+if [[ ! -f "$inventory" ]]; then
+  printf 'Constructor project inventory does not exist: %s\n' "$inventory" >&2
+  exit 2
+fi
+if [[ ! -d "$main_project" ]]; then
+  printf 'Main project directory does not exist: %s\n' "$main_project" >&2
+  exit 2
+fi
+main_project="$(cd "$main_project" && pwd -P)"
+if [[ -n "$output_dir" ]]; then
+  mkdir -p "$output_dir"
+  output_dir="$(cd "$output_dir" && pwd)"
+fi
+
+# Resolve the active runtime-artifacts/blobs leaf and default evidence from
+# the selected constructor project's external generated-state namespace.
 cache_root="$(
   cd "$repo_root"
-  HOME="$home_dir" XDG_CACHE_HOME="$constructor_cache_home" CONSTRUCTOR_INVENTORY="$inventory" python3 - <<'PY'
+  XDG_CACHE_HOME="$constructor_cache_home" CONSTRUCTOR_INVENTORY="$inventory" CONSTRUCTOR_PROJECT_DIRECTORY="$project_directory" python3 - <<'PY'
 import os
 from pathlib import Path
 from docker.versioning.cache_storage import (
@@ -131,6 +139,38 @@ root = (
 print(runtime_artifacts_blobs_child(root))
 PY
 )"
+
+if [[ -z "$output_dir" ]]; then
+  output_dir="$(
+    XDG_CACHE_HOME="$constructor_cache_home" CONSTRUCTOR_INVENTORY="$inventory" CONSTRUCTOR_PROJECT_DIRECTORY="$project_directory" python3 - <<'PY'
+import os
+from pathlib import Path
+from docker.versioning.cache_storage import prepare_default_root, prepare_local_root
+from docker.versioning.inventory import load_local_config_for_inventory
+from docker.versioning.project_state import resolve_project_state
+inventory = Path(os.environ["CONSTRUCTOR_INVENTORY"])
+local = load_local_config_for_inventory(inventory)
+configured = local.cache.dir if local is not None else None
+home = Path(os.path.expanduser("~"))
+root = (prepare_local_root(configured, xdg_cache_home=os.environ.get("XDG_CACHE_HOME"), home=home)
+        if configured is not None else prepare_default_root(os.environ.get("XDG_CACHE_HOME"), home=home))
+project_directory = Path(os.environ["CONSTRUCTOR_PROJECT_DIRECTORY"])
+print(resolve_project_state(project_directory, cache_root=root, create=True).evidence_root / ("runtime-artifacts-" + __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+PY
+  )"
+  mkdir -p "$output_dir"
+  output_dir="$(cd "$output_dir" && pwd)"
+fi
+if [[ "$pi_home_explicit" == false ]]; then
+  pi_home="$output_dir/home/.pi"
+fi
+if [[ "$(basename "$pi_home")" != ".pi" ]]; then
+  printf '%s\n' '--pi-home must name a .pi directory because run derives it from HOME' >&2
+  exit 2
+fi
+mkdir -p "$pi_home"
+pi_home="$(cd "$pi_home" && pwd)"
+home_dir="$(dirname "$pi_home")"
 
 for command in docker python3; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -164,7 +204,7 @@ snapshot_cache "$output_dir/cache-before.txt"
 docker ps -q --filter "ancestor=$image" | LC_ALL=C sort >"$output_dir/containers-before.txt"
 
 run_args=(
-  "$repo_root/docker/docker-constructor.py" --inventory "$inventory" run
+  "$repo_root/docker/docker-constructor.py" --project-directory "$project_directory" run
   --image "$image"
   --main-project "$main_project"
   --no-tty

@@ -905,6 +905,7 @@ def _real_dispatcher(
             VerifyRuntimeRequest,
             verify_runtime,
         )
+        from docker.launcher import ProcessRunner
         import json as _json
 
         try:
@@ -925,13 +926,13 @@ def _real_dispatcher(
 
         # Build projection
         from pathlib import Path as _Path
-        _repo_root = _Path(inv_path).resolve().parent
+        _project_root = request.constructor_project.root
         from docker.versioning.project_state import resolve_project_state
         from docker.versioning.inventory import resolve_local_corporate_settings
         from docker.versioning.cache_storage import prepare_resolved_root, resolve_effective_root
         try:
             _local_cache = resolve_local_corporate_settings(
-                inv_path, repository_root=_repo_root,
+                inv_path, repository_root=_project_root,
             )
             _cache_root = resolve_effective_root(
                 getattr(getattr(_local_cache, "cache", None), "dir", None),
@@ -951,12 +952,11 @@ def _real_dispatcher(
         if scope in ("build", "all"):
             try:
                 build_proj_path = resolve_project_state(
-                    _repo_root, cache_root=_cache_root, create=False,
+                    _project_root, cache_root=_cache_root, create=False,
                 ).generated_root / "docker-constructor.build.effective.toml"
             except Exception as exc:
                 return CommandResult(exit_kind=ExitKind.CONFIG,
                                      message=f"Failed to resolve constructor project state: {exc}")
-            from docker.launcher import ProcessRunner
             runner = _process_runner or ProcessRunner()
             b_result = verify_build(VerifyBuildRequest(
                 image=image,
@@ -1060,7 +1060,7 @@ def _real_dispatcher(
                 explicit_projection = c_args.get("runtime_projection")
                 try:
                     runtime_proj_path = _resolve_runtime_projection(
-                        explicit_projection, _repo_root, _cache_root
+                        explicit_projection, _project_root, _cache_root
                     )
                 except Exception as exc:
                     return CommandResult(
@@ -1172,12 +1172,12 @@ def _real_dispatcher(
             elif bool(c_args.get("dry_run", False)):
                 # Prospective only: do not initialise project state for dry-runs.
                 evidence_dir = resolve_project_state(
-                    _repo_root, cache_root=_cache_root, create=False,
+                    _project_root, cache_root=_cache_root, create=False,
                 ).evidence_root / _ts
             else:
                 try:
                     evidence_dir = resolve_project_state(
-                        _repo_root, cache_root=prepare_resolved_root(_cache_root), create=True,
+                        _project_root, cache_root=prepare_resolved_root(_cache_root), create=True,
                     ).evidence_root / _ts
                 except Exception as exc:
                     return CommandResult(exit_kind=ExitKind.CONFIG,

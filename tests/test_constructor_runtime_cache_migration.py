@@ -127,7 +127,7 @@ class TestLegacyRuntimeArtifactCacheMigration(unittest.TestCase):
                         pi_home_host="/home/test/.pi", repo_root=str(checkout),
                         projection_parent_dir=str(checkout / ".docker-generated" / "runtime"),
                         _artifact_fetcher=fetch, executor=_Executor(), inspector=_Inspector(),
-                    ))
+                    project_root=Path(str(inventory)).resolve().parent))
             finally:
                 os.chdir(previous_cwd)
 

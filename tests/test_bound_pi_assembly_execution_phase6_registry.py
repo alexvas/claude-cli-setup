@@ -270,7 +270,7 @@ class TestDockerBackedRegistryAcceptance(unittest.TestCase):
             _transport_factory=lambda _policy: ReleaseTransport(),
             _materialize_artifacts=lambda *_args, **_kwargs: tuple(paths),
             _named_context_supported=lambda: True,
-        ))
+        project_root=Path(str(repo / "docker-constructor.toml")).resolve().parent))
 
     def test_constructor_cold_and_warm_build_preserve_progress_and_final_image(self):
         import subprocess

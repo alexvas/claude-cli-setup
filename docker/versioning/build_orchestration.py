@@ -73,6 +73,7 @@ from docker.versioning.errors import (
 )
 from docker.versioning.inventory import load_inventory, resolve_local_corporate_settings
 from docker.versioning.model import HostAccessPolicy, Inventory
+from docker.versioning.project_state import resolve_project_state
 from docker.versioning.rendering import (
     BuildRenderInputs,
     CacheControls,
@@ -690,10 +691,14 @@ def execute_build(
     """
     build_args = plan.build_args
     display_string = plan.display_string
-    repo_root = (
-        Path(request.repo_root) if request.repo_root
-        else Path(request.inventory_path).parent
-    )
+    if request.project_root is None:
+        return BuildResult(
+            exit_kind=ExitKind.CONFIG,
+            message="project_root is required for generated build state",
+            build_args=build_args,
+            display_string=display_string,
+        )
+    constructor_project = Path(request.project_root).resolve()
 
     # 1. Fail before download, publication, or a Docker build when the local
     # client cannot import BuildKit named contexts.
@@ -725,28 +730,27 @@ def execute_build(
     snapshot: MaterializedSnapshot | None = None
     lock: CheckoutBuildLock | None = None
     try:
-        from docker.versioning.project_state import resolve_project_state
         if plan.cache_root is None:
             raise SnapshotError("missing resolved constructor cache root")
         project_state = resolve_project_state(
-            repo_root, cache_root=prepare_project_root(plan.cache_root),
+            constructor_project, cache_root=prepare_project_root(plan.cache_root),
         )
         lock = acquire_checkout_build_lock(
-            repo_root, cache_root=project_state.cache_root,
+            constructor_project, cache_root=project_state.cache_root,
         )
         recover_abandoned_snapshots(
-            repo_root, lock=lock, cache_root=project_state.cache_root,
+            constructor_project, lock=lock, cache_root=project_state.cache_root,
             project_state=project_state,
         )
         maintain_uncommitted_blobs(
-            repo_root, lock=lock, cache_root=project_state.cache_root,
+            constructor_project, lock=lock, cache_root=project_state.cache_root,
             project_state=project_state,
         )
         selected_artifacts = tuple(select_build_artifacts(projection))
         transport_factory = request._transport_factory or UrllibStreamingTransport
         transport = transport_factory(plan.host_network_policy)
         materialized = materialize(
-            projection, checkout_root=repo_root, cache_root=project_state.cache_root,
+            projection, checkout_root=constructor_project, cache_root=project_state.cache_root,
             project_state=project_state, transport=transport, lock=lock,
         )
         if not isinstance(materialized, (tuple, list)) or not all(
@@ -781,7 +785,7 @@ def execute_build(
             canonical_tree_digest=attestation.canonical_tree_digest,
         )
         snapshot = create_artifact_snapshot(
-            selected_artifacts, blobs, checkout_root=repo_root,
+            selected_artifacts, blobs, checkout_root=constructor_project,
             cache_root=project_state.cache_root, project_state=project_state,
             derived=derived,
         )
@@ -822,10 +826,10 @@ def execute_build(
         publish = request._publish_projection
         try:
             if publish is not None:
-                publish_result = publish(plan.effective_projection, repo_root=repo_root)
+                publish_result = publish(plan.effective_projection, repo_root=constructor_project)
             else:
                 publish_result = _publish_projection_default(
-                    plan.effective_projection, repo_root=repo_root,
+                    plan.effective_projection, repo_root=constructor_project,
                     project_state=project_state,
                 )
         except Exception as exc:
@@ -897,7 +901,7 @@ def execute_build(
         try:
             assert lock is not None
             commit_build_set(
-                repo_root, {selected.identity for selected in selected_artifacts},
+                constructor_project, {selected.identity for selected in selected_artifacts},
                 lock=lock, cache_root=project_state.cache_root,
                 project_state=project_state,
             )

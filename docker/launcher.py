@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Protocol, Mapping, Sequence
 import docker.versioning.artifact_cache as artifact_cache
 from docker.versioning.dispatch_types import ExitKind
 from docker.versioning.model import _derive_artifact_id
+from docker.versioning.project_state import resolve_project_state
 from docker.versioning.rendering import (
     RunHostAccess,
     RunRenderInputs,
@@ -573,7 +574,20 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     )
     from docker.versioning.rendering import render_run_vector
 
-    # ── Step 1: load inventory ──────────────────────────────
+    # ── Step 1: validate constructor-project identity ───────
+    if request.project_root is None:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message="project_root is required for generated runtime state",
+        )
+    constructor_project = Path(request.project_root).resolve()
+    if Path(request.inventory_path).resolve().parent != constructor_project:
+        return RunResult(
+            exit_kind=ExitKind.CONFIG,
+            message="project_root must contain the selected inventory",
+        )
+
+    # ── Step 2: load inventory ──────────────────────────────
     try:
         inventory = load_inventory(Path(request.inventory_path))
     except Exception as exc:
@@ -650,8 +664,6 @@ def orchestrate_run(request: RunRequest) -> RunResult:
 
     # Dry-run needs only a prospective namespace. Real execution defers state
     # preparation until all input validation has completed.
-    from docker.versioning.project_state import resolve_project_state
-    constructor_project = Path(request.repo_root or Path(request.inventory_path).resolve().parent)
     project_state = None
     if request.dry_run:
         try:

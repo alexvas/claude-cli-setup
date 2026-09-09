@@ -95,7 +95,7 @@ class TestHostAccessPlanningRed(unittest.TestCase):
             pi_home_host="/home/user/.pi", dry_run=dry_run,
             executor=BombExecutor(), inspector=BombInspector(),
             _create_projection=bomb_projection, _artifact_fetcher=bomb_artifact,
-        )
+        project_root=Path(str(inventory)).resolve().parent)
 
     def test_enabled_missing_or_malformed_local_state_fails_before_effects(self):
         from unittest.mock import patch

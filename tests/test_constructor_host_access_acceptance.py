@@ -138,7 +138,7 @@ class TestDisabledHostAccess(unittest.TestCase):
                 dry_run=True,
                 runner=_bomb_docker(),
                 _diagnose_gateway=_bomb_gateway,
-            )
+            project_root=Path(str(inv)).resolve().parent)
             result = orchestrate_build(req)
             self.assertEqual(
                 ExitKind.SUCCESS, result.exit_kind,
@@ -175,7 +175,7 @@ class TestDisabledHostAccess(unittest.TestCase):
                         pi_home_host="/home/user/.pi",
                         dry_run=True,
                         executor=_bomb_docker(),
-                    ),
+                    project_root=Path(str(inv)).resolve().parent),
                 )
             self.assertEqual(ExitKind.SUCCESS, dry_result.exit_kind)
             self.assertFalse(mocked_doctor.called,
@@ -226,7 +226,7 @@ class TestDisabledHostAccess(unittest.TestCase):
                         pi_home_host="/home/user/.pi",
                         dry_run=True,
                         executor=_bomb_docker(),
-                    ),
+                    project_root=Path(str(inv)).resolve().parent),
                 )
             self.assertEqual(
                 ExitKind.SUCCESS, result.exit_kind,
@@ -413,7 +413,7 @@ class TestDockerGatewayEndToEnd(unittest.TestCase):
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_bomb_docker(),
-                ),
+                project_root=Path(str(inv)).resolve().parent),
             )
             self.assertEqual(ExitKind.SUCCESS, run_result.exit_kind)
             vector = getattr(run_result, "display_string", "") or ""
@@ -554,7 +554,7 @@ class TestExternalAddressEndToEnd(unittest.TestCase):
                         pi_home_host="/home/user/.pi",
                         dry_run=True,
                         executor=_bomb_docker(),
-                    ),
+                    project_root=Path(str(inv)).resolve().parent),
                 )
             self.assertEqual(ExitKind.SUCCESS, run_result.exit_kind)
             self.assertFalse(mocked_doctor.called,
@@ -748,7 +748,7 @@ class TestCustomInventoryWithCache(unittest.TestCase):
                     pi_home_host="/home/user/.pi",
                     dry_run=True,
                     executor=_bomb_docker(),
-                ),
+                project_root=Path(str(inv)).resolve().parent),
             )
             self.assertEqual(ExitKind.SUCCESS, run_result.exit_kind)
             vector = getattr(run_result, "display_string", "") or ""
@@ -903,7 +903,7 @@ class TestInvalidLocalStateSafety(unittest.TestCase):
                         inspector=self._RecordingInspector(effects),
                         _create_projection=self._record_projection(effects),
                         _artifact_fetcher=self._record_artifact_fetch(effects),
-                    ),
+                    project_root=Path(str(inv)).resolve().parent),
                 )
 
             self.assertNotEqual(
@@ -963,7 +963,7 @@ class TestInvalidLocalStateSafety(unittest.TestCase):
                         inspector=self._RecordingInspector(effects),
                         _create_projection=self._record_projection(effects),
                         _artifact_fetcher=self._record_artifact_fetch(effects),
-                    ),
+                    project_root=Path(str(inv)).resolve().parent),
                 )
 
             self.assertNotEqual(

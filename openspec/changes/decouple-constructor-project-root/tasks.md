@@ -82,29 +82,29 @@ Rules:
 
 ### RED
 
-- [ ] P3.R1 Add build orchestration tests proving the effective build projection is atomically published beneath the external namespace identified by the selected constructor project's canonical path and no `.docker-generated` entry is created in that project.
-- [ ] P3.R2 Add run and verify tests proving runtime projections are created under, and looked up by default from, the same external constructor-project namespace.
-- [ ] P3.R3 Add an evidence test proving omission of `--output-dir` writes beneath the external constructor-project namespace.
-- [ ] P3.R4 Add an evidence test proving explicit `--output-dir DIR` writes to `DIR`, including when `DIR` is beneath `XDG_CACHE_HOME`.
-- [ ] P3.R5 Add isolation tests proving explicit `--output-dir` does not change the constructor-project root, external namespace, or any other project-owned input.
-- [ ] P3.R6 Add foreign-project tests proving default projections and evidence are neither read from nor written to the installation checkout, constructor-project directory, or primary/extra workspaces, and that workspaces receive no namespaces merely by being mounted.
-- [ ] P3.R7 Add a verify test proving `--runtime-projection PATH` reads exactly a valid projection outside the selected constructor-project namespace and does not alter any project-owned input or default generated path.
+- [x] P3.R1 Add build orchestration tests proving the effective build projection is atomically published beneath the external namespace identified by the selected constructor project's canonical path and no `.docker-generated` entry is created in that project.
+- [x] P3.R2 Add run and verify tests proving runtime projections are created under, and looked up by default from, the same external constructor-project namespace.
+- [x] P3.R3 Add an evidence test proving omission of `--output-dir` writes beneath the external constructor-project namespace.
+- [x] P3.R4 Add an evidence test proving explicit `--output-dir DIR` writes to `DIR`, including when `DIR` is beneath `XDG_CACHE_HOME`.
+- [x] P3.R5 Add isolation tests proving explicit `--output-dir` does not change the constructor-project root, external namespace, or any other project-owned input.
+- [x] P3.R6 Add foreign-project tests proving default projections and evidence are neither read from nor written to the installation checkout, constructor-project directory, or primary/extra workspaces, and that workspaces receive no namespaces merely by being mounted.
+- [x] P3.R7 Add a verify test proving `--runtime-projection PATH` reads exactly a valid projection outside the selected constructor-project namespace and does not alter any project-owned input or default generated path.
 
 ### GREEN
 
-- [ ] P3.G1 Pass the normalized physical constructor-project path to the existing external-state resolver and consume its returned namespace for effective build projection publication required by P3.R1; do not implement any `user-cache-storage` namespace contract behavior.
-- [ ] P3.G2 Connect run orchestration and default runtime-projection verification lookup to the existing external-state resolver using the same resolved constructor-project identity required by P3.R2.
-- [ ] P3.G3 Connect default evidence output to the existing external-state resolver using the same resolved constructor-project identity required by P3.R3.
-- [ ] P3.G4 Preserve explicit evidence `--output-dir` independently of its location as required by P3.R4 and P3.R5.
-- [ ] P3.G5 Preserve verify `--runtime-projection PATH` as a caller-directed lookup independently of its location as required by P3.R7.
+- [x] P3.G1 Pass the normalized physical constructor-project path to the existing external-state resolver and consume its returned namespace for effective build projection publication required by P3.R1; do not implement any `user-cache-storage` namespace contract behavior.
+- [x] P3.G2 Connect run orchestration and default runtime-projection verification lookup to the existing external-state resolver using the same resolved constructor-project identity required by P3.R2.
+- [x] P3.G3 Connect default evidence output to the existing external-state resolver using the same resolved constructor-project identity required by P3.R3.
+- [x] P3.G4 Preserve explicit evidence `--output-dir` independently of its location as required by P3.R4 and P3.R5.
+- [x] P3.G5 Preserve verify `--runtime-projection PATH` as a caller-directed lookup independently of its location as required by P3.R7.
 
 ### INTROSPECT
 
-- [ ] P3.I1 Inspect generated-output, verification-lookup, and cache APIs to confirm namespace identity comes only from canonical constructor-project path, primary/extra workspaces remain namespace-neutral, explicit paths remain caller-directed, and no implicit constructor-project/workspace write remains; fix every boundary violation found.
+- [x] P3.I1 Inspect generated-output, verification-lookup, and cache APIs to confirm namespace identity comes only from canonical constructor-project path, primary/extra workspaces remain namespace-neutral, explicit paths remain caller-directed, and no implicit constructor-project/workspace write remains; fix every boundary violation found.
 
 ### VALIDATE
 
-- [ ] P3.V1 Run projection, explicit verification lookup, evidence, namespace-identity, workspace-neutrality, cache-boundary, and foreign-project tests introduced in P3.R1–P3.R7 and record that they all pass.
+- [x] P3.V1 Run projection, explicit verification lookup, evidence, namespace-identity, workspace-neutrality, cache-boundary, and foreign-project tests introduced in P3.R1–P3.R7 and record that they all pass.
 
 ## Phase 4 — Workspace Host Interface
 

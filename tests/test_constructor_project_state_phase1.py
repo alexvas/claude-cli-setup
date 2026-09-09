@@ -28,7 +28,7 @@ class CacheRootPropagationTests(unittest.TestCase):
         inventory = self.root / "constructor.toml"; inventory.write_bytes(Path(INVENTORY_PATH).read_bytes())
         cache = self.root / "configured-cache"
         inventory.with_name("docker-constructor.local.toml").write_text(f'[cache]\ndir = "{cache}"\n')
-        plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project)))
+        plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project), project_root=Path(str(inventory)).resolve().parent))
         self.assertEqual(plan.exit_kind, ExitKind.SUCCESS)
         self.assertEqual(plan.cache_root, cache)
         self.assertFalse(cache.exists(), "planning must not prepare cache state")
@@ -37,7 +37,7 @@ class CacheRootPropagationTests(unittest.TestCase):
         inventory = self.root / "constructor.toml"; inventory.write_bytes(Path(INVENTORY_PATH).read_bytes())
         xdg = self.root / "xdg"
         with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(xdg)}):
-            plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project)))
+            plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project), project_root=Path(str(inventory)).resolve().parent))
         self.assertEqual(plan.exit_kind, ExitKind.SUCCESS)
         self.assertEqual(plan.cache_root, xdg / "docker-constructor")
         self.assertFalse(xdg.exists(), "dry planning must not create XDG state")
@@ -46,7 +46,7 @@ class CacheRootPropagationTests(unittest.TestCase):
         inventory = self.root / "constructor.toml"; inventory.write_bytes(Path(INVENTORY_PATH).read_bytes())
         cache = self.root / "absent-cache"
         inventory.with_name("docker-constructor.local.toml").write_text(f'[cache]\ndir = "{cache}"\n')
-        plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project), dry_run=True))
+        plan = plan_build(BuildRequest(inventory_path=str(inventory), repo_root=str(self.project), dry_run=True, project_root=Path(str(inventory)).resolve().parent))
         self.assertEqual(plan.exit_kind, ExitKind.SUCCESS)
         self.assertFalse(cache.exists())
         self.assertFalse((self.project / ".docker-generated").exists())
@@ -79,6 +79,42 @@ class CacheRootPropagationTests(unittest.TestCase):
         (state.namespace / "project.json").write_text("malformed")
         with self.assertRaises(ProjectStateError):
             _resolve_runtime_projection(None, self.project, cache)
+
+    def test_default_runtime_lookup_uses_canonical_symlink_namespace(self):
+        from docker.constructor_cli import _resolve_runtime_projection
+        cache = self.root / "cache"; cache.mkdir(mode=0o700)
+        alias = self.root / "project-alias"
+        alias.symlink_to(self.project, target_is_directory=True)
+        canonical_state = resolve_project_state(self.project, cache_root=cache)
+        projection = canonical_state.runtime_root / "runtime.toml"
+        projection.write_text("[extensions]\n")
+        self.assertEqual(
+            projection, _resolve_runtime_projection(None, alias, cache),
+        )
+        self.assertEqual(
+            canonical_state.namespace,
+            resolve_project_state(alias, cache_root=cache).namespace,
+        )
+
+    def test_explicit_runtime_projection_never_resolves_default_namespace(self):
+        from docker.constructor_cli import _resolve_runtime_projection
+        cache = self.root / "cache"; cache.mkdir(mode=0o700)
+        state = resolve_project_state(self.project, cache_root=cache)
+        before = sorted((p.relative_to(state.namespace), p.read_bytes())
+                        for p in state.namespace.rglob("*") if p.is_file())
+        explicit = self.root / "outside-default-namespace.toml"
+        explicit.write_text("[extensions]\n")
+        with mock.patch(
+            "docker.versioning.project_state.resolve_project_state",
+            side_effect=AssertionError("explicit lookup must not resolve default state"),
+        ):
+            self.assertEqual(
+                explicit, _resolve_runtime_projection(explicit, self.project, cache),
+            )
+        after = sorted((p.relative_to(state.namespace), p.read_bytes())
+                       for p in state.namespace.rglob("*") if p.is_file())
+        self.assertEqual(before, after)
+        self.assertFalse((self.project / ".docker-generated").exists())
 
     def test_namespace_symlink_race_fails_without_touching_target(self):
         cache = self.root / "cache"; cache.mkdir(mode=0o700)

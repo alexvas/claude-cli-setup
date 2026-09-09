@@ -2004,15 +2004,22 @@ class TestRunExecutionBoundaries(unittest.TestCase):
         fake_runner2, runner_calls2 = self._make_fake_runner()
         factory2, proj_calls2 = self._make_noop_projection_factory()
 
-        rc2, out2, _err2 = _run(
-            self.m,
-            ["run", "--main-project", "/tmp/test"],
-            dispatcher=None,
-            _process_runner=fake_runner2,
-            _container_inspector=inspector2,
-            _run_executor=executor2,
-            _create_projection=factory2,
-        )
+        # Materialization is outside this facade-boundary test.  Stub it so
+        # the execution assertions neither require a warm host cache nor make
+        # real network requests for reviewed runtime artifacts.
+        with patch(
+            "docker.launcher.artifact_cache.materialize_selected_artifacts",
+            return_value={},
+        ):
+            rc2, out2, _err2 = _run(
+                self.m,
+                ["run", "--main-project", "/tmp/test"],
+                dispatcher=None,
+                _process_runner=fake_runner2,
+                _container_inspector=inspector2,
+                _run_executor=executor2,
+                _create_projection=factory2,
+            )
         self.assertEqual(0, rc2, f"exec exit code; stdout={out2}")
         # Inspector was called for pi-N allocation
         self.assertEqual(["list_names"], inspector2.calls)
