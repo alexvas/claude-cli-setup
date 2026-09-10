@@ -6,14 +6,15 @@ Define reviewed non-Debian version inventory, reproducible effective build confi
 ## Requirements
 
 ### Requirement: Use a central version inventory
-The project SHALL maintain `docker-constructor.toml` as the single reviewed dependency source with explicit, closed `build` and `runtime` sections. Every independently selected dependency SHALL be represented in exactly one section by a complete typed source entry. The resolver SHALL apply phase-owned overrides and derive separate effective build and runtime projections. Runtime artifact URLs SHALL remain host-only materialization inputs; only the narrow effective runtime projection and individually selected read-only artifact blobs may enter a running container.
+Each selected constructor project SHALL maintain `docker-constructor.toml` directly beneath its project root as the single reviewed dependency source with explicit, closed `build` and `runtime` sections. Every independently selected dependency SHALL be represented in exactly one section by a complete typed source entry. The resolver SHALL apply phase-owned overrides and derive separate effective build and runtime projections beneath the external namespace identified by the canonical path of that constructor project. Runtime artifact URLs SHALL remain host-only materialization inputs; only the narrow effective runtime projection and individually selected read-only artifact blobs may enter a running container.
 
 The target dependency and configuration graph SHALL remain:
 
 ```mermaid
 graph TD
-    INV[(docker-constructor.toml<br/>build + runtime sections)] --> CLI[docker-constructor.py]
-    CLI --> BP[effective build projection<br/>host-only]
+    ROOT[constructor project root] --> INV[(docker-constructor.toml<br/>build + runtime sections)]
+    INV --> CLI[docker-constructor.py]
+    CLI --> BP[effective build projection<br/>external project state, host-only]
     BP --> BUILD[Docker build arguments]
     BUILD --> IMG[Docker runtime image]
     BP --> VERIFY[host-side verification API]
@@ -29,20 +30,20 @@ graph TD
 ```
 
 #### Scenario: Validating the reviewed inventory locally
-- **WHEN** `docker-constructor.py validate` runs
+- **WHEN** `docker-constructor.py validate` runs for a selected constructor project
 - **THEN** it SHALL validate build, runtime, or both source scopes as requested without Docker or network access
 - **AND** it SHALL apply closed typed schemas and semantic rules appropriate to each installation phase
 - **AND** it SHALL reject unknown, misspelled, duplicated-across-scope, and phase-inappropriate entries
 
 #### Scenario: Discovering the authoritative inventory
-- **WHEN** a facade command runs without an explicit `--inventory` path
-- **THEN** it SHALL discover `docker-constructor.toml` from the repository root
-- **AND** it SHALL NOT discover separate phase source files
+- **WHEN** any facade command selects a constructor project from CWD or `--project-directory`
+- **THEN** it SHALL use exactly `docker-constructor.toml` directly beneath that project root
+- **AND** it SHALL NOT accept `--inventory`, alternate basenames, separate phase source files, parent discovery, or installation-root fallback
 
 #### Scenario: Using an explicit custom inventory
-- **WHEN** a caller supplies `--inventory <path>`
-- **THEN** the facade SHALL validate and use that TOML file regardless of basename
-- **AND** it SHALL require the same explicit build/runtime section structure
+- **WHEN** a caller attempts to select an inventory with the removed `--inventory` option
+- **THEN** parsing SHALL reject the option
+- **AND** SHALL require selecting the containing constructor project through CWD or `--project-directory`
 
 #### Scenario: Describing uv-managed Python
 - **WHEN** the build section declares the selected CPython runtime
@@ -64,8 +65,8 @@ graph TD
 
 #### Scenario: Building with default selections
 - **WHEN** the canonical build command runs without overrides
-- **THEN** it SHALL pass values derived from the build section to the Docker build
-- **AND** it SHALL keep the reviewed source and effective build projection on the host
+- **THEN** it SHALL pass values derived from the selected project's build section to Docker
+- **AND** it SHALL keep the reviewed source in the selected constructor project and the effective build projection beneath the external namespace identified by the selected constructor project's canonical path
 - **AND** it SHALL NOT require runtime artifact materialization for image correctness
 
 #### Scenario: Building with a supported override
@@ -76,7 +77,7 @@ graph TD
 
 #### Scenario: Generating effective build configuration
 - **WHEN** effective Docker construction inputs are rendered with default paths
-- **THEN** the build projection SHALL be written atomically to `.docker-generated/docker-constructor.build.effective.toml`
+- **THEN** the build projection SHALL be written atomically beneath the selected constructor project's verified external generated-state namespace
 - **AND** the runtime image SHALL NOT expose that file
 
 #### Scenario: Preparing runtime dependency configuration
@@ -86,10 +87,16 @@ graph TD
 - **AND** an override with no matching reviewed catalog entry SHALL be rejected before materialization without network discovery, URL synthesis, or reuse of another version's integrity
 - **AND** the host SHALL derive a canonical content identity and deterministic cache location only from the selected validated integrity
 - **AND** it SHALL materialize and verify each selected blob before Docker execution
-- **AND** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, canonical mounted-artifact identity, checksum/integrity, and validation metadata
+- **AND** the resolver SHALL generate a closed effective runtime projection containing only effective package identity, version, canonical mounted-artifact identity, checksum/integrity, and validation metadata beneath the external namespace identified by the canonical selected constructor-project path
 - **AND** it SHALL mount that projection read-only at `/run/pi-cli/docker-constructor.runtime.toml`
 - **AND** it SHALL mount only the selected verified blobs as individual read-only files beneath `/run/pi-cli/runtime-artifacts`
 - **AND** neither downloadable URLs, host cache paths, the reviewed source, nor an effective build projection SHALL be copied or mounted into the container
+
+#### Scenario: Looking up a runtime projection for verification
+- **WHEN** `verify` runs without `--runtime-projection`
+- **THEN** it SHALL use the default runtime-projection lookup beneath the external namespace identified by the canonical selected constructor-project path
+- **AND** when `verify --runtime-projection PATH` is supplied, it SHALL instead read exactly the caller-directed `PATH`, including when `PATH` is outside the selected constructor project
+- **AND** the explicit path SHALL NOT change runtime projection creation paths, the constructor-project root, or any other project-owned path
 
 #### Scenario: Sharing identical artifact content
 - **WHEN** multiple selected runtime entries declare the same validated integrity identity
@@ -367,20 +374,6 @@ The project SHALL expose `docker/docker-constructor.py` as a directly executable
 - **WHEN** tests or package code import `docker.versions`
 - **THEN** imports SHALL continue to delegate to the same implementation without executing the command entry point
 
-### Requirement: Separate image builds from runtime project selection
-The canonical direct Docker image-build operation SHALL resolve versioned build inputs without requiring runtime-only project paths, generated fragments, host bind-mount configuration, host gateway reachability, or operational gateway state.
-
-#### Scenario: Building without runtime configuration
-- **WHEN** a user runs `./docker/docker-constructor.py build` with no dotenv file or `PROJECT_PATH_*`
-- **THEN** the resolver SHALL build the tagged Pi runtime image using the validated build section of `docker-constructor.toml`
-- **AND** SHALL NOT probe `host.docker.internal`, require a reachable host gateway, read or write `HOST_GATEWAY_IP`, or mutate `.env`
-- **AND** SHALL NOT require a real host project directory merely to evaluate the build
-
-#### Scenario: Preserving required version inputs
-- **WHEN** the direct Docker build command is rendered
-- **THEN** all version and artifact arguments SHALL come from the validated effective build projection
-- **AND** missing version inputs SHALL NOT gain concrete Dockerfile or Python fallbacks
-
 ### Requirement: Document the component update workflow concretely
 Every maintained README translation SHALL explain how to inspect, review, apply, validate, and rebuild version-managed development-environment components.
 
@@ -536,3 +529,17 @@ The reviewed Pi source SHALL declare npm package `@earendil-works/pi-coding-agen
 - **THEN** assembly SHALL accept it through pinned npm's native registry behavior
 - **AND** assembler evidence SHALL identify the integrity-less node and hash the resulting published tree
 - **AND** the build SHALL NOT claim that the lock byte-pins that node across cold reconstruction
+
+### Requirement: Separate image builds from runtime workspace selection
+The canonical direct Docker image-build operation SHALL resolve versioned build inputs without requiring runtime-only workspace paths, generated fragments, host bind-mount configuration, host gateway reachability, or operational gateway state.
+
+#### Scenario: Building without runtime configuration
+- **WHEN** a user runs `docker-constructor build` with no dotenv file or `WORKSPACE_PATH_*`
+- **THEN** the resolver SHALL build the tagged Pi runtime image using the validated build section of the selected project's `docker-constructor.toml`
+- **AND** SHALL NOT probe `host.docker.internal`, require a reachable host gateway, read or write `HOST_GATEWAY_IP`, or mutate `.env`
+- **AND** SHALL NOT require a real host workspace directory merely to evaluate the build
+
+#### Scenario: Preserving required version inputs
+- **WHEN** the direct Docker build command is rendered
+- **THEN** all version and artifact arguments SHALL come from the validated effective build projection
+- **AND** missing version inputs SHALL NOT gain concrete Dockerfile or Python fallbacks

@@ -210,14 +210,14 @@ Rules:
 
 ### GREEN
 
-- [ ] P7.G1 Add only the acceptance fixtures and orchestration corrections required to make P7.R1–P7.R3 pass without weakening their assertions.
+- [x] P7.G1 Add only the acceptance fixtures and orchestration corrections required to make P7.R1–P7.R3 pass without weakening their assertions.
 
 ### INTROSPECT
 
-- [ ] P7.I1 Search active code, tests, scripts, documentation, and non-archived specs for removed public flags, `BASE_PROJECT_DIR`, authoritative `PROJECT_PATH_*`, installation-checkout project state, or default evidence cache placement; fix every violation found.
+- [x] P7.I1 Search active code, tests, scripts, documentation, and non-archived specs for removed public flags, `BASE_PROJECT_DIR`, authoritative `PROJECT_PATH_*`, installation-checkout project state, or default evidence cache placement; fix every violation found.
 
 ### VALIDATE
 
-- [ ] P7.V1 Run the complete unit and acceptance test suites and record that they pass.
-- [ ] P7.V2 Run all static, compile, shell-harness, and documentation-contract checks and record that they pass.
-- [ ] P7.V3 Run `openspec validate decouple-constructor-project-root --strict` and record that it passes.
+- [x] P7.V1 Run the complete unit and acceptance test suites and record that they pass.
+- [x] P7.V2 Run all static, compile, shell-harness, and documentation-contract checks and record that they pass.
+- [x] P7.V3 Run `openspec validate decouple-constructor-project-root --strict` and record that it passes.

@@ -1139,7 +1139,6 @@ class TestRunTransaction(unittest.TestCase):
             "image": "pi-cli-pi:latest",
             "selection": WorkspaceSelection(workspace="/work/p1"),
             "pi_home_host": "/home/alice/.pi",
-            "projection_parent_dir": self._proj_parent,
             "_create_projection": RecordingProjectionFactory(),
             "_artifact_fetcher": self._artifact_bytes,
             "_artifact_cache_root": self._artifact_cache_root,
@@ -2429,10 +2428,7 @@ class TestRunTransaction(unittest.TestCase):
         import os
         import stat
 
-        from docker.versioning.effective import (
-            _repo_runtime_dir,
-            create_runtime_projection,
-        )
+        from docker.versioning.effective import create_runtime_projection
 
         # The real factory must publish beneath the resolved external runtime
         # directory supplied by orchestration.
@@ -2450,7 +2446,7 @@ class TestRunTransaction(unittest.TestCase):
                     handle = create_runtime_projection(
                         projection,
                         host_path=os.path.join(parent_dir, f"proj-{uuid.uuid4().hex}.toml"),
-                        _fs=Filesystem(repo_runtime_dir=parent_dir),
+                        _fs=Filesystem(runtime_root=parent_dir),
                     )
                     recorded.append((handle.path, handle.content_hash))
                     return handle
@@ -3995,7 +3991,6 @@ class TestOrchestrationOrdering(unittest.TestCase):
             "image": "pi-cli-pi:latest",
             "selection": WorkspaceSelection(workspace="/work/p1"),
             "pi_home_host": "/home/alice/.pi",
-            "projection_parent_dir": self._proj_parent,
             "_create_projection": _LoggedProjectionFactory(self._event_log),
             "_artifact_fetcher": self._artifact_bytes,
             "_artifact_cache_root": self._artifact_cache_root,

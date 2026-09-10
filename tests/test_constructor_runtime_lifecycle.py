@@ -12,9 +12,10 @@ from unittest import mock
 from docker.versioning.constraints import parse_constraint
 from docker.versioning.effective import (
     EffectiveConfigError,
+    Filesystem,
     RuntimeProjectionHandle,
     _generate_projection_path,
-    _repo_runtime_dir,
+    _runtime_root,
     _validate_safe_path,
     cleanup_runtime_projection,
     create_runtime_projection,
@@ -196,8 +197,17 @@ def _make_fake_fs(store: dict[str, bytes], runtime_dir: str):
         path=_FakePath(),
         makedirs=lambda p, exist_ok=False: None,  # no-op
         close_fd=_close_fd,
-        repo_runtime_dir=runtime_dir,
+        runtime_root=runtime_dir,
     )
+
+
+class TestRuntimeRootRequirement(unittest.TestCase):
+    def test_default_filesystem_has_no_installation_checkout_fallback(self):
+        with self.assertRaisesRegex(
+            EffectiveConfigError,
+            "explicit external project-state runtime root is required",
+        ):
+            _generate_projection_path(Filesystem(runtime_root=None))
 
 
 class TestRuntimeLifecycle(unittest.TestCase):
@@ -207,24 +217,34 @@ class TestRuntimeLifecycle(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls._repo_dir = _repo_runtime_dir()
-        os.makedirs(cls._repo_dir, exist_ok=True)
+        import docker.versioning.effective as effective
+
+        cls._runtime_root_dir = tempfile.mkdtemp(prefix="runtime-projections-")
+        cls._original_default_fs = effective._DEFAULT_FS
+        effective._DEFAULT_FS = Filesystem(runtime_root=cls._runtime_root_dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        import docker.versioning.effective as effective
+
+        effective._DEFAULT_FS = cls._original_default_fs
+        _rmtree_safe(cls._runtime_root_dir)
 
     def setUp(self):
-        # Create a private subdirectory under the repository-owned
-        # runtime directory so path-safety validation passes.
+        # Create a private subdirectory under the configured external
+        # runtime root so path-safety validation passes.
         self._tmp = tempfile.mkdtemp(
-            prefix="test-", dir=self._repo_dir
+            prefix="test-", dir=self._runtime_root_dir
         )
         self.addCleanup(lambda: _rmtree_safe(self._tmp))
 
     # ── default path generation ────────────────────────────────────
 
-    def test_default_path_is_under_repo_runtime_dir(self):
+    def test_default_path_is_under_runtime_root(self):
         path = _generate_projection_path()
         self.assertTrue(
-            path.startswith(self._repo_dir + os.sep),
-            f"default path {path} not under {self._repo_dir}",
+            path.startswith(self._runtime_root_dir + os.sep),
+            f"default path {path} not under {self._runtime_root_dir}",
         )
         self.assertTrue(path.endswith(".toml"))
 
@@ -444,7 +464,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
             raise OSError("injected fsync failure")
 
         fake = Filesystem(
-            repo_runtime_dir=self._tmp,
+            runtime_root=self._tmp,
             fsync=_failing_fsync,
         )
         with self.assertRaises(OSError):
@@ -473,7 +493,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
             raise OSError("injected link failure")
 
         fake = Filesystem(
-            repo_runtime_dir=self._tmp,
+            runtime_root=self._tmp,
             link=_failing_link,
         )
         with self.assertRaises(OSError):
@@ -851,7 +871,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
 
     def test_isolated_default_paths_do_not_clash(self):
         """Two projections without explicit host_path must receive
-        unique private paths under .docker-generated/runtime/."""
+        unique private paths beneath the configured external runtime root."""
         _, proj = resolve_runtime(_runtime(), {})
         p1, _ = create_runtime_projection(proj)
         p2, _ = create_runtime_projection(proj)
@@ -994,7 +1014,7 @@ class TestRuntimeLifecycle(unittest.TestCase):
             real_unlink(p)
 
         fake = Filesystem(
-            repo_runtime_dir=self._tmp,
+            runtime_root=self._tmp,
             unlink=_tracked_unlink,
         )
         h = create_runtime_projection(proj, host_path=target, _fs=fake)

@@ -591,10 +591,7 @@ def _validate_runtime_override(
 
 import hashlib
 import os
-import pathlib
 import tempfile
-
-_RUNTIME_DIR = ".docker-generated/runtime"
 
 # ── filesystem boundary ──────────────────────────────────────────────
 
@@ -618,13 +615,13 @@ class Filesystem:
         path: ``os.path`` module (or substitute).
         makedirs: ``os.makedirs`` equivalent.
         close_fd: ``os.close`` equivalent.
-        repo_runtime_dir: pre-computed absolute runtime directory.
+        runtime_root: explicit external project-state runtime directory.
     """
 
     __slots__ = (
         "open", "unlink", "link", "fsync", "mkstemp",
         "chmod", "urandom", "path", "makedirs", "close_fd",
-        "repo_runtime_dir",
+        "runtime_root",
     )
 
     def __init__(
@@ -640,7 +637,7 @@ class Filesystem:
         path=os.path,
         makedirs=os.makedirs,
         close_fd=os.close,
-        repo_runtime_dir=None,
+        runtime_root=None,
     ):
         self.open = open
         self.unlink = unlink
@@ -652,17 +649,10 @@ class Filesystem:
         self.path = path
         self.makedirs = makedirs
         self.close_fd = close_fd
-        self.repo_runtime_dir = (
-            repo_runtime_dir
-            if repo_runtime_dir is not None
-            else str(
-                pathlib.Path(__file__).resolve().parent.parent.parent
-                / _RUNTIME_DIR
-            )
-        )
+        self.runtime_root = runtime_root
 
 
-_DEFAULT_FS = Filesystem()
+_DEFAULT_FS = Filesystem(runtime_root=None)
 
 # ── serialized-projection schema constants ──────────────────────────
 
@@ -855,18 +845,19 @@ def _validate_artifact_id(value: str, *, prefix: str) -> None:
         )
 
 
-def _repo_runtime_dir(_fs: Filesystem | None = None) -> str:
-    """Absolute path to the repository-owned runtime directory.
-
-    Derived from the location of this source file so the directory is
-    always under the repository root regardless of the current working
-    directory.  The directory is guaranteed to exist (created via
-    ``_fs.makedirs`` if missing).
-    """
+def _runtime_root(_fs: Filesystem | None = None) -> str:
+    """Return the explicitly configured external runtime-projection root."""
     if _fs is None:
         _fs = _DEFAULT_FS
-    _fs.makedirs(_fs.repo_runtime_dir, exist_ok=True)
-    return _fs.repo_runtime_dir
+    if not _fs.runtime_root:
+        raise EffectiveConfigError(
+            "an explicit external project-state runtime root is required"
+        )
+    runtime_root = os.fspath(_fs.runtime_root)
+    if not os.path.isabs(runtime_root):
+        raise EffectiveConfigError("runtime projection root must be absolute")
+    _fs.makedirs(runtime_root, exist_ok=True)
+    return runtime_root
 
 
 def _validate_safe_path(
@@ -878,12 +869,12 @@ def _validate_safe_path(
     Returns the real absolute path after successful validation.
 
     Raises:
-        EffectiveConfigError: path is outside the repository-owned
-            runtime directory, contains ``..``, or traverses a symlink.
+        EffectiveConfigError: path is outside the configured external
+            runtime root, contains ``..``, or traverses a symlink.
     """
     if _fs is None:
         _fs = _DEFAULT_FS
-    runtime_dir = _repo_runtime_dir(_fs)
+    runtime_dir = _runtime_root(_fs)
 
     # Resolve symlinks and relative components early.
     real = _fs.path.realpath(path)
@@ -893,7 +884,7 @@ def _validate_safe_path(
     if common != real_runtime:
         raise EffectiveConfigError(
             f"runtime projection path {real!r} is outside "
-            f"the repository-owned runtime directory {real_runtime!r}"
+            f"the configured external runtime root {real_runtime!r}"
         )
 
     if _fs.path.islink(path):
@@ -908,8 +899,8 @@ def _validate_safe_path(
 def _generate_projection_path(
     _fs: Filesystem | None = None,
 ) -> str:
-    """Generate a unique non-existent filename under the
-    repository-owned runtime directory.
+    """Generate a unique non-existent filename beneath the configured
+    external project-state runtime root.
 
     Unlike ``mkstemp`` this does **not** pre-create an empty file —
     the caller performs the atomic write later so the destination is
@@ -917,7 +908,7 @@ def _generate_projection_path(
     """
     if _fs is None:
         _fs = _DEFAULT_FS
-    runtime_dir = _repo_runtime_dir(_fs)
+    runtime_dir = _runtime_root(_fs)
     # 16 random bytes → 32 hex chars gives enough uniqueness for
     # concurrent launches without pre-creating a file.
     token = _fs.urandom(16).hex()
@@ -937,7 +928,8 @@ class RuntimeProjectionHandle:
 
     Usage::
 
-        with create_runtime_projection(proj) as h:
+        fs = Filesystem(runtime_root=external_project_state_runtime_root)
+        with create_runtime_projection(proj, _fs=fs) as h:
             print(h.path, h.content_hash)
             # ... use the file ...
         # file is gone here
@@ -1018,9 +1010,9 @@ def create_runtime_projection(
     computed before the file is written so callers can verify it
     without re-reading the file.
 
-    The file is created atomically under
-    ``.docker-generated/runtime/`` (or *host_path* for testing)
-    using hard-link promotion — the destination must not already
+    The file is created atomically beneath the explicit external project-state
+    runtime root configured on *_fs*. A caller may provide *host_path* within
+    that root for deterministic testing. The destination must not already
     exist (no-clobber).  All bytes are written through buffered
     I/O to handle partial writes correctly.  Temporary files are
     cleaned up on every failure path.
@@ -1152,9 +1144,9 @@ def cleanup_runtime_projection(
 ) -> None:
     """Remove a private runtime projection file after launch.
 
-    Only files under the repository-owned ``.docker-generated/runtime/``
-    directory are eligible for removal.  Symlinks and paths outside
-    that directory are rejected.  Already-removed files succeed silently.
+    Only files beneath the explicit external project-state runtime root
+    configured on *_fs* are eligible for removal. Symlinks and paths outside
+    that root are rejected. Already-removed files succeed silently.
 
     .. deprecated::
         Prefer :class:`RuntimeProjectionHandle` as a context manager

@@ -10,7 +10,7 @@ The project SHALL derive a narrow effective runtime projection from the reviewed
 
 #### Scenario: Isolating concurrent runtime projections
 - **WHEN** multiple runtime launches use different effective selections
-- **THEN** each launch SHALL atomically create and mount a private projection under `.docker-generated/runtime/`
+- **THEN** each launch SHALL atomically create and mount a private projection beneath the selected constructor project's external runtime namespace
 - **AND** one launch SHALL NOT rewrite another launch's mounted projection
 - **AND** the launcher SHALL remove its private host file after Docker exits or launch fails
 

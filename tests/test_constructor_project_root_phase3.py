@@ -161,7 +161,7 @@ class ExternalProjectStatePhase3Tests(unittest.TestCase):
         def retain_projection(projection, *, parent_dir):
             path = Path(parent_dir) / f"runtime-{uuid.uuid4().hex}.toml"
             handle = create_runtime_projection(projection, host_path=str(path),
-                                               _fs=Filesystem(repo_runtime_dir=parent_dir))
+                                               _fs=Filesystem(runtime_root=parent_dir))
             handle.discard()
             created.append(path)
             return handle
@@ -299,7 +299,7 @@ exit 0
         before_project, before_namespace = _tree_snapshot(self.project), _tree_snapshot(state.namespace)
         external = Path(self.tmp.name) / "caller-provided-runtime.toml"
         handle = create_runtime_projection(EffectiveRuntimeProjection(extensions={}), host_path=str(external),
-                                           _fs=Filesystem(repo_runtime_dir=str(external.parent)))
+                                           _fs=Filesystem(runtime_root=str(external.parent)))
         handle.discard()
         read_paths, captured = [], []
         real_read = Path.read_bytes

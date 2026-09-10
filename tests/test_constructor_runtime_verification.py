@@ -15,12 +15,15 @@ All tests use fake process runners — no Docker required.
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
 from docker.versioning.effective import (
+    Filesystem,
     create_runtime_projection,
     resolve_runtime,
 )
@@ -231,15 +234,19 @@ _ALT_PACKAGE_JSON = (
 
 # Projection content hash — derived from the canonical projection.
 # The test that verifies the actual hash uses a fresh handle from
-# create_runtime_projection().
+# create_runtime_projection() in an explicit external runtime root.
+_TEST_RUNTIME_ROOT = Path(tempfile.mkdtemp(prefix="runtime-verification-"))
+unittest.addModuleCleanup(shutil.rmtree, _TEST_RUNTIME_ROOT, True)
+_TEST_RUNTIME_FS = Filesystem(runtime_root=str(_TEST_RUNTIME_ROOT))
+
+
 def _fresh_runtime_handle(suffix: str = ".toml"):
     import uuid
-    repo_runtime = Path(__file__).resolve().parent.parent / ".docker-generated" / "runtime"
-    repo_runtime.mkdir(parents=True, exist_ok=True)
-    path = repo_runtime / f"test-rt-{uuid.uuid4().hex}{suffix}"
+    path = _TEST_RUNTIME_ROOT / f"test-rt-{uuid.uuid4().hex}{suffix}"
     return create_runtime_projection(
         _canonical_runtime_projection(),
         host_path=str(path),
+        _fs=_TEST_RUNTIME_FS,
     )
 
 
@@ -342,12 +349,11 @@ def _alternate_runtime_projection(
 
 def _alternate_runtime_handle(suffix: str = ".toml") -> _RecordingProjectionFactory:
     import uuid
-    repo_runtime = Path(__file__).resolve().parent.parent / ".docker-generated" / "runtime"
-    repo_runtime.mkdir(parents=True, exist_ok=True)
-    path = repo_runtime / f"test-alt-{uuid.uuid4().hex}{suffix}"
+    path = _TEST_RUNTIME_ROOT / f"test-alt-{uuid.uuid4().hex}{suffix}"
     return create_runtime_projection(
         _alternate_runtime_projection(),
         host_path=str(path),
+        _fs=_TEST_RUNTIME_FS,
     )
 
 

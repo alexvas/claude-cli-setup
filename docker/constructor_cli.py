@@ -2268,7 +2268,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         dest="runtime_projection",
         help="Path to host-side runtime projection TOML for runtime checks "
-             "(default: most recent .docker-generated/runtime/*.toml)",
+             "(default: most recent projection in the selected project's "
+             "external project-state namespace)",
     )
     p_ver.add_argument(
         "--workspace",
@@ -2281,7 +2282,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ver.add_argument(
         "--output-dir",
         default=None,
-        help="Directory for evidence bundle output (default: .docker-generated/evidence/<iso-stamp>)",
+        help="Directory for evidence bundle output (default: timestamped "
+             "directory in the selected project's external evidence root)",
     )
     p_ver.add_argument(
         "--dry-run",

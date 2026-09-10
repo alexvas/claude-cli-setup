@@ -527,9 +527,9 @@ _SH_FORBIDDEN: list[tuple[str, re.Pattern[str]]] = [
 
 # Shell scripts with contextual allowlist lines
 _SH_LINE_ALLOWLIST = frozenset({
-    # entrypoint.sh runs INSIDE the container — its PROJECT_PATH_*
-    # comments document the launcher contract, not user-facing CLI.
-    # Only flag if it references removed surface names.
+    # entrypoint.sh runs inside the container, so its workspace environment
+    # comments document the launcher contract rather than user-facing CLI.
+    # Only flag references to removed surface names.
     "docker/entrypoint.sh",
 })
 

@@ -417,18 +417,6 @@ class RunRequest:
     """Injected projection-file factory; defaults to
     :func:`~docker.versioning.effective.create_runtime_projection`."""
 
-    projection_parent_dir: str = field(default_factory=lambda: os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        ".docker-generated",
-        "runtime",
-    ))
-    """Absolute parent directory for private runtime projection files.
-
-    The default is anchored to the constructor checkout rather than the
-    caller's current working directory because Docker bind-mount sources and
-    runtime projection validation require an absolute host path.
-    """
-
     _artifact_fetcher: ArtifactByteFetcher | None = None
     """Injected byte-fetch boundary for deterministic
     materialization tests.  ``None`` selects the real
@@ -670,7 +658,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
         except Exception as exc:
             return RunResult(exit_kind=ExitKind.CONFIG,
                              message=f"Failed to resolve constructor project state: {exc}")
-    projection_parent_dir = str(project_state.runtime_root) if project_state else ""
+    runtime_projection_root = str(project_state.runtime_root) if project_state else ""
 
     # ── Step 1c: resolve host-access policy ─────────────────
     try:
@@ -804,7 +792,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             constructor_project,
             cache_root=prepare_resolved_root(resolved_cache_root), create=True,
         )
-        projection_parent_dir = str(project_state.runtime_root)
+        runtime_projection_root = str(project_state.runtime_root)
     except Exception as exc:
         return RunResult(exit_kind=ExitKind.CONFIG,
                          message=f"Failed to resolve constructor project state: {exc}")
@@ -881,7 +869,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
             return create_runtime_projection(
                 projection,
                 host_path=os.path.join(parent_dir, f"runtime-{uuid.uuid4().hex}.toml"),
-                _fs=Filesystem(repo_runtime_dir=parent_dir),
+                _fs=Filesystem(runtime_root=parent_dir),
             )
 
         factory = _real_factory
@@ -889,7 +877,7 @@ def orchestrate_run(request: RunRequest) -> RunResult:
     try:
         handle = factory(
             effective,
-            parent_dir=projection_parent_dir,
+            parent_dir=runtime_projection_root,
         )
     except Exception as exc:
         return RunResult(
