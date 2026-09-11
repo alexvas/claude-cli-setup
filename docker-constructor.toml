@@ -167,7 +167,7 @@ required_platforms = ["linux-amd64"]
 
 # --- pi-tools.pi ---
 [build.stages.pi-tools.pi]
-version = "0.84.4"
+version = "0.85.1"
 
 [build.stages.pi-tools.pi.source]
 package = "@earendil-works/pi-coding-agent"
@@ -181,7 +181,7 @@ stable_only = true
 
 # --- openspec-tools.openspec ---
 [build.stages.openspec-tools.openspec]
-version = "1.10.0"
+version = "1.13.0"
 
 [build.stages.openspec-tools.openspec.source]
 package = "@fission-ai/openspec"
@@ -211,30 +211,6 @@ ref = "master"
 # Pi extensions — installed at runtime by the entrypoint via docker.runtime_installer
 # ---------------------------------------------------------------------------
 
-# --- pi-extensions.highlight-js ---
-[runtime.pi-extensions.highlight-js]
-version = "10.7.3"
-
-[runtime.pi-extensions.highlight-js.artifacts."10.7.3"]
-integrity = "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A=="
-url = "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz"
-
-[runtime.pi-extensions.highlight-js.override]
-allow_prerelease = false
-constraint = "==10.7.3"
-scheme = "numeric"
-
-[runtime.pi-extensions.highlight-js.source]
-package = "highlight.js"
-type = "npm"
-
-[runtime.pi-extensions.highlight-js.update]
-provider = "npm"
-stable_only = true
-
-[runtime.pi-extensions.highlight-js.validation]
-metadata_file = "package.json"
-
 # --- pi-extensions.pi-read ---
 [runtime.pi-extensions.pi-read]
 version = "0.2.1"
@@ -259,37 +235,17 @@ stable_only = true
 [runtime.pi-extensions.pi-read.validation]
 metadata_file = "package.json"
 
-# --- pi-extensions.pi-tui-kit ---
-[runtime.pi-extensions.pi-tui-kit]
-version = "0.49.1"
-
-[runtime.pi-extensions.pi-tui-kit.artifacts."0.49.1"]
-integrity = "sha512-RAUz3WsThABg79Ip/3FRmV4RUj0gNMyCirFjHitLUWC5oiZvOWGv1OAquFVWuIoJJEA2MtFf7LZ0OXf3G5UM3g=="
-url = "https://registry.npmjs.org/@narumitw/pi-tui-kit/-/pi-tui-kit-0.49.1.tgz"
-
-[runtime.pi-extensions.pi-tui-kit.override]
-allow_prerelease = false
-constraint = ">=0.49.1,<0.50.0"
-scheme = "numeric"
-
-[runtime.pi-extensions.pi-tui-kit.source]
-package = "@narumitw/pi-tui-kit"
-type = "npm"
-
-[runtime.pi-extensions.pi-tui-kit.update]
-provider = "npm"
-stable_only = true
-
-[runtime.pi-extensions.pi-tui-kit.validation]
-metadata_file = "package.json"
-
 # --- pi-extensions.pi-usage ---
 [runtime.pi-extensions.pi-usage]
-version = "0.52.3"
+version = "0.60.7"
 
 [runtime.pi-extensions.pi-usage.artifacts."0.52.3"]
 integrity = "sha512-G8Qrh46j9/omdb0U0oq0iM0emcidr1xG4ARMrrvfNEwAQ7HU9WUljwVxycrIYdQ8Xe7wqTe0UZIaFFv80C87vQ=="
 url = "https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.52.3.tgz"
+
+[runtime.pi-extensions.pi-usage.artifacts."0.60.7"]
+integrity = "sha512-TPZx0CXtnMT9IquPj0kvsorwx4td0p2pjixSzoAdVyKhjs7m95nsXtfXufFrG2m4tUYcJHo/feOmb6iovdnq4A=="
+url = "https://registry.npmjs.org/@narumitw/pi-usage/-/pi-usage-0.60.7.tgz"
 
 [runtime.pi-extensions.pi-usage.override]
 allow_prerelease = false
